@@ -52,7 +52,7 @@ fn quoted_list_boundaries<'a>(
         return std::borrow::Cow::Borrowed(source);
     }
     let quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
-    let marker = cached_regex!(r"^((?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+(?:\[[ xX]\][ \t]+)?)\S").unwrap();
+    let marker = cached_regex!(r"^((?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)(\[[ xX]\][ \t]+)?(\S)").unwrap();
     let embedded = cached_regex!(r"^(?:>(?:[ \t]+|$))+").unwrap();
     let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
     let mut insertions = Vec::new();
@@ -60,7 +60,8 @@ fn quoted_list_boundaries<'a>(
     let mut depth = 0;
     let mut boundary = String::new();
     let mut paragraph = false;
-    let mut lists: Vec<(usize, usize)> = Vec::new();
+    let mut previous_blank = true;
+    let mut lists: Vec<(usize, usize, usize)> = Vec::new();
     for ((line, masked), fenced) in source
         .split('\n')
         .zip(mask.split('\n'))
@@ -71,14 +72,57 @@ fn quoted_list_boundaries<'a>(
         if fenced != line {
             depth = 0;
             paragraph = false;
+            previous_blank = true;
             continue;
         }
         let prefix = quote.find(line).unwrap().as_str();
         let quote_depth = prefix.bytes().filter(|&b| b == b'>').count();
+        let mut columns = Vec::new();
+        let mut positions = Vec::new();
+        let bytes = line.as_bytes();
+        let mut at = 0;
+        for level in 0..=quote_depth {
+            let start = at;
+            while bytes.get(at).is_some_and(|b| matches!(b, b' ' | b'\t')) {
+                at += 1;
+            }
+            columns.push(at - start);
+            if level < quote_depth {
+                positions.push(at);
+                at += 1;
+                if bytes.get(at).is_some_and(|b| matches!(b, b' ' | b'\t')) {
+                    at += 1;
+                }
+            }
+        }
         let remainder = &line[prefix.len()..];
         let indent = remainder.len() - remainder.trim_start_matches([' ', '\t']).len();
         let text = &remainder[indent..];
         let visible = masked.get(prefix.len() + indent..).unwrap_or("");
+        if previous_blank && !line.trim().is_empty() {
+            while lists.last().is_some_and(|&(owner_depth, column, width)| {
+                owner_depth > quote_depth
+                    || owner_depth == quote_depth && columns[owner_depth] < column + width
+            }) {
+                lists.pop();
+            }
+        }
+        let outside_item = lists.last().is_some_and(|&(owner_depth, column, width)| {
+            quote_depth > owner_depth && columns[owner_depth] < column + width
+        });
+        if quote_depth > depth && paragraph && !outside_item {
+            insertions.push((line_offset + positions[depth], "\\".to_owned()));
+            continue;
+        }
+        if outside_item {
+            while lists.last().is_some_and(|&(owner_depth, column, width)| {
+                quote_depth > owner_depth && columns[owner_depth] < column + width
+            }) {
+                lists.pop();
+            }
+            paragraph = false;
+        }
+        previous_blank = line.trim().is_empty() || quote_depth > 0 && text.is_empty();
         if line.trim().is_empty() {
             depth = 0;
             paragraph = false;
@@ -86,26 +130,33 @@ fn quoted_list_boundaries<'a>(
             .captures(visible)
             .filter(|_| !thematic(visible) && (!paragraph || depth > 0))
         {
-            while lists.last().is_some_and(|&(owner_depth, column)| {
+            while lists.last().is_some_and(|&(owner_depth, column, _)| {
                 owner_depth > quote_depth || owner_depth == quote_depth && column > indent
             }) {
                 lists.pop();
             }
             if quote_depth < depth {
                 if paragraph
-                    && !lists.last().is_some_and(|&(owner_depth, column)| {
+                    && !lists.last().is_some_and(|&(owner_depth, column, _)| {
                         owner_depth == quote_depth && indent <= column
                     })
                 {
-                    insertions.push((line_offset, boundary.clone()));
+                    let end = boundary
+                        .match_indices('>')
+                        .nth(quote_depth)
+                        .map_or(boundary.len(), |(at, _)| at + 1);
+                    insertions.push((line_offset, format!("{}\n", &boundary[..end])));
                 }
                 depth = quote_depth;
                 boundary = prefix.trim_end().to_owned();
             }
-            if lists.last() != Some(&(quote_depth, indent)) {
-                lists.push((quote_depth, indent));
+            let width = item.get(1).unwrap().end();
+            if !lists.last().is_some_and(|&(owner_depth, column, _)| {
+                owner_depth == quote_depth && column == indent
+            }) {
+                lists.push((quote_depth, indent, width));
             }
-            let body_start = item.get(1).unwrap().end();
+            let body_start = item.get(3).unwrap().start();
             let mut quote_body = &text[body_start..];
             let mut nested_depth = 0;
             let mut nested_prefix = String::new();
@@ -116,18 +167,27 @@ fn quoted_list_boundaries<'a>(
                 let Some(child) = marker.captures(quote_body) else {
                     break;
                 };
-                let width = child.get(1).unwrap().end();
-                if !embedded.is_match(&quote_body[width..]) {
+                let child_width = child.get(1).unwrap().end();
+                let column = nested
+                    .as_str()
+                    .bytes()
+                    .rev()
+                    .take_while(|b| matches!(b, b' ' | b'\t'))
+                    .count()
+                    .saturating_sub(1);
+                lists.push((quote_depth + nested_depth, column, child_width));
+                let child_body = child.get(3).unwrap().start();
+                if !embedded.is_match(&quote_body[child_body..]) {
                     break;
                 }
-                nested_prefix.push_str(&" ".repeat(width));
-                quote_body = &quote_body[width..];
+                nested_prefix.push_str(&" ".repeat(child_width));
+                quote_body = &quote_body[child_body..];
             }
             if nested_depth > 0 {
                 depth = quote_depth + nested_depth;
                 boundary = format!(
                     "{prefix}{}{}",
-                    " ".repeat(indent + body_start),
+                    " ".repeat(indent + width),
                     nested_prefix.trim_end()
                 );
             } else if quote_depth > 0 {
@@ -146,7 +206,11 @@ fn quoted_list_boundaries<'a>(
                 || thematic(visible)
                 || visible.starts_with(":::")
                 || heading.is_match(visible));
-        } else if visible.starts_with('#')
+        } else if heading.is_match(visible)
+            || (!paragraph
+                && visible.starts_with('{')
+                && read_djot_word_attributes(visible, 0)
+                    .is_some_and(|(end, _)| end == visible.trim_end().len()))
             || visible.starts_with('|')
             || visible.starts_with(":::")
             || thematic(visible)
@@ -165,10 +229,9 @@ fn quoted_list_boundaries<'a>(
     }
     let mut result = String::with_capacity(source.len());
     let mut start = 0;
-    for (at, boundary) in insertions {
+    for (at, text) in insertions {
         result.push_str(&source[start..at]);
-        result.push_str(&boundary);
-        result.push('\n');
+        result.push_str(&text);
         start = at;
     }
     result.push_str(&source[start..]);
