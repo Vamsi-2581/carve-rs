@@ -2241,7 +2241,7 @@ fn reference_attribute_text(attrs: &[(String, Vec<String>)], table: bool) -> Str
 }
 
 pub(super) fn references(source: &str) -> String {
-    let definition = cached_regex!(r"(?m)^\[([^\[\]\n^][^\[\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
+    let definition = cached_regex!(r"(?m)^\[([^\]\n^][^\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
     let mask = reference_mask(source);
     let mut definitions = HashMap::new();
     let mut removed = Vec::new();
@@ -2363,10 +2363,10 @@ pub(super) fn references(source: &str) -> String {
             }) {
                 let mut parts = Vec::new();
                 while source[end..].starts_with('{') {
-                    let Some((length, part)) = read_djot_word_attributes(&source[end..], 0) else {
+                    let Some((length, _)) = read_djot_word_attributes(&source[end..], 0) else {
                         break;
                     };
-                    parts.push(part);
+                    parts.push(&source[end..end + length]);
                     end += length;
                 }
                 own = attributes(&parts.join(""));
@@ -2395,7 +2395,9 @@ pub(super) fn references(source: &str) -> String {
     let mut serial = 0;
     let mut aliases = HashMap::new();
     for key in &definition_keys {
-        if (key.contains('\\') || key.contains('|')) && !aliases.contains_key(key) {
+        if (key.contains('\\') || key.contains('|') || key.contains('['))
+            && !aliases.contains_key(key)
+        {
             aliases.insert(
                 key.clone(),
                 next_reference_alias(&mut occupied, &mut serial),
@@ -2593,7 +2595,7 @@ pub(super) fn references(source: &str) -> String {
 }
 
 fn reference_definitions(source: &str, mask: &str) -> (HashMap<String, String>, HashSet<usize>) {
-    let definition = cached_regex!(r"^\[([^\[\]\n^][^\[\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
+    let definition = cached_regex!(r"^\[([^\]\n^][^\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
     let item = cached_regex!(r"(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\))[ \t]+").unwrap();
     let block =
         cached_regex!(r"^(?:#{1,6}(?: |$)|:{3,}|[`~]{3,}|\{|\[[^\]]+\]:|(?:[*-][ \t]*){3,}$)")

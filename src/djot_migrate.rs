@@ -960,10 +960,22 @@ fn read_djot_attributes_with_context(
     table: bool,
     paragraph_context: bool,
 ) -> Option<(usize, String, Vec<DjotAttributeToken>)> {
+    read_djot_attributes_with_source_form(source, start, carve, table, paragraph_context, false)
+}
+
+fn read_djot_attributes_with_source_form(
+    source: &str,
+    start: usize,
+    carve: bool,
+    table: bool,
+    paragraph_context: bool,
+    preserve_shorthand: bool,
+) -> Option<(usize, String, Vec<DjotAttributeToken>)> {
     let bytes = source.as_bytes();
     let quote_prefix = cached_regex!(r"^[ \t]*>(?:[ \t]|$)").unwrap();
     let mut parts = Vec::new();
-    let mut tokens = Vec::new();
+    let mut tokens: Vec<DjotAttributeToken> = Vec::new();
+    let mut last_class_assignment = None;
     let mut i = start + 1;
     let mut context = None;
     while i < bytes.len() {
@@ -1023,6 +1035,18 @@ fn read_djot_attributes_with_context(
                     } else {
                         at += 1;
                     }
+                }
+            }
+            if carve {
+                if let Some(last_class_assignment) = last_class_assignment {
+                    parts = parts
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(index, part)| {
+                            (index >= last_class_assignment || tokens[index].key != "class")
+                                .then_some(part)
+                        })
+                        .collect();
                 }
             }
             return Some((i + 1, format!("{{{}}}", parts.join(" ")), tokens));
@@ -1107,15 +1131,17 @@ fn read_djot_attributes_with_context(
                 .bytes()
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == b'_' || ch == b'-')
                 && value.as_bytes()[0] != b'-';
-            parts.push(if identifier {
-                format!("{kind}{value}")
-            } else {
-                format!(
-                    "{}={}",
-                    if kind == '#' { "id" } else { "class" },
-                    quote_djot_attribute(value, carve)
-                )
-            });
+            parts.push(
+                if identifier || (preserve_shorthand && !carve && kind == '.') {
+                    format!("{kind}{value}")
+                } else {
+                    format!(
+                        "{}={}",
+                        if kind == '#' { "id" } else { "class" },
+                        quote_djot_attribute(value, carve)
+                    )
+                },
+            );
             tokens.push(DjotAttributeToken {
                 key: if kind == '#' { "id" } else { "class" }.to_owned(),
                 source: if kind == '#' {
@@ -1188,6 +1214,9 @@ fn read_djot_attributes_with_context(
                     "{key}{}",
                     quote_djot_attribute(&source[from..i], carve)
                 ));
+            }
+            if key == "class=" {
+                last_class_assignment = Some(parts.len() - 1);
             }
             tokens.push(DjotAttributeToken {
                 key: key.trim_end_matches('=').to_owned(),
@@ -4743,6 +4772,104 @@ mod attribute_list_tests {
     use super::djot_to_carve;
 
     #[test]
+    fn explicit_class_assignment_resets_classes_within_its_group() {
+        for (source, expected) in [
+            (
+                "word{.a class=b .c}",
+                "<p><span class=\"b c\">word</span></p>",
+            ),
+            (
+                "word{.a class=b .c class=d .e}",
+                "<p><span class=\"d e\">word</span></p>",
+            ),
+            (
+                "word{.a title=x class=b .c}",
+                "<p><span title=\"x\" class=\"b c\">word</span></p>",
+            ),
+            (
+                "word{.a\n.md:flex}",
+                "<p><span class=\"a md:flex\">word</span></p>",
+            ),
+            (
+                "word{.a\n.-dash}",
+                "<p><span class=\"a -dash\">word</span></p>",
+            ),
+            (
+                "word{.a\n.md:flex class=b .c}",
+                "<p><span class=\"b c\">word</span></p>",
+            ),
+            (
+                "word{.a\nclass=b .md:flex}",
+                "<p><span class=\"b md:flex\">word</span></p>",
+            ),
+            (
+                "word{class=a}{class=b}",
+                "<p><span class=\"a b\">word</span></p>",
+            ),
+        ] {
+            assert_eq!(crate::to_html(&djot_to_carve(source)), expected);
+        }
+    }
+
+    #[test]
+    fn opening_brackets_in_reference_definition_labels_resolve() {
+        for (source, expected) in [
+            (
+                "[a[b]: /u\n\n[`a[b`][]",
+                "<p><a href=\"/u\"><code>a[b</code></a></p>",
+            ),
+            ("[a[b]: /u\n\n[x][a\\[b]", "<p><a href=\"/u\">x</a></p>"),
+            (
+                "[a[b]: /u\n[b]: /v\n\n[a\\[b][]",
+                "<p><a href=\"/u\">a[b</a></p>",
+            ),
+        ] {
+            let result = crate::migration::migrate_djot(source);
+            assert_eq!(crate::to_html(&result.value), expected);
+            assert!(!result
+                .report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unresolved Djot reference")));
+        }
+    }
+
+    #[test]
+    fn opening_bracket_reference_aliases_keep_contexts_and_avoid_collisions() {
+        for source in [
+            "[a[b]: /u\n\n| [x][a\\[b] |",
+            "[a[b|c]: /u\n\n| [x][a\\[b\\|c] |",
+            "[a[b]: /u\n\n> [x][a\\[b]",
+            "[a[b]: /u\n\n- [x][a\\[b]",
+            "[a[b]: /old\n[a[b]: /u\n\n[x][a\\[b]",
+            "[carve-djot-reference-1]: /other\n[a[b]: /u\n\n[x][a\\[b] [y][carve-djot-reference-1]",
+        ] {
+            let native = djot_to_carve(source);
+            let html = crate::to_html(&native);
+            assert!(html.contains("<a href=\"/u\">x</a>"), "{source}: {html}");
+            if source.contains("/other") {
+                assert!(html.contains("<a href=\"/other\">y</a>"));
+            }
+        }
+    }
+
+    #[test]
+    fn shorthand_reference_classes_keep_their_append_semantics() {
+        for (source, classes) in [
+            ("{.a .md:flex}\n[r]: /u\n\n[x][r]", "a md:flex"),
+            ("{.a\n  .md:flex}\n[r]: /u\n\n[x][r]", "a md:flex"),
+            ("[r]: /u\n\n[x][r]{.a .md:flex}", "a md:flex"),
+            ("{.a class=b .md:flex}\n[r]: /u\n\n[x][r]", "b md:flex"),
+        ] {
+            assert_eq!(
+                crate::to_html(&djot_to_carve(source)),
+                format!("<p><a href=\"/u\" class=\"{classes}\">x</a></p>"),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn valid_attribute_lists_keep_their_delimiters() {
         for source in [
             "{#id .class}\nA paragraph\n",
@@ -5841,7 +5968,9 @@ fn normalize_djot_attribute_lines(source: &str) -> String {
     let attribute_key = cached_regex!(r"^[A-Za-z][A-Za-z0-9_-]*=").unwrap();
     while i < source.len() {
         if mask.as_bytes()[i] == b'{' && !is_escaped(source.as_bytes(), i) {
-            if let Some((end, attrs)) = read_djot_word_attributes(source, i) {
+            if let Some((end, attrs, _)) =
+                read_djot_attributes_with_source_form(source, i, false, false, true, true)
+            {
                 if source[i..end].contains('\n') {
                     output.push_str(&source[copied..i]);
                     output.push_str(&attrs);
