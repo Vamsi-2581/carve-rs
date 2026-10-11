@@ -129,6 +129,26 @@ fn closing_comment_lines_and_crlf_blank_paragraphs() {
     assert!(source.contains('a') && source.contains('b'), "{source}");
     assert_eq!(
         djot_to_carve("- > {% a\n > b %}\n"),
-        "- > \\{% a\n > b %}\n"
+        "- > \\{% a\n  > \\> b %}\n"
     );
+}
+
+#[test]
+fn indented_rejected_comment_quotes_keep_ownership() {
+    let source = "> - {% a\n> b %}\n";
+    let expected = djot_to_carve(source);
+    for width in [1, 2, 4, 8] {
+        let indented = source
+            .split('\n')
+            .map(|line| {
+                if line.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}{line}", " ".repeat(width))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(djot_to_carve(&indented), expected);
+    }
 }

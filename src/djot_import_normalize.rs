@@ -140,9 +140,6 @@ fn quoted_list_boundaries<'a>(
     let mut paragraph = false;
     let mut previous_blank = true;
     let mut lists: Vec<(usize, usize, usize, usize, usize, usize)> = Vec::new();
-    let rejected_comment =
-        cached_regex!(r"^\\\{\x00DJOTINVALIDATTR\x00[0-9]+\x00%[^%}]*$").unwrap();
-    let mut rejected_comment_open = false;
     for (row_index, ((line, masked), fenced)) in source
         .split('\n')
         .zip(mask.split('\n'))
@@ -152,7 +149,6 @@ fn quoted_list_boundaries<'a>(
         if slot_prefix.is_some_and(|prefix| line.starts_with(prefix)) {
             paragraph = false;
             previous_blank = true;
-            rejected_comment_open = false;
             offset += line.len() + 1;
             continue;
         }
@@ -161,23 +157,12 @@ fn quoted_list_boundaries<'a>(
         let mut item_target = None;
         offset += line.len() + 1;
         if fenced != line {
-            rejected_comment_open = false;
             depth = 0;
             paragraph = false;
             previous_blank = true;
             continue;
         }
         let prefix = quote.find(line).unwrap().as_str();
-        let pending_comment = rejected_comment_open && paragraph && !previous_blank;
-        let opens_rejected_comment = rejected_comment.is_match(&line[djot_content_start(line)..]);
-        let comment_continuation = pending_comment
-            && !line[prefix.len()..]
-                .trim_start_matches([' ', '\t'])
-                .starts_with("\\>");
-        rejected_comment_open = opens_rejected_comment
-            || pending_comment
-                && !line[prefix.len()..].trim_matches([' ', '\t']).is_empty()
-                && !line.contains(['%', '}']);
         let quote_depth = prefix.bytes().filter(|&b| b == b'>').count();
         let mut columns = Vec::new();
         let mut bases = Vec::new();
@@ -391,7 +376,6 @@ fn quoted_list_boundaries<'a>(
                         },
                     ))
         }) {
-            rejected_comment_open = opens_rejected_comment;
             while lists
                 .last()
                 .is_some_and(|&(owner_depth, column, _, _source_prefix, _, _)| {
@@ -549,11 +533,7 @@ fn quoted_list_boundaries<'a>(
             }
             let mut normalized_prefix = String::new();
             for (level, owned_column) in owned_columns.into_iter().enumerate() {
-                let column = if comment_continuation {
-                    owned_column.map_or(columns[level], |column| columns[level].min(column - 1))
-                } else {
-                    owned_column.unwrap_or(0)
-                };
+                let column = owned_column.unwrap_or(0);
                 normalized_prefix.push_str(&" ".repeat(column));
                 normalized_prefix.push('>');
                 if level + 1 < quote_depth || !prefix.ends_with('>') {

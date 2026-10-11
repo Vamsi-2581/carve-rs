@@ -465,6 +465,7 @@ fn protect_rejected_comment_quotes(source: &str) -> String {
         }
         let from = source[..at].rfind('\n').map_or(0, |n| n + 1);
         let opening_prefix = &source[from..at];
+        let enclosing_indent = opening_prefix.len() - opening_prefix.trim_start().len();
         let enclosing_end = enclosing
             .find(opening_prefix)
             .filter(|m| opening_prefix[m.end()..].starts_with('>'))
@@ -476,7 +477,21 @@ fn protect_rejected_comment_quotes(source: &str) -> String {
             let Some(quote) = quote_pattern.find(&source[pos + 1..]) else {
                 break;
             };
+            let end = source[pos + 1..]
+                .find('\n')
+                .map_or(source.len(), |n| pos + 1 + n);
+            let body_at = pos + 1 + quote.end();
+            let body = &source[body_at..end];
             if quote.as_str().len() - quote.as_str().trim_start().len() < enclosing_end {
+                if quote.as_str().len() - quote.as_str().trim_start().len() > enclosing_indent
+                    && Some(quote.as_str().trim_start()) == opening_quote.map(str::trim_start)
+                    && quote.as_str().bytes().filter(|b| *b == b'>').count() == context.0
+                {
+                    edits.insert(
+                        pos + 1 + quote.end(),
+                        format!("{} ", quote.as_str().trim().replace('>', "\\>")),
+                    );
+                }
                 break;
             }
             if quote.as_str().bytes().filter(|&b| b == b'>').count() < context.0 {
@@ -488,11 +503,6 @@ fn protect_rejected_comment_quotes(source: &str) -> String {
             {
                 break;
             }
-            let end = source[pos + 1..]
-                .find('\n')
-                .map_or(source.len(), |n| pos + 1 + n);
-            let body_at = pos + 1 + quote.end();
-            let body = &source[body_at..end];
             if body.trim().is_empty() {
                 break;
             }
@@ -501,6 +511,15 @@ fn protect_rejected_comment_quotes(source: &str) -> String {
                 .take_while(|b| matches!(b, b' ' | b'\t'))
                 .count();
             if held < context.2 {
+                if quote.as_str().len() - quote.as_str().trim_start().len()
+                    >= opening_quote.map_or(0, |quote| quote.len() - quote.trim_start().len())
+                        + context.2
+                {
+                    edits.insert(
+                        body_at,
+                        format!("{} ", quote.as_str().trim().replace('>', "\\>")),
+                    );
+                }
                 break;
             }
             if held <= indent {
