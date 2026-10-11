@@ -3338,7 +3338,7 @@ fn quoted(line: &str) -> (usize, &str) {
         match trimmed.strip_prefix('>') {
             Some(after) if after.is_empty() || after.starts_with([' ', '\t']) => {
                 depth += 1;
-                rest = after.strip_prefix(' ').unwrap_or(after);
+                rest = after.strip_prefix([' ', '\t']).unwrap_or(after);
             }
             // The remainder is NOT trimmed: an item's own indentation is what
             // says the line continues the item, and inside a quote it sits
@@ -6412,7 +6412,7 @@ fn normalize_djot_fences(source: &str) -> String {
     let quote_code = !djot_code_quote_markers(source).is_empty();
     if !source.contains("```") && !source.contains("~~~") {
         return if source.contains("\\|") || quote_code {
-            close_djot_table_code(source)
+            close_djot_table_code(source, None)
         } else {
             source.to_owned()
         };
@@ -6436,7 +6436,7 @@ fn normalize_djot_fences(source: &str) -> String {
             .lines()
             .any(|line| indented_ticks.is_match(quoted(line).1))
     {
-        close_djot_table_code(&normalized)
+        close_djot_table_code(&normalized, None)
     } else {
         normalized
     }
@@ -6986,7 +6986,7 @@ fn rename_djot_pipe_footnotes(source: &str) -> String {
     String::from_utf8(output).expect("only ASCII syntax changed")
 }
 
-fn close_djot_table_code(source: &str) -> String {
+fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(usize)>) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
     if !source.contains('`') {
         return source.to_owned();
@@ -7131,6 +7131,18 @@ fn close_djot_table_code(source: &str) -> String {
     for line in source.split('\n') {
         let at = djot_content_start(line);
         let line_end = offset + line.len();
+        let code_depth = line
+            .bytes()
+            .enumerate()
+            .take(at)
+            .filter(|&(p, b)| {
+                b == b'>'
+                    && line
+                        .as_bytes()
+                        .get(p + 1)
+                        .map_or(true, |b| matches!(b, b' ' | b'\t'))
+            })
+            .count();
         let (depth, content) = quoted(line);
         let trimmed = content.trim_start();
         let indent = content.len() - trimmed.len();
@@ -7351,7 +7363,7 @@ fn close_djot_table_code(source: &str) -> String {
                         return value.trim_end_matches([' ', '\t']).to_owned();
                     }
                     let mut rest = value;
-                    for _ in 0..depth {
+                    for _ in 0..code_depth {
                         let Some(prefix) = quote_re.find(rest) else {
                             break;
                         };
@@ -7364,7 +7376,15 @@ fn close_djot_table_code(source: &str) -> String {
                 (block.is_match(value) || value.starts_with('{'))
                     && (!separator.is_match(value) || line.as_bytes().get(at) != Some(&b'|'))
             }) || (item_kind.starts_with("[^") && normalized.len() > 1);
+            if closed && code_depth > depth && !raw_code {
+                i = end + width;
+                consumed = i;
+                continue;
+            }
             let raw_payload = if raw_code {
+                if let Some(callback) = on_raw_code.as_mut() {
+                    callback(i);
+                }
                 let mut html = String::from("<code>");
                 for ch in normalized.join("\n").chars() {
                     if ch.is_ascii_punctuation() || ch == '\n' {

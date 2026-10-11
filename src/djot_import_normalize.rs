@@ -154,10 +154,14 @@ fn quoted_list_boundaries<'a>(
         if line.trim_matches([' ', '\t']).is_empty() {
             depth = 0;
             paragraph = false;
-        } else if let Some(item) = marker
-            .captures(visible)
-            .filter(|_| !thematic(visible) && (!paragraph || quote_depth < depth))
-        {
+        } else if let Some(item) = marker.captures(visible).filter(|_| {
+            !thematic(visible)
+                && (!paragraph
+                    || quote_depth < depth
+                    || lists.last().is_some_and(|&(owner_depth, column, _)| {
+                        owner_depth == quote_depth && indent <= column
+                    }))
+        }) {
             while lists.last().is_some_and(|&(owner_depth, column, _)| {
                 owner_depth > quote_depth || owner_depth == quote_depth && column > indent
             }) {
@@ -1515,7 +1519,16 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
         .count();
     let mask = reference_mask(source);
     let mut findings: Vec<(usize, &'static str)> = Vec::new();
-    findings.extend(djot_code_quote_markers(source).into_iter().map(|at| (at, "Multiline inline code containing a quote marker uses raw HTML; plain-text export omits it.")));
+    if !djot_code_quote_markers(source).is_empty() {
+        let mut raw_code = Vec::new();
+        let _ = close_djot_table_code(source, Some(&mut |at| raw_code.push(at)));
+        findings.extend(raw_code.into_iter().map(|at| {
+            (
+                at,
+                "Multiline inline code uses raw HTML; plain-text export omits it.",
+            )
+        }));
+    }
     let mut nested = Vec::new();
     emphasis::convert_with_losses(source, &emphasis_mask(source), str::to_owned, &mut nested);
     findings.extend(nested.into_iter().map(|at| {

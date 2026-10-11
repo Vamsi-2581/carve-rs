@@ -26,6 +26,24 @@ fn multiline_code_fallback_reports_plain_export_loss() {
         .filter(|row| row.code == "structure-unspellable")
         .collect();
     assert_eq!(losses.len(), 1);
-    assert_eq!(losses[0].path.as_deref(), Some("line:2"));
-    assert_eq!(losses[0].message, "Multiline inline code containing a quote marker uses raw HTML; plain-text export omits it.");
+    assert_eq!(losses[0].path.as_deref(), Some("line:1"));
+    assert_eq!(
+        losses[0].message,
+        "Multiline inline code uses raw HTML; plain-text export omits it."
+    );
+}
+
+#[test]
+fn container_prefixes_do_not_report_code_loss() {
+    for source in ["> a `b\n> c` d\n", "- > a `b\n  > c` d\n"] {
+        let result = carve::migrate_djot(source);
+        assert!(
+            !result
+                .report
+                .diagnostics
+                .iter()
+                .any(|row| row.code == "structure-unspellable"),
+            "{source:?}"
+        );
+    }
 }
