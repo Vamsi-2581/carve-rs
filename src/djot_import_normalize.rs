@@ -43,8 +43,108 @@ fn drop_orphan_attribute_line(result: &mut Vec<String>) {
     }
 }
 
+fn quoted_list_boundaries<'a>(
+    source: &'a str,
+    mask: &str,
+    fence_mask: &str,
+) -> std::borrow::Cow<'a, str> {
+    if !source.contains('>') || !source.contains('\n') {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let quote = cached_regex!(r"^(?:[ \t]*>[ ]?)*").unwrap();
+    let marker = cached_regex!(r"^((?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+(?:\[[ xX]\][ \t]+)?)\S").unwrap();
+    let embedded = cached_regex!(r"^(?:>[ \t]*)+").unwrap();
+    let mut insertions = Vec::new();
+    let mut offset = 0;
+    let mut depth = 0;
+    let mut boundary = String::new();
+    let mut paragraph = false;
+    for ((line, masked), fenced) in source
+        .split('\n')
+        .zip(mask.split('\n'))
+        .zip(fence_mask.split('\n'))
+    {
+        let line_offset = offset;
+        offset += line.len() + 1;
+        if fenced != line {
+            depth = 0;
+            paragraph = false;
+            continue;
+        }
+        let prefix = quote.find(line).unwrap().as_str();
+        let quote_depth = prefix.bytes().filter(|&b| b == b'>').count();
+        let remainder = &line[prefix.len()..];
+        let indent = remainder.len() - remainder.trim_start_matches([' ', '\t']).len();
+        let text = &remainder[indent..];
+        let visible = masked.get(prefix.len() + indent..).unwrap_or("");
+        if line.trim().is_empty() {
+            depth = 0;
+            paragraph = false;
+        } else if let Some(item) = marker
+            .captures(visible)
+            .filter(|_| !thematic(visible) && (!paragraph || depth > 0))
+        {
+            if quote_depth < depth {
+                insertions.push((line_offset, boundary.clone()));
+                depth = quote_depth;
+            }
+            let body_start = item.get(1).unwrap().end();
+            if let Some(nested) = embedded.find(&text[body_start..]) {
+                depth = quote_depth + nested.as_str().bytes().filter(|&b| b == b'>').count();
+                boundary = format!(
+                    "{prefix}{}{}",
+                    " ".repeat(indent + body_start),
+                    nested.as_str().trim_end()
+                );
+            } else if quote_depth > 0 {
+                depth = quote_depth;
+                boundary = prefix.trim_end().to_owned();
+            }
+            paragraph = true;
+        } else if quote_depth > 0 && (!paragraph || depth > 0) {
+            if quote_depth >= depth || text.is_empty() {
+                depth = quote_depth;
+                boundary = prefix.trim_end().to_owned();
+            }
+            paragraph = !text.is_empty();
+        } else if visible.starts_with('#')
+            || visible.starts_with('|')
+            || visible.starts_with(":::")
+            || thematic(visible)
+        {
+            depth = quote_depth;
+            paragraph = false;
+        } else {
+            paragraph = true;
+        }
+    }
+    if insertions.is_empty() {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let mut result = String::with_capacity(source.len());
+    let mut start = 0;
+    for (at, boundary) in insertions {
+        result.push_str(&source[start..at]);
+        result.push_str(&boundary);
+        result.push('\n');
+        start = at;
+    }
+    result.push_str(&source[start..]);
+    std::borrow::Cow::Owned(result)
+}
+
 pub(super) fn blocks(source: &str) -> String {
-    let mask = mask_code_and_destinations(source);
+    let initial_mask = mask_code_and_destinations(source);
+    let initial_rows = djot_table_rows(source, &initial_mask);
+    let initial_fences = mask_djot_fences(source, None, &initial_rows, true);
+    let normalized = quoted_list_boundaries(source, &initial_mask, &initial_fences);
+    let changed = matches!(&normalized, std::borrow::Cow::Owned(_));
+    let source = normalized.as_ref();
+    let mask = if changed {
+        mask_code_and_destinations(source)
+    } else {
+        initial_mask
+    };
     let mut div_closers = HashMap::new();
     if source.contains(":::") {
         djot_inline_boundaries_with_div_closers(source, &mask, true, Some(&mut div_closers));
@@ -60,8 +160,16 @@ pub(super) fn blocks(source: &str) -> String {
         .collect();
     let masks: Vec<_> = mask.split('\n').collect();
     let lines: Vec<_> = source.split('\n').collect();
-    let rows = djot_table_rows(source, &mask);
-    let fence_mask = mask_djot_fences(source, None, &rows, true);
+    let rows = if changed {
+        djot_table_rows(source, &mask)
+    } else {
+        initial_rows
+    };
+    let fence_mask = if changed {
+        mask_djot_fences(source, None, &rows, true)
+    } else {
+        initial_fences
+    };
     let fence_masks: Vec<_> = fence_mask.split('\n').collect();
     let code_opener = cached_regex!(r"^(`{3,}|~{3,})[ \t]*=?[A-Za-z0-9_+#.-]*[ \t]*$").unwrap();
     let mut open_code: Option<(u8, usize, String)> = None;
