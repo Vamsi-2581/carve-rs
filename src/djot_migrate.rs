@@ -6380,10 +6380,38 @@ fn normalize_djot_footnotes(
     stubs
 }
 
+fn djot_code_quote_markers(source: &str) -> Vec<usize> {
+    if !source.contains('`') {
+        return Vec::new();
+    }
+    let markers: Vec<_> = cached_regex!(r"\n[ \t]*>")
+        .unwrap()
+        .find_iter(source)
+        .map(|m| m.end() - 1)
+        .collect();
+    if markers.is_empty() {
+        return markers;
+    }
+    let fenced = mask_djot_fences(source, None, &[], true);
+    let masked = mask_djot_opaque(&fenced, OpaqueOptions::default());
+    let exposed = mask_djot_opaque(
+        &fenced,
+        OpaqueOptions {
+            code: false,
+            ..OpaqueOptions::default()
+        },
+    );
+    markers
+        .into_iter()
+        .filter(|&at| masked[at] != b'>' && exposed[at] == b'>')
+        .collect()
+}
+
 fn normalize_djot_fences(source: &str) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
+    let quote_code = !djot_code_quote_markers(source).is_empty();
     if !source.contains("```") && !source.contains("~~~") {
-        return if source.contains("\\|") {
+        return if source.contains("\\|") || quote_code {
             close_djot_table_code(source)
         } else {
             source.to_owned()
@@ -6402,7 +6430,8 @@ fn normalize_djot_fences(source: &str) -> String {
     );
     let normalized = normalize_djot_paragraph_fences(&lines.join("\n"));
     let indented_ticks = cached_regex!(r"^[ \t]+`{3,}").unwrap();
-    if source.contains("\\|")
+    if quote_code
+        || source.contains("\\|")
         || source
             .lines()
             .any(|line| indented_ticks.is_match(quoted(line).1))

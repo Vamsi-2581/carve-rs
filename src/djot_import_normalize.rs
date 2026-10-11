@@ -1,6 +1,14 @@
 use super::*;
 use std::collections::HashMap;
 
+fn starts_quote(text: &str) -> bool {
+    text.starts_with('>')
+        && text
+            .as_bytes()
+            .get(1)
+            .map_or(true, |b| matches!(b, b' ' | b'\t'))
+}
+
 fn thematic(text: &str) -> bool {
     let bytes: Vec<_> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     bytes.len() >= 3 && bytes.iter().all(|b| matches!(b, b'*' | b'-'))
@@ -52,10 +60,11 @@ fn quoted_list_boundaries<'a>(
         return std::borrow::Cow::Borrowed(source);
     }
     let quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
-    let marker = cached_regex!(r"^((?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)(\[[ xX]\][ \t]+)?(\S)").unwrap();
+    let marker = cached_regex!(r"^((?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)(\[[ xX]\][ \t]+)?([^ \t])").unwrap();
     let embedded = cached_regex!(r"^(?:>(?:[ \t]+|$))+").unwrap();
     let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
     let mut insertions = Vec::new();
+    let reference = cached_regex!(r"^\[[^\]\n]*\]:").unwrap();
     let mut offset = 0;
     let mut depth = 0;
     let mut boundary = String::new();
@@ -95,14 +104,32 @@ fn quoted_list_boundaries<'a>(
                 }
             }
         }
+        if positions
+            .first()
+            .is_some_and(|&at| masked.as_bytes().get(at) != Some(&b'>'))
+        {
+            previous_blank = false;
+            continue;
+        }
         let remainder = &line[prefix.len()..];
         let indent = remainder.len() - remainder.trim_start_matches([' ', '\t']).len();
         let text = &remainder[indent..];
         let visible = masked.get(prefix.len() + indent..).unwrap_or("");
-        if previous_blank && !line.trim().is_empty() {
+        if previous_blank && !line.trim_matches([' ', '\t']).is_empty() {
             while lists.last().is_some_and(|&(owner_depth, column, width)| {
                 owner_depth > quote_depth
                     || owner_depth == quote_depth && columns[owner_depth] < column + width
+            }) {
+                lists.pop();
+            }
+        }
+        if thematic(visible)
+            || heading.is_match(visible)
+            || visible.starts_with(":::")
+            || visible.starts_with('|')
+        {
+            while lists.last().is_some_and(|&(owner_depth, column, _)| {
+                owner_depth > quote_depth || owner_depth == quote_depth && indent <= column
             }) {
                 lists.pop();
             }
@@ -122,13 +149,14 @@ fn quoted_list_boundaries<'a>(
             }
             paragraph = false;
         }
-        previous_blank = line.trim().is_empty() || quote_depth > 0 && text.is_empty();
-        if line.trim().is_empty() {
+        previous_blank =
+            line.trim_matches([' ', '\t']).is_empty() || quote_depth > 0 && text.is_empty();
+        if line.trim_matches([' ', '\t']).is_empty() {
             depth = 0;
             paragraph = false;
         } else if let Some(item) = marker
             .captures(visible)
-            .filter(|_| !thematic(visible) && (!paragraph || depth > 0))
+            .filter(|_| !thematic(visible) && (!paragraph || quote_depth < depth))
         {
             while lists.last().is_some_and(|&(owner_depth, column, _)| {
                 owner_depth > quote_depth || owner_depth == quote_depth && column > indent
@@ -184,7 +212,12 @@ fn quoted_list_boundaries<'a>(
                 quote_body = &quote_body[child_body..];
             }
             if nested_depth > 0 {
-                depth = quote_depth + nested_depth;
+                depth = quote_depth
+                    + if quote_body.is_empty() {
+                        0
+                    } else {
+                        nested_depth
+                    };
                 boundary = format!(
                     "{prefix}{}{}",
                     " ".repeat(indent + width),
@@ -194,7 +227,9 @@ fn quoted_list_boundaries<'a>(
                 depth = quote_depth;
                 boundary = prefix.trim_end().to_owned();
             }
-            paragraph = !(thematic(quote_body)
+            paragraph = !(quote_body.is_empty()
+                || reference.is_match(quote_body)
+                || thematic(quote_body)
                 || quote_body.starts_with(":::")
                 || heading.is_match(quote_body));
         } else if quote_depth > 0 && (!paragraph || depth > 0) {
@@ -203,10 +238,16 @@ fn quoted_list_boundaries<'a>(
                 boundary = prefix.trim_end().to_owned();
             }
             paragraph = !(text.is_empty()
+                || reference.is_match(text)
+                || (!paragraph
+                    && visible.starts_with('{')
+                    && read_djot_word_attributes(visible, 0)
+                        .is_some_and(|(end, _)| end == visible.len()))
                 || thematic(visible)
                 || visible.starts_with(":::")
                 || heading.is_match(visible));
-        } else if heading.is_match(visible)
+        } else if reference.is_match(text)
+            || heading.is_match(visible)
             || (!paragraph
                 && visible.starts_with('{')
                 && read_djot_word_attributes(visible, 0)
@@ -331,11 +372,11 @@ pub(super) fn blocks(source: &str) -> String {
         let block = rows[n]
             || fence_masks[n] != *raw
             || heading.is_match(visible)
-            || visible.starts_with('>')
+            || starts_quote(visible)
             || visible.starts_with(":::")
             || visible.starts_with('|')
             || thematic(visible);
-        if !raw.trim().is_empty() {
+        if !raw.trim_matches([' ', '\t']).is_empty() {
             while divs.last().is_some_and(|(_, _, _, owner, _)| {
                 owner.is_some_and(|column| {
                     indent < column && (marker.is_match(visible) || block || previous_blank)
@@ -344,7 +385,7 @@ pub(super) fn blocks(source: &str) -> String {
                 let (width, prefix, _, _, _) = divs.pop().unwrap();
                 let before = result
                     .iter()
-                    .rposition(|line| !line.trim().is_empty())
+                    .rposition(|line| !line.trim_matches([' ', '\t']).is_empty())
                     .map_or(0, |n| n + 1);
                 result.insert(before, format!("{prefix}{}", ":".repeat(width)));
                 paragraph = false;
@@ -396,7 +437,7 @@ pub(super) fn blocks(source: &str) -> String {
         } else {
             format!("{}{text}", " ".repeat(target_indent))
         };
-        if raw.trim().is_empty() {
+        if raw.trim_matches([' ', '\t']).is_empty() {
             quote_paragraph_depth = None;
             paragraph = false;
             in_heading = false;
@@ -477,14 +518,13 @@ pub(super) fn blocks(source: &str) -> String {
                 previous_blank = false;
                 continue;
             }
-            if depth < quote_paragraph_depth.unwrap_or(depth)
-                && marker.is_match(block_body)
-                && !previous_blank
-            {
-                result.push(raw[..raw.len() - body.len()].trim_end().to_owned());
-                quote_paragraph_depth = None;
-            }
+            let metadata_body = quote_paragraph_depth.is_none()
+                && (reference.is_match(block_body)
+                    || block_body.starts_with('{')
+                        && read_djot_word_attributes(block_body, 0)
+                            .is_some_and(|(end, _)| end == block_body.len()));
             quote_paragraph_depth = (!body.trim().is_empty()
+                && !metadata_body
                 && !heading.is_match(block_body)
                 && !marker.is_match(block_body)
                 && !block_body.starts_with(":::"))
@@ -514,7 +554,9 @@ pub(super) fn blocks(source: &str) -> String {
         }
         if let Some(item) = marker.captures(visible).filter(|_| !thematic(text)) {
             if in_quote && !previous_blank {
-                result.push(String::new());
+                if !paragraph && !lists.last().is_some_and(|list| indent <= list.source) {
+                    result.push(String::new());
+                }
                 in_quote = false;
                 quote_paragraph_depth = None;
             }
@@ -530,7 +572,10 @@ pub(super) fn blocks(source: &str) -> String {
                 .filter(|list| previous_blank && indent == list.source)
             {
                 if ends_nested && !parent.loose {
-                    while result.last().is_some_and(|line| line.trim().is_empty()) {
+                    while result
+                        .last()
+                        .is_some_and(|line| line.trim_matches([' ', '\t']).is_empty())
+                    {
                         result.pop();
                     }
                     let start = previous_list.as_ref().unwrap().start;
@@ -538,7 +583,7 @@ pub(super) fn blocks(source: &str) -> String {
                         && start > 0
                         && result
                             .get(start - 1)
-                            .is_some_and(|line| line.trim().is_empty())
+                            .is_some_and(|line| line.trim_matches([' ', '\t']).is_empty())
                     {
                         result.remove(start - 1);
                     }
@@ -623,7 +668,9 @@ pub(super) fn blocks(source: &str) -> String {
             if top
                 .as_ref()
                 .is_some_and(|list| !nested && list.loose && list.lazy)
-                && result.last().is_some_and(|line| !line.trim().is_empty())
+                && result
+                    .last()
+                    .is_some_and(|line| !line.trim_matches([' ', '\t']).is_empty())
             {
                 result.push(String::new());
             }
@@ -714,7 +761,7 @@ pub(super) fn blocks(source: &str) -> String {
             }
         } else if paragraph
             && (heading.is_match(visible)
-                || visible.starts_with('>')
+                || starts_quote(visible)
                 || visible.starts_with('|') && !pipe_pass
                 || thematic(visible) && !(visible.contains('*') && visible.contains('-')))
         {
@@ -1468,6 +1515,7 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
         .count();
     let mask = reference_mask(source);
     let mut findings: Vec<(usize, &'static str)> = Vec::new();
+    findings.extend(djot_code_quote_markers(source).into_iter().map(|at| (at, "Multiline inline code containing a quote marker uses raw HTML; plain-text export omits it.")));
     let mut nested = Vec::new();
     emphasis::convert_with_losses(source, &emphasis_mask(source), str::to_owned, &mut nested);
     findings.extend(nested.into_iter().map(|at| {
@@ -1624,7 +1672,9 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
             || definition_term(masks[n - 1]).is_some();
         if block_allowed
             && empty_heading.is_match(visible)
-            && lines.get(n + 1).map_or(true, |line| line.trim().is_empty())
+            && lines
+                .get(n + 1)
+                .map_or(true, |line| line.trim_matches([' ', '\t']).is_empty())
         {
             findings.push((offset, "An empty Djot heading cannot be written in Carve."));
         }
