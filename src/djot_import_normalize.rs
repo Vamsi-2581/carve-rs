@@ -157,6 +157,9 @@ fn quoted_list_boundaries<'a>(
         let mut item_target = None;
         offset += line.len() + 1;
         if fenced != line {
+            if line.starts_with(['`', '~']) {
+                lists.clear();
+            }
             depth = 0;
             paragraph = false;
             previous_blank = true;

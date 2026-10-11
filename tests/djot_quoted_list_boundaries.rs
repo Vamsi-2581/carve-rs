@@ -17,6 +17,20 @@ fn preserves_quote_and_list_ownership() {
 }
 
 #[test]
+fn root_fences_release_the_previous_quoted_list() {
+    let expected = "- a\n\n  ```\n  b\n  ```\n```\nc\n```\n> y\n";
+    for fence in ["```", "~~~"] {
+        let source = format!("- a\n\n  ```\n  b\n  ```\n{fence}\nc\n{fence}\n > y\n");
+        let imported = carve::djot_to_carve(&source);
+        assert_eq!(
+            carve::to_html(&imported),
+            carve::to_html(expected),
+            "{source:?}\n{imported}"
+        );
+    }
+}
+
+#[test]
 fn multiline_code_fallback_reports_plain_export_loss() {
     let result = carve::migrate_djot("a `b\n> c` d\n");
     let losses: Vec<_> = result
