@@ -52,6 +52,7 @@ struct CarveContext {
     /// Inside a definition term, where a comment opening a line keeps its
     /// separator instead of joining a `%`-leading content into a fence.
     in_term: bool,
+    in_footnote_body: bool,
     escape_mode: EscapeMode,
     /// The unit the character being written now belongs to (PART 11 §2b).
     ///
@@ -1063,6 +1064,7 @@ fn render_with_escapes_once(
         after_caption_host: false,
         paragraph_starts_after_caption_host: false,
         in_term: false,
+        in_footnote_body: false,
         escape_mode,
         escape_unit: 0,
         definitions_by_line: definitions_by_description_line(doc),
@@ -3128,7 +3130,10 @@ fn render_footnote_def_source(
     if blocks.is_empty() {
         return format!("[^{}]: {{empty}}", write_flat_bracket_run(label));
     }
+    let previous_footnote_body = ctx.in_footnote_body;
+    ctx.in_footnote_body = true;
     let raw_body = render_blocks(session, blocks, ctx);
+    ctx.in_footnote_body = previous_footnote_body;
     if raw_body.lines().any(|line| {
         line.trim_start_matches([' ', '\t'])
             .strip_prefix(sentinel(session, S_CODE_LINE))
@@ -4957,7 +4962,7 @@ fn spell_verse_empty_lines(content: &str, in_line_block: bool) -> String {
 }
 
 fn code_span_fence(content: &str) -> String {
-    if content.starts_with(['\r', '\n']) {
+    if content.contains(['\r', '\n']) {
         let mut widths = [false; 3];
         let mut run = 0;
         for ch in content.chars().chain(std::iter::once(' ')) {
@@ -4998,8 +5003,13 @@ fn guard_code_lines(session: &RenderSession, written: &str, ctx: &CarveContext) 
                     );
                     return line.to_owned();
                 }
-                note_inserted(session, S_CODE_LINE);
-                format!("{}{line}", sentinel(session, S_CODE_LINE))
+                let kind = if ctx.in_footnote_body && line.starts_with('[') {
+                    S_FOOTNOTE_CODE_LINE
+                } else {
+                    S_CODE_LINE
+                };
+                note_inserted(session, kind);
+                format!("{}{line}", sentinel(session, kind))
             } else {
                 line.to_owned()
             }
@@ -5329,11 +5339,12 @@ fn align_marker(align: Option<TableAlign>) -> &'static str {
 
 /// The staging characters an AUTHORED occurrence can be mistaken for.
 const SENTINEL_DEFAULTS: [char; SENTINEL_COUNT] = [
-    '\u{e003}', '\u{e004}', '\u{e005}', '\u{e010}', '\u{e011}', '\u{e012}', '\u{e013}',
+    '\u{e003}', '\u{e004}', '\u{e005}', '\u{e010}', '\u{e011}', '\u{e012}', '\u{e013}', '\u{e014}',
 ];
 
-const SENTINEL_COUNT: usize = 7;
+const SENTINEL_COUNT: usize = 8;
 const S_CODE_LINE: usize = 6;
+const S_FOOTNOTE_CODE_LINE: usize = 7;
 
 const S_BLANK: usize = 0;
 const S_GUARD: usize = 1;
@@ -5726,11 +5737,15 @@ fn restore_verbatim(session: &RenderSession, text: &str) -> String {
     let text = text
         .split('\n')
         .map(|line| {
+            if let Some((prefix, rest)) = line.split_once(sentinel(session, S_FOOTNOTE_CODE_LINE)) {
+                if prefix.chars().all(|ch| matches!(ch, ' ' | '\t' | '>')) && rest.starts_with('[')
+                {
+                    return format!("{prefix} {rest}");
+                }
+            }
             if let Some((prefix, rest)) = line.split_once(sentinel(session, S_CODE_LINE)) {
                 if prefix.chars().all(|ch| matches!(ch, ' ' | '\t' | '>')) {
-                    let guarded = if rest.starts_with('[') {
-                        format!("{prefix} ")
-                    } else if let Some(last_quote) = prefix.rfind('>') {
+                    let guarded = if let Some(last_quote) = prefix.rfind('>') {
                         format!("{}  ", &prefix[..=last_quote])
                     } else {
                         " ".to_owned()
@@ -5738,7 +5753,13 @@ fn restore_verbatim(session: &RenderSession, text: &str) -> String {
                     return format!("{guarded}{rest}");
                 }
             }
-            line.replace(sentinel(session, S_CODE_LINE), "")
+            line.replace(
+                [
+                    sentinel(session, S_CODE_LINE),
+                    sentinel(session, S_FOOTNOTE_CODE_LINE),
+                ],
+                "",
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
