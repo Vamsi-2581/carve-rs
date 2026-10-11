@@ -31,6 +31,38 @@ fn root_fences_release_the_previous_quoted_list() {
 }
 
 #[test]
+fn long_inherited_reference_attributes_stay_shared() {
+    let value = "v".repeat(32768);
+    for attribute in ["title", "class", "data-long"] {
+        let source = format!(
+            "{{{attribute}=\"{value}\"}}\n[r]: /u\n\n{}",
+            "[x][r] ".repeat(1024)
+        );
+        let result = carve::djot_to_carve(&source);
+        assert!(result.len() < source.len() * 2);
+        assert_eq!(result.matches(&value).count(), 1);
+    }
+}
+
+#[test]
+fn class_overrides_keep_other_inherited_attributes_shared() {
+    let value = "v".repeat(32768);
+    let source = format!(
+        "{{.base title=\"{value}\"}}\n[r]: /u\n\n[x][r] {}",
+        "[x][r]{.own} ".repeat(1024)
+    );
+    let result = carve::djot_to_carve(&source);
+    assert!(result.len() < source.len() * 3);
+    assert!(result.matches(&value).count() <= 2);
+    let small = "{.base title=\"a|b\"}\n[r]: /u\n\n| [x][r] | [x][r]{.own} |\n";
+    let expected = "| [x](/u){.base title=\"a\\|b\"} | [x](/u){title=\"a\\|b\" .own} |\n";
+    assert_eq!(
+        carve::to_html(&carve::djot_to_carve(small)),
+        carve::to_html(expected)
+    );
+}
+
+#[test]
 fn multiline_code_fallback_reports_plain_export_loss() {
     let result = carve::migrate_djot("a `b\n> c` d\n");
     let losses: Vec<_> = result

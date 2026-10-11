@@ -2010,16 +2010,30 @@ fn attributes(text: &str) -> Vec<(String, Vec<String>)> {
     let mut slots: HashMap<String, usize> = HashMap::new();
     let mut at = 0;
     while let Some((end, _, tokens)) = read_djot_attribute_tokens(text, at) {
+        let mut group: Vec<(String, Vec<String>)> = Vec::new();
+        let mut group_slots: HashMap<String, usize> = HashMap::new();
         for token in tokens {
-            if let Some(&slot) = slots.get(&token.key) {
-                let values = &mut result[slot].1;
-                if !token.append {
+            if let Some(&slot) = group_slots.get(&token.key) {
+                let values = &mut group[slot].1;
+                if !token.append || token.key == "class" && values.as_slice() == ["class=\"\""] {
                     values.clear();
                 }
                 values.push(token.source);
             } else {
-                slots.insert(token.key.clone(), result.len());
-                result.push((token.key, vec![token.source]));
+                group_slots.insert(token.key.clone(), group.len());
+                group.push((token.key, vec![token.source]));
+            }
+        }
+        for (key, values) in group {
+            if let Some(&slot) = slots.get(&key) {
+                let previous = &mut result[slot].1;
+                if key != "class" || previous.as_slice() == ["class=\"\""] {
+                    previous.clear();
+                }
+                previous.extend(values);
+            } else {
+                slots.insert(key.clone(), result.len());
+                result.push((key, values));
             }
         }
         at = end;
@@ -2035,6 +2049,14 @@ struct ReferenceUse<'a> {
     end: usize,
     text: &'a str,
     label: &'a str,
+}
+
+struct AttributedReferenceUse<'a> {
+    reference: ReferenceUse<'a>,
+    key: String,
+    own: Vec<(String, Vec<String>)>,
+    end: usize,
+    table: bool,
 }
 
 fn reference_mask(source: &str) -> String {
@@ -2144,6 +2166,79 @@ fn reference_uses<'a>(source: &'a str, mask: &str) -> Vec<ReferenceUse<'a>> {
     uses
 }
 
+fn next_reference_alias(occupied: &mut HashSet<String>, serial: &mut usize) -> String {
+    loop {
+        *serial += 1;
+        let alias = format!("carve-djot-reference-{serial}");
+        if occupied.insert(alias.clone()) {
+            return alias;
+        }
+    }
+}
+
+fn reference_attribute_text(attrs: &[(String, Vec<String>)], table: bool) -> String {
+    let mut text = attrs
+        .iter()
+        .flat_map(|(key, values)| {
+            if key != "class" {
+                return values.clone();
+            }
+            let classes = values
+                .iter()
+                .map(|value| {
+                    if let Some(value) = value.strip_prefix('.') {
+                        value.to_owned()
+                    } else {
+                        let value = value.strip_prefix("class=").unwrap();
+                        crate::parse::unescape_title(
+                            value
+                                .strip_prefix('"')
+                                .and_then(|value| value.strip_suffix('"'))
+                                .unwrap_or(value),
+                        )
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            vec![format!(
+                "class=\"{}\"",
+                classes.replace('\\', "\\\\").replace('"', "\\\"")
+            )]
+        })
+        .map(|value| {
+            if let Some((key, quoted)) = value.split_once("=\"") {
+                let atom = quoted.strip_suffix('"').unwrap_or(quoted);
+                if !atom.is_empty()
+                    && atom
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || "_-.".contains(ch))
+                {
+                    return format!("{key}={atom}");
+                }
+            }
+            value.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if table && text.contains('|') {
+        let mut escaped = String::with_capacity(text.len());
+        let mut slashes = 0;
+        for ch in text.chars() {
+            if ch == '|' && slashes % 2 == 0 {
+                escaped.push('\\');
+            }
+            escaped.push(ch);
+            slashes = if ch == '\\' { slashes + 1 } else { 0 };
+        }
+        text = escaped;
+    }
+    if text.is_empty() {
+        text
+    } else {
+        format!("{{{text}}}")
+    }
+}
+
 pub(super) fn references(source: &str) -> String {
     let definition = cached_regex!(r"(?m)^\[([^\[\]\n^][^\[\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
     let mask = reference_mask(source);
@@ -2152,6 +2247,7 @@ pub(super) fn references(source: &str) -> String {
     let mut definition_ranges: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
     let mut definition_keys = Vec::new();
     let mut indented_definitions = Vec::new();
+    let mut container_definitions = Vec::new();
     let mut line_offset = 0;
     let mut valid_definition_lines = None;
     for (line_number, line) in source.split_inclusive('\n').enumerate() {
@@ -2175,6 +2271,8 @@ pub(super) fn references(source: &str) -> String {
         }
         if content_start > 0 && line[..content_start].trim().is_empty() {
             indented_definitions.push((line_start, start, definition_end, definition_label(&c[1])));
+        } else if content_start > 0 {
+            container_definitions.push((start, definition_end, definition_label(&c[1])));
         }
         let mut previous_end = line_start;
         let mut attr_parts = Vec::new();
@@ -2230,45 +2328,137 @@ pub(super) fn references(source: &str) -> String {
     if definitions.is_empty() {
         return source.to_owned();
     }
-    let uses = reference_uses(source, &mask);
-    let mut label_cache = HashMap::new();
-    let mut aliases = HashMap::new();
-    if definitions
-        .keys()
-        .any(|key| key.contains('\\') || key.contains('|'))
-    {
-        let mut occupied: HashSet<String> = definitions.keys().cloned().collect();
-        for reference in &uses {
-            occupied.insert(cached_reference_label(
-                reference.text,
-                reference.label,
-                &mut label_cache,
-            ));
-        }
-        let alias_keys: Vec<_> = definition_keys
-            .into_iter()
-            .filter(|key| {
-                definitions.contains_key(key) && (key.contains('\\') || key.contains('|'))
-            })
-            .collect();
-        let mut serial = 0;
-        for key in alias_keys {
-            if aliases.contains_key(&key) {
-                continue;
+    let mut seen_keys = HashSet::new();
+    definition_keys.retain(|key| seen_keys.insert(key.clone()));
+    let references = reference_uses(source, &mask);
+    let mut table_uses = HashSet::new();
+    let mut line_start = 0;
+    let mut reference_index = 0;
+    for line in source.split_inclusive('\n') {
+        let line_end = line_start + line.len();
+        let table = line[djot_content_start(line)..].starts_with('|');
+        while let Some(reference) = references
+            .get(reference_index)
+            .filter(|reference| reference.start < line_end)
+        {
+            if table {
+                table_uses.insert(reference.start);
             }
-            let alias = loop {
-                serial += 1;
-                let candidate = format!("carve-djot-reference-{serial}");
-                if occupied.insert(candidate.clone()) {
-                    break candidate;
-                }
-            };
-            aliases.insert(key, alias);
+            reference_index += 1;
         }
+        line_start = line_end;
+    }
+    let mut label_cache = HashMap::new();
+    let mut use_counts = HashMap::<String, usize>::new();
+    let mut override_counts = HashMap::<String, HashMap<String, usize>>::new();
+    let uses: Vec<_> = references
+        .into_iter()
+        .map(|reference| {
+            let key = cached_reference_label(reference.text, reference.label, &mut label_cache);
+            let mut end = reference.end;
+            let mut own = Vec::new();
+            if definitions.get(&key).is_some_and(|(target, _, inherited)| {
+                !target.is_empty() && (*inherited || source[end..].starts_with('{'))
+            }) {
+                let mut parts = Vec::new();
+                while source[end..].starts_with('{') {
+                    let Some((length, part)) = read_djot_word_attributes(&source[end..], 0) else {
+                        break;
+                    };
+                    parts.push(part);
+                    end += length;
+                }
+                own = attributes(&parts.join(""));
+                *use_counts.entry(key.clone()).or_default() += 1;
+                let counts = override_counts.entry(key.clone()).or_default();
+                for (attribute, _) in &own {
+                    *counts.entry(attribute.clone()).or_default() += 1;
+                }
+            }
+            AttributedReferenceUse {
+                table: table_uses.contains(&reference.start),
+                reference,
+                key,
+                own,
+                end,
+            }
+        })
+        .collect();
+    for (key, (_, attrs, _)) in &mut definitions {
+        if let Some(counts) = override_counts.get(key) {
+            attrs.retain(|(attribute, _)| counts.get(attribute) != use_counts.get(key));
+        }
+    }
+    let mut occupied: HashSet<String> = definitions.keys().cloned().collect();
+    occupied.extend(uses.iter().map(|reference| reference.key.clone()));
+    let mut serial = 0;
+    let mut aliases = HashMap::new();
+    for key in &definition_keys {
+        if (key.contains('\\') || key.contains('|')) && !aliases.contains_key(key) {
+            aliases.insert(
+                key.clone(),
+                next_reference_alias(&mut occupied, &mut serial),
+            );
+        }
+    }
+    let mut moved_definitions = Vec::new();
+    let mut lifted_attributes = HashSet::new();
+    for (start, end, key) in container_definitions {
+        if definition_ranges
+            .get(&key)
+            .and_then(|ranges| ranges.last())
+            .copied()
+            != Some((start, end))
+        {
+            continue;
+        }
+        let (target, attrs, _) = &definitions[&key];
+        if target.is_empty() || attrs.is_empty() {
+            continue;
+        }
+        let alias = aliases
+            .entry(key.clone())
+            .or_insert_with(|| next_reference_alias(&mut occupied, &mut serial));
+        moved_definitions.push(format!(
+            "[{alias}]: {target} {}",
+            reference_attribute_text(attrs, false)
+        ));
+        lifted_attributes.insert(key);
+    }
+    let mut class_aliases = HashMap::new();
+    for key in &definition_keys {
+        if class_aliases.contains_key(key) {
+            continue;
+        }
+        let (target, attrs, _) = &definitions[key];
+        if target.is_empty()
+            || !attrs.iter().any(|(attribute, _)| attribute == "class")
+            || !override_counts
+                .get(key)
+                .is_some_and(|counts| counts.contains_key("class"))
+        {
+            continue;
+        }
+        let alias = next_reference_alias(&mut occupied, &mut serial);
+        let attrs: Vec<_> = attrs
+            .iter()
+            .filter(|(attribute, _)| attribute != "class")
+            .cloned()
+            .collect();
+        let text = reference_attribute_text(&attrs, false);
+        moved_definitions.push(format!(
+            "[{alias}]: {target}{}",
+            if text.is_empty() {
+                text
+            } else {
+                format!(" {text}")
+            }
+        ));
+        class_aliases.insert(key.clone(), alias);
     }
     let trim_definition_space = !removed.is_empty();
     let mut edits = removed;
-    let mut moved_definitions = Vec::new();
+    let mut moved_keys = HashSet::new();
     for (line_start, start, end, key) in indented_definitions {
         if definition_ranges
             .get(&key)
@@ -2283,7 +2473,22 @@ pub(super) fn references(source: &str) -> String {
             .get(&key)
             .map(String::as_str)
             .unwrap_or(&source[start + 1..start + close]);
-        moved_definitions.push(format!("[{name}{}", &source[start + close..end]));
+        let (target, attrs, _) = &definitions[&key];
+        let text = if target.is_empty() {
+            String::new()
+        } else {
+            reference_attribute_text(attrs, false)
+        };
+        moved_definitions.push(format!(
+            "[{name}{}{}",
+            &source[start + close..end],
+            if text.is_empty() {
+                text
+            } else {
+                format!(" {text}")
+            }
+        ));
+        moved_keys.insert(key.clone());
         edits.push((
             line_start,
             end,
@@ -2296,75 +2501,57 @@ pub(super) fn references(source: &str) -> String {
         }
     }
     for (key, alias) in &aliases {
+        if lifted_attributes.contains(key) {
+            continue;
+        }
         for &(start, end) in definition_ranges.get(key).into_iter().flatten() {
             if let Some(close) = source[start..end].find("]:") {
                 edits.push((start + 1, start + close, alias.clone()));
             }
         }
     }
-    for reference in uses {
+    for (key, (target, attrs, _)) in &definitions {
+        if target.is_empty()
+            || attrs.is_empty()
+            || moved_keys.contains(key)
+            || lifted_attributes.contains(key)
+        {
+            continue;
+        }
+        if let Some(&(_, end)) = definition_ranges.get(key).and_then(|ranges| ranges.last()) {
+            edits.push((
+                end,
+                end,
+                format!(" {}", reference_attribute_text(attrs, false)),
+            ));
+        }
+    }
+    for attributed in uses {
+        let AttributedReferenceUse {
+            reference,
+            key,
+            own,
+            end,
+            table,
+        } = attributed;
         let start = reference.start;
-        let mut end = reference.end;
-        let key = cached_reference_label(reference.text, reference.label, &mut label_cache);
-        let Some((target, inherited, has_attribute_lines)) = definitions.get(&key) else {
+        let Some((target, _, has_attribute_lines)) = definitions.get(&key) else {
             continue;
         };
         if target.is_empty() {
             continue;
         }
-        let replacement = if *has_attribute_lines {
-            let mut own_parts = Vec::new();
-            while source[end..].starts_with('{') {
-                let Some((length, own)) = read_djot_word_attributes(&source[end..], 0) else {
-                    break;
-                };
-                own_parts.push(own);
-                end += length;
-            }
-            let own_attrs = attributes(&own_parts.join(""));
-            let mut attrs: Vec<_> = inherited.iter().collect();
-            let mut slots: HashMap<&str, usize> = attrs
-                .iter()
-                .enumerate()
-                .map(|(slot, (key, _))| (key.as_str(), slot))
-                .collect();
-            for own in &own_attrs {
-                if let Some(&slot) = slots.get(own.0.as_str()) {
-                    attrs[slot] = own;
-                } else {
-                    slots.insert(own.0.as_str(), attrs.len());
-                    attrs.push(own);
-                }
-            }
+        let replacement = if *has_attribute_lines || end > reference.end {
+            let name = class_aliases
+                .get(&key)
+                .filter(|_| own.iter().any(|(attribute, _)| attribute == "class"))
+                .or_else(|| aliases.get(&key))
+                .map(String::as_str)
+                .unwrap_or(&key);
             format!(
-                "[{}][{}]{}",
+                "[{}][{name}]{}",
                 reference.text,
-                aliases.get(&key).map(String::as_str).unwrap_or(&key),
-                if attrs.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        "{{{}}}",
-                        attrs
-                            .into_iter()
-                            .flat_map(|(_, values)| values.iter())
-                            .map(|value| {
-                                if let Some((key, quoted)) = value.split_once("=\"") {
-                                    let atom = quoted.strip_suffix('"').unwrap_or(quoted);
-                                    if !atom.is_empty()
-                                        && atom.chars().all(|ch| {
-                                            ch.is_ascii_alphanumeric() || "_-.".contains(ch)
-                                        })
-                                    {
-                                        return format!("{key}={atom}");
-                                    }
-                                }
-                                value.to_owned()
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    )
-                }
+                reference_attribute_text(&own, table)
             )
         } else if let Some(alias) = aliases.get(&key) {
             format!("[{}][{alias}]", reference.text)
@@ -3092,14 +3279,19 @@ mod tests {
             assert_eq!(super::blocks(source), expected, "{source:?}");
         }
         let classes = migrate_djot("{.a .b}\n[ref]: /url\n\n[ref][]\n");
-        assert!(classes.value.contains("{.a .b}"));
+        assert_eq!(
+            crate::to_html(&classes.value),
+            "<p><a href=\"/url\" class=\"a b\">ref</a></p>"
+        );
+        assert_eq!(classes.value.matches("/url").count(), 1);
         let image = migrate_djot("{title=t}\n[ref]: /url\n\n[![alt](i.png)][ref]\n");
         assert_eq!(
             crate::to_html(&image.value),
             "<p><a href=\"/url\" title=\"t\"><img src=\"i.png\" alt=\"alt\"></a></p>"
         );
         assert_eq!(image.value.matches("/url").count(), 1);
-        assert!(image.value.contains("[![alt](i.png)][ref]{title=\"t\"}"));
+        assert!(image.value.contains("[![alt](i.png)][ref]"));
+        assert!(image.value.contains("[ref]: /url {title=t}"));
         assert_eq!(
             crate::to_html(&migrate_djot("<https://example.com/a{}b>\n").value),
             "<p><a href=\"https://example.com/a{}b\">https://example.com/a{}b</a></p>"
@@ -3183,14 +3375,14 @@ mod tests {
         for (base, own, expected) in [
             ("{.a % .bogus #bogus title=bogus %}", "", "<p><a href=\"/u\" class=\"a\">x</a></p>"),
             ("{.a title=\"a .bogus #bogus % comment %\" key=\"a b\"}", "", "<p><a href=\"/u\" class=\"a\" title=\"a .bogus #bogus % comment %\" key=\"a b\">x</a></p>"),
-            ("{.a title=base key=\"a b\"}", "{.b % .bogus key=bogus % title=\"own .c #d % value %\"}", "<p><a href=\"/u\" class=\"b\" title=\"own .c #d % value %\" key=\"a b\">x</a></p>"),
+            ("{.a title=base key=\"a b\"}", "{.b % .bogus key=bogus % title=\"own .c #d % value %\"}", "<p><a href=\"/u\" key=\"a b\" class=\"b\" title=\"own .c #d % value %\">x</a></p>"),
             ("{.a title=\"a \\\"quoted\\\" .b #c %\"}", "", "<p><a href=\"/u\" class=\"a\" title=\"a &quot;quoted&quot; .b #c %\">x</a></p>"),
             ("{.a class=b .c}", "", "<p><a href=\"/u\" class=\"b c\">x</a></p>"),
             ("{% note %}", "", "<p><a href=\"/u\">x</a></p>"),
             ("{}", "", "<p><a href=\"/u\">x</a></p>"),
             ("{.a}\n{.b}", "", "<p><a href=\"/u\" class=\"a b\">x</a></p>"),
             ("{key=a}\n{key=b}", "", "<p><a href=\"/u\" key=\"b\">x</a></p>"),
-            ("{.a title=base}\n{.b key=value}", "{.c}{.d title=own}", "<p><a href=\"/u\" class=\"c d\" title=\"own\" key=\"value\">x</a></p>"),
+            ("{.a title=base}\n{.b key=value}", "{.c}{.d title=own}", "<p><a href=\"/u\" key=\"value\" class=\"c d\" title=\"own\">x</a></p>"),
         ] {
             let source = format!("[x][]{own}\n\n{base}\n[x]: /u\n");
             assert_eq!(crate::to_html(&migrate_djot(&source).value), expected, "{source:?}");
