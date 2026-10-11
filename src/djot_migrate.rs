@@ -1472,9 +1472,11 @@ fn protect_attributed_words(
 
 fn fold_heading_continuations(source: &str) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
-    static BLOCK: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let block = BLOCK.get_or_init(|| regex::Regex::new(
-        r"^(?:[#>|{]|[-*+][ \t]|[0-9]+[.)][ \t]|:[ \t]|:{2,}|\([0-9a-zA-Z]+\)[ \t]|[`~]{3,}|\^[ \t]|\[[^\]\n]*\]:|(?:\*[ \t]*){3,}$|(?:-[ \t]*){3,}$)").unwrap());
+    let block = cached_regex!(r"^(?:[#>|{]|[-*+][ \t]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]|:[ \t]|:{2,}|\([0-9a-zA-Z]+\)[ \t]|[`~]{3,}|\^[ \t]|\[[^\]\n]*\]:|(?:\*[ \t]*){3,}$|(?:-[ \t]*){3,}$)").unwrap();
+    let container = cached_regex!(r"^([ \t]*)(>(?:[ \t]|$)|\[\^[^\]\n]+\]:[ \t]*|[-*+][ \t]+|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]+|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)[ \t]+)").unwrap();
+    let task = cached_regex!(r"^\[[ xX]\][ \t]+").unwrap();
+    let heading_re = cached_regex!(r"^([ \t]*)(#{1,6})(?:[ \t]+\S|[ \t]*$)").unwrap();
+    let quote_prefix = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
     let masked = mask_code_and_destinations(source);
     let masks: Vec<_> = masked.split('\n').collect();
     let lines: Vec<_> = source.split('\n').collect();
@@ -1482,59 +1484,94 @@ fn fold_heading_continuations(source: &str) -> String {
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
-        let level = line.bytes().take_while(|byte| *byte == b'#').count();
-        if (i > 0 && !lines[i - 1].trim().is_empty())
-            || !(1..=6).contains(&level)
-            || line
-                .as_bytes()
-                .get(level)
-                .is_some_and(|b| !matches!(b, b' ' | b'\t'))
-            || masks[i].as_bytes().first() != Some(&b'#')
-        {
-            result.push(line.to_string());
+        if !line.contains('#') {
+            result.push(line.to_owned());
             i += 1;
             continue;
         }
-        let prefix = format!("{} ", "#".repeat(level));
-        let mut folded = format!("{} {}", "#".repeat(level), line[level..].trim_start());
-        i += 1;
-        while i < lines.len() {
-            if folded
-                .bytes()
-                .rev()
-                .take_while(|byte| *byte == b'\\')
-                .count()
-                % 2
-                == 1
-            {
+        let (mut at, mut depth, mut column) = (0, 0, 0);
+        while let Some(token) = container.captures(&line[at..]) {
+            at += token.get(0).unwrap().len();
+            let marker = &token[2];
+            if marker.starts_with('>') {
+                depth += 1;
+                column = 0;
+            } else if marker.starts_with("[^") {
+                column = token[1].len() + 2;
+            } else {
+                column += token.get(0).unwrap().len();
+                if marker.starts_with(['-', '*', '+']) {
+                    if let Some(check) = task.find(&line[at..]) {
+                        at += check.len();
+                    }
+                }
+            }
+        }
+        let Some(heading) = heading_re.captures(&line[at..]) else {
+            result.push(line.to_owned());
+            i += 1;
+            continue;
+        };
+        if masks[i].as_bytes().get(at + heading[1].len()) != Some(&b'#') {
+            result.push(line.to_owned());
+            i += 1;
+            continue;
+        }
+        let first_line = if depth > 0 && column == 0 {
+            format!("{}{}", &line[..at], &line[at + heading[1].len()..])
+        } else {
+            column += heading[1].len();
+            line.to_owned()
+        };
+        let marker = &heading[2];
+        let mut parts = vec![first_line.trim_end_matches([' ', '\t'])];
+        let mut tail = line;
+        while i + 1 < lines.len() {
+            if tail.bytes().rev().take_while(|b| *b == b'\\').count() % 2 == 1 {
                 break;
             }
-            let next = lines[i].trim_start_matches([' ', '\t']);
+            let candidate = lines[i + 1];
+            let prefix = quote_prefix.find(candidate).unwrap().as_str();
+            if prefix.bytes().filter(|b| *b == b'>').count() != depth {
+                break;
+            }
+            let remainder = &candidate[prefix.len()..];
+            let indent = remainder
+                .bytes()
+                .take_while(|b| matches!(b, b' ' | b'\t'))
+                .count();
+            if indent < column {
+                break;
+            }
+            let next = &remainder[indent..];
             if rejected_comment_starts_block(next) {
                 break;
             }
-            let part = if let Some(text) = next.strip_prefix(&prefix) {
-                if text.trim().is_empty() {
+            let part = if let Some(rest) = next
+                .strip_prefix(marker)
+                .filter(|rest| rest.starts_with([' ', '\t']))
+            {
+                let rest = rest.trim_start_matches([' ', '\t']);
+                if rest.trim_matches([' ', '\t', '\r', '\n']).is_empty() {
                     break;
                 }
-                text.trim_start_matches(' ')
+                rest
             } else {
-                if next.trim().is_empty() || block.is_match(next) {
+                if next.trim_matches([' ', '\t', '\r', '\n']).is_empty() || block.is_match(next) {
                     break;
                 }
                 next
             };
-            if !folded.ends_with(' ') {
-                folded.push(' ');
-            }
-            folded.push_str(part);
+            parts.push(part.trim_end_matches([' ', '\t']));
+            tail = part;
             i += 1;
         }
-        result.push(if folded[level..].trim().is_empty() {
-            line.to_owned()
+        result.push(if parts.len() == 1 {
+            first_line
         } else {
-            folded
+            parts.join(" ")
         });
+        i += 1;
     }
     result.join("\n")
 }
@@ -7596,12 +7633,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                 .max()
                 .unwrap_or(1);
             let fence = "`".repeat(fence_width);
-            let pad = if payload.starts_with('`')
-                || payload.ends_with('`')
-                || (payload.starts_with(' ')
-                    && payload.ends_with(' ')
-                    && !payload.trim().is_empty())
-            {
+            let pad = if payload.starts_with('`') || payload.ends_with('`') {
                 " "
             } else {
                 ""

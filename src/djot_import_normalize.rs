@@ -129,7 +129,7 @@ fn quoted_list_boundaries<'a>(
     let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
     let has_definition_syntax = cached_regex!(r"(?:^|\n)(?:[ \t]*>(?:[ \t]|$))*[ \t]*:[ \t]")
         .unwrap()
-        .is_match(source);
+        .is_match(mask);
     let mut insertions = Vec::new();
     let mut div_closers = HashMap::new();
     if source.contains(":::") {
