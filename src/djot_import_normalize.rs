@@ -1191,7 +1191,17 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
     let mut in_heading = false;
     let mut in_quote = false;
     let mut quote_paragraph_depth = None;
+    let track_quote_owners = source.contains("\0DJOTINVALIDATTR\0");
+    let mut owned_quote_depths = HashSet::new();
     for (n, raw) in lines.iter().enumerate() {
+        if track_quote_owners && n > 0 {
+            let (depth, body) = quoted(lines[n - 1]);
+            if body.trim().is_empty() {
+                owned_quote_depths.clear();
+            } else if marker.is_match(body.trim_start()) || heading.is_match(body.trim_start()) {
+                owned_quote_depths.insert(depth);
+            }
+        }
         if slot_prefix.is_some_and(|prefix| raw.starts_with(prefix)) {
             paragraph = false;
             previous_blank = true;
@@ -1348,16 +1358,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
             let (depth, body) = quoted(raw);
             let block_body = body.trim_start();
             if rejected_comment_starts_block(block_body) {
-                let owned = lines[..n]
-                    .iter()
-                    .rev()
-                    .take_while(|line| !quoted(line).1.trim().is_empty())
-                    .any(|line| {
-                        let (parent_depth, parent_body) = quoted(line);
-                        parent_depth == depth
-                            && (marker.is_match(parent_body.trim_start())
-                                || heading.is_match(parent_body.trim_start()))
-                    });
+                let owned = owned_quote_depths.contains(&depth);
                 if owned || depth < quote_paragraph_depth.unwrap_or(depth) {
                     result.push(raw[..raw.len() - body.len()].trim_end().to_owned());
                     quote_paragraph_depth = None;
