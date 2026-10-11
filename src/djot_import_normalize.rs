@@ -51,14 +51,16 @@ fn quoted_list_boundaries<'a>(
     if !source.contains('>') || !source.contains('\n') {
         return std::borrow::Cow::Borrowed(source);
     }
-    let quote = cached_regex!(r"^(?:[ \t]*>[ ]?)*").unwrap();
+    let quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
     let marker = cached_regex!(r"^((?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+(?:\[[ xX]\][ \t]+)?)\S").unwrap();
-    let embedded = cached_regex!(r"^(?:>[ \t]*)+").unwrap();
+    let embedded = cached_regex!(r"^(?:>(?:[ \t]+|$))+").unwrap();
+    let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
     let mut insertions = Vec::new();
     let mut offset = 0;
     let mut depth = 0;
     let mut boundary = String::new();
     let mut paragraph = false;
+    let mut lists: Vec<(usize, usize)> = Vec::new();
     for ((line, masked), fenced) in source
         .split('\n')
         .zip(mask.split('\n'))
@@ -84,29 +86,66 @@ fn quoted_list_boundaries<'a>(
             .captures(visible)
             .filter(|_| !thematic(visible) && (!paragraph || depth > 0))
         {
+            while lists.last().is_some_and(|&(owner_depth, column)| {
+                owner_depth > quote_depth || owner_depth == quote_depth && column > indent
+            }) {
+                lists.pop();
+            }
             if quote_depth < depth {
-                insertions.push((line_offset, boundary.clone()));
+                if paragraph
+                    && !lists.last().is_some_and(|&(owner_depth, column)| {
+                        owner_depth == quote_depth && indent <= column
+                    })
+                {
+                    insertions.push((line_offset, boundary.clone()));
+                }
                 depth = quote_depth;
+                boundary = prefix.trim_end().to_owned();
+            }
+            if lists.last() != Some(&(quote_depth, indent)) {
+                lists.push((quote_depth, indent));
             }
             let body_start = item.get(1).unwrap().end();
-            if let Some(nested) = embedded.find(&text[body_start..]) {
-                depth = quote_depth + nested.as_str().bytes().filter(|&b| b == b'>').count();
+            let mut quote_body = &text[body_start..];
+            let mut nested_depth = 0;
+            let mut nested_prefix = String::new();
+            while let Some(nested) = embedded.find(quote_body) {
+                nested_depth += nested.as_str().bytes().filter(|&b| b == b'>').count();
+                nested_prefix.push_str(nested.as_str());
+                quote_body = &quote_body[nested.end()..];
+                let Some(child) = marker.captures(quote_body) else {
+                    break;
+                };
+                let width = child.get(1).unwrap().end();
+                if !embedded.is_match(&quote_body[width..]) {
+                    break;
+                }
+                nested_prefix.push_str(&" ".repeat(width));
+                quote_body = &quote_body[width..];
+            }
+            if nested_depth > 0 {
+                depth = quote_depth + nested_depth;
                 boundary = format!(
                     "{prefix}{}{}",
                     " ".repeat(indent + body_start),
-                    nested.as_str().trim_end()
+                    nested_prefix.trim_end()
                 );
             } else if quote_depth > 0 {
                 depth = quote_depth;
                 boundary = prefix.trim_end().to_owned();
             }
-            paragraph = true;
+            paragraph = !(thematic(quote_body)
+                || quote_body.starts_with(":::")
+                || heading.is_match(quote_body));
         } else if quote_depth > 0 && (!paragraph || depth > 0) {
-            if quote_depth >= depth || text.is_empty() {
+            if quote_depth >= depth || text.is_empty() || !paragraph {
                 depth = quote_depth;
                 boundary = prefix.trim_end().to_owned();
             }
-            paragraph = !text.is_empty();
+            paragraph = !(text.is_empty()
+                || thematic(visible)
+                || visible.starts_with(":::")
+                || heading.is_match(visible));
         } else if visible.starts_with('#')
             || visible.starts_with('|')
             || visible.starts_with(":::")
@@ -115,6 +154,9 @@ fn quoted_list_boundaries<'a>(
             depth = quote_depth;
             paragraph = false;
         } else {
+            if !paragraph {
+                depth = quote_depth;
+            }
             paragraph = true;
         }
     }
