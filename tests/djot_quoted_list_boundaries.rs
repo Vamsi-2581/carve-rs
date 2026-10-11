@@ -110,3 +110,49 @@ fn deep_inline_lists_with_lazy_quoted_text_have_bounded_output() {
         assert_eq!(carve::to_html(&result).matches("lazy").count(), 1024);
     }
 }
+
+#[test]
+fn escaped_reference_names_keep_long_destinations_shared() {
+    let target = format!("/{}", "x".repeat(32768));
+    for shape in ["escaped", "styled", "attributes"] {
+        let source = if shape == "escaped" {
+            format!("[a\\*b]: {target}\n\n{}", "[link][a\\\\*b] ".repeat(1024))
+        } else {
+            format!(
+                "{}[link]: {target}\n\n{}",
+                if shape == "attributes" {
+                    "{.target}\n"
+                } else {
+                    ""
+                },
+                "[_link_][] ".repeat(1024)
+            )
+        };
+        let result = carve::migrate_djot(&source);
+        assert_eq!(result.value.matches(&target).count(), 1, "{shape}");
+        assert!(result.value.len() < source.len() * 2, "{shape}");
+        assert!(
+            !result
+                .report
+                .diagnostics
+                .iter()
+                .any(|row| row.message.contains("unresolved Djot reference")),
+            "{shape}"
+        );
+    }
+}
+
+#[test]
+fn nonbreaking_label_whitespace_does_not_resolve_space_definition() {
+    let result = carve::migrate_djot("[a b]: /x\n\n[a\\ b][]\n");
+    assert!(!carve::to_html(&result.value).contains("href=\"/x\""));
+    assert_eq!(
+        result
+            .report
+            .diagnostics
+            .iter()
+            .filter(|row| row.message.contains("unresolved Djot reference"))
+            .count(),
+        1
+    );
+}

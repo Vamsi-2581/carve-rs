@@ -1915,27 +1915,36 @@ pub(super) fn inline(source: &str) -> String {
     output
 }
 
+fn definition_label(text: &str) -> String {
+    text.trim()
+        .split([' ', '\t', '\r', '\n'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn label(text: &str) -> String {
-    let decoded = cached_regex!(r"\\([!-/:-@\[-`{-~])")
+    let decoded = cached_regex!(r"\\([ \t!-/:-@\[-`{-~])")
         .unwrap()
         .replace_all(text, "$1");
-    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
+    definition_label(&decoded)
 }
 
 fn reference_label(text: &str, explicit: &str) -> String {
     if !explicit.is_empty() {
         return label(explicit);
     }
-    if !text.bytes().any(|b| b"_*`~^".contains(&b)) {
+    if !text.bytes().any(|b| b"_*`~^\\".contains(&b)) {
         return label(text);
     }
     let converted = emphasis::convert(text, &emphasis_mask(text), str::to_owned);
-    label(&crate::to_plain_text_with_options(
-        &converted,
-        &crate::Options {
-            smart_typography: crate::SmartTypographyMode::Source,
-            ..Default::default()
-        },
+    let options = crate::Options {
+        smart_typography: crate::SmartTypographyMode::Source,
+        ..Default::default()
+    };
+    definition_label(&crate::render::plain_inlines_typography(
+        &crate::parse::parse_inline_with_options(&converted, &options),
+        crate::SmartTypographyMode::Source,
     ))
 }
 
@@ -2013,6 +2022,23 @@ fn reference_mask(source: &str) -> String {
 
 fn reference_uses<'a>(source: &'a str, mask: &str) -> Vec<ReferenceUse<'a>> {
     let bytes = source.as_bytes();
+    let mut table_pipes = HashSet::new();
+    if source.contains('|') {
+        let rows = djot_table_rows(source, mask);
+        let mut offset = 0;
+        for (n, line) in source.split('\n').enumerate() {
+            if rows[n] {
+                let mut escaped = false;
+                for (at, byte) in line.bytes().enumerate() {
+                    if byte == b'|' && !escaped {
+                        table_pipes.insert(offset + at);
+                    }
+                    escaped = byte == b'\\' && !escaped;
+                }
+            }
+            offset += line.len() + 1;
+        }
+    }
     let mut stack = Vec::new();
     let mut uses = Vec::new();
     let mut i = 0;
@@ -2020,6 +2046,9 @@ fn reference_uses<'a>(source: &'a str, mask: &str) -> Vec<ReferenceUse<'a>> {
         if bytes[i] == b'\\' {
             i += 2;
             continue;
+        }
+        if table_pipes.contains(&i) {
+            stack.clear();
         }
         if mask.as_bytes()[i] != bytes[i] {
             i += 1;
@@ -2039,6 +2068,9 @@ fn reference_uses<'a>(source: &'a str, mask: &str) -> Vec<ReferenceUse<'a>> {
                         && mask.as_bytes()[end] != b']'
                         && mask.as_bytes()[end] != b'['
                     {
+                        if table_pipes.contains(&end) {
+                            break;
+                        }
                         if bytes[end] == b'\n' && blank_line_follows(bytes, end) {
                             break;
                         }
@@ -2065,69 +2097,144 @@ fn reference_uses<'a>(source: &'a str, mask: &str) -> Vec<ReferenceUse<'a>> {
 }
 
 pub(super) fn references(source: &str) -> String {
-    let definition = cached_regex!(r"(?m)^\[([^\]\n^]+)\]:[ \t]*(\S*)[ \t]*$").unwrap();
+    let definition = cached_regex!(r"(?m)^\[([^\[\]\n^][^\[\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
     let mask = reference_mask(source);
     let mut definitions = HashMap::new();
     let mut removed = Vec::new();
     let mut definition_ranges: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
-    for c in definition.captures_iter(source) {
-        let start = c.get(0).unwrap().start();
-        if mask.as_bytes()[start] != b'[' || c[1].contains('|') {
+    let mut definition_keys = Vec::new();
+    let mut indented_definitions = Vec::new();
+    let mut line_offset = 0;
+    let mut valid_definition_lines = None;
+    for (line_number, line) in source.split_inclusive('\n').enumerate() {
+        let line_start = line_offset;
+        line_offset += line.len();
+        let content_start = djot_content_start(line);
+        let Some(c) = definition.captures(line[content_start..].trim_end_matches('\n')) else {
+            continue;
+        };
+        if content_start > 0
+            && !valid_definition_lines
+                .get_or_insert_with(|| reference_definitions(source, &mask).1)
+                .contains(&line_number)
+        {
             continue;
         }
-        let mut previous_end = start;
-        let mut attr_start = start;
+        let start = line_start + content_start;
+        let definition_end = start + c.get(0).unwrap().end();
+        if mask.as_bytes()[start] != b'[' {
+            continue;
+        }
+        if content_start > 0 && line[..content_start].trim().is_empty() {
+            indented_definitions.push((line_start, start, definition_end, definition_label(&c[1])));
+        }
+        let mut previous_end = line_start;
         let mut attr_parts = Vec::new();
         while let Some(previous) = source[..previous_end].strip_suffix('\n') {
             let previous_start = previous.rfind('\n').map_or(0, |at| at + 1);
             let previous_line = &previous[previous_start..];
-            if !previous_line.starts_with('{')
-                || read_djot_word_attributes(previous_line, 0)
-                    .map_or(true, |(end, _)| end != previous_line.len())
+            let attribute_start = djot_content_start(previous_line);
+            let attribute_content = &previous_line[attribute_start..];
+            if !attribute_content.starts_with('{')
+                || read_djot_word_attributes(attribute_content, 0)
+                    .map_or(true, |(end, _)| end != attribute_content.len())
             {
                 break;
             }
-            attr_parts.push(previous_line);
-            attr_start = previous_start;
+            attr_parts.push(attribute_content);
+            removed.push((
+                previous_start + attribute_start,
+                previous_start + previous_line.len() + usize::from(attribute_start == 0),
+                if attribute_start > 0 {
+                    "{%%}".to_owned()
+                } else {
+                    String::new()
+                },
+            ));
             previous_end = previous_start;
         }
         attr_parts.reverse();
         let attr_text = attr_parts.join("");
-        let key = label(&c[1]);
+        let key = definition_label(&c[1]);
+        definition_keys.push(key.clone());
         definition_ranges
             .entry(key.clone())
             .or_default()
-            .push((start, c.get(0).unwrap().end()));
+            .push((start, definition_end));
         definitions.insert(
             key,
-            (c[2].to_owned(), attributes(&attr_text), attr_start != start),
+            (
+                c[2].to_owned(),
+                attributes(&attr_text),
+                !attr_parts.is_empty(),
+            ),
         );
-        if attr_start != start {
-            removed.push((attr_start, c.get(0).unwrap().end()));
-        }
     }
     if definitions.is_empty() {
         return source.to_owned();
     }
     let uses = reference_uses(source, &mask);
     let mut label_cache = HashMap::new();
-    let inline_keys: HashSet<_> = uses
-        .iter()
-        .filter(|reference| {
-            reference.label.is_empty() && reference.text.bytes().any(|b| b"_*`~^".contains(&b))
-        })
-        .map(|reference| cached_reference_label(reference.text, reference.label, &mut label_cache))
-        .collect();
-    let mut trim_definition_space = !removed.is_empty();
-    let mut removed_keys = HashSet::new();
-    let mut edits = removed
-        .into_iter()
-        .map(|(start, end)| (start, end, String::new()))
-        .collect::<Vec<_>>();
+    let mut aliases = HashMap::new();
+    if definitions
+        .keys()
+        .any(|key| key.contains('\\') || key.contains('|'))
+    {
+        let mut occupied: HashSet<String> = definitions.keys().cloned().collect();
+        for reference in &uses {
+            occupied.insert(cached_reference_label(
+                reference.text,
+                reference.label,
+                &mut label_cache,
+            ));
+        }
+        let alias_keys: Vec<_> = definition_keys
+            .into_iter()
+            .filter(|key| {
+                definitions.contains_key(key) && (key.contains('\\') || key.contains('|'))
+            })
+            .collect();
+        let mut serial = 0;
+        for key in alias_keys {
+            if aliases.contains_key(&key) {
+                continue;
+            }
+            let alias = loop {
+                serial += 1;
+                let candidate = format!("carve-djot-reference-{serial}");
+                if occupied.insert(candidate.clone()) {
+                    break candidate;
+                }
+            };
+            aliases.insert(key, alias);
+        }
+    }
+    let trim_definition_space = !removed.is_empty();
+    let mut edits = removed;
+    let mut moved_definitions = Vec::new();
+    for (line_start, start, end, key) in indented_definitions {
+        let close = source[start..end].find("]:").unwrap();
+        let name = aliases
+            .get(&key)
+            .map(String::as_str)
+            .unwrap_or(&source[start + 1..start + close]);
+        moved_definitions.push(format!("[{name}{}", &source[start + close..end]));
+        edits.push((
+            line_start,
+            end,
+            format!("{}{{%%}}", &source[line_start..start]),
+        ));
+    }
+    for (key, alias) in &aliases {
+        for &(start, end) in definition_ranges.get(key).into_iter().flatten() {
+            if let Some(close) = source[start..end].find("]:") {
+                edits.push((start + 1, start + close, alias.clone()));
+            }
+        }
+    }
     for reference in uses {
         let start = reference.start;
         let mut end = reference.end;
-        let formatted = reference.text.bytes().any(|b| b"_*`~^".contains(&b));
         let key = cached_reference_label(reference.text, reference.label, &mut label_cache);
         let Some((target, inherited, has_attribute_lines)) = definitions.get(&key) else {
             continue;
@@ -2135,7 +2242,7 @@ pub(super) fn references(source: &str) -> String {
         if target.is_empty() {
             continue;
         }
-        let replacement = if *has_attribute_lines || inline_keys.contains(&key) {
+        let replacement = if *has_attribute_lines {
             let mut own_parts = Vec::new();
             while source[end..].starts_with('{') {
                 let Some((length, own)) = read_djot_word_attributes(&source[end..], 0) else {
@@ -2160,8 +2267,9 @@ pub(super) fn references(source: &str) -> String {
                 }
             }
             format!(
-                "[{}]({target}){}",
+                "[{}][{}]{}",
                 reference.text,
+                aliases.get(&key).map(String::as_str).unwrap_or(&key),
                 if attrs.is_empty() {
                     String::new()
                 } else {
@@ -2188,22 +2296,15 @@ pub(super) fn references(source: &str) -> String {
                     )
                 }
             )
-        } else if reference.label.contains('\n') {
+        } else if let Some(alias) = aliases.get(&key) {
+            format!("[{}][{alias}]", reference.text)
+        } else if (!reference.label.is_empty() && reference.label != key)
+            || (reference.label.is_empty() && definition_label(reference.text) != key)
+        {
             format!("[{}][{key}]", reference.text)
         } else {
             continue;
         };
-        if !*has_attribute_lines
-            && reference.label.is_empty()
-            && formatted
-            && !removed_keys.contains(&key)
-        {
-            removed_keys.insert(key.clone());
-            for &(start, end) in definition_ranges.get(&key).into_iter().flatten() {
-                edits.push((start, end, String::new()));
-                trim_definition_space = true;
-            }
-        }
         edits.push((start, end, replacement));
     }
     edits.sort_by_key(|edit| edit.0);
@@ -2227,11 +2328,14 @@ pub(super) fn references(source: &str) -> String {
             out.push('\n');
         }
     }
+    if !moved_definitions.is_empty() {
+        out = format!("{}\n\n{out}", moved_definitions.join("\n"));
+    }
     out
 }
 
-fn loss_references(source: &str, mask: &str) -> HashMap<String, String> {
-    let definition = cached_regex!(r"^\[([^\[\]\n^]+)\]:[ \t]*(\S*)[ \t]*$").unwrap();
+fn reference_definitions(source: &str, mask: &str) -> (HashMap<String, String>, HashSet<usize>) {
+    let definition = cached_regex!(r"^\[([^\[\]\n^][^\[\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
     let item = cached_regex!(r"(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\))[ \t]+").unwrap();
     let block =
         cached_regex!(r"^(?:#{1,6}(?: |$)|:{3,}|[`~]{3,}|\{|\[[^\]]+\]:|(?:[*-][ \t]*){3,}$)")
@@ -2272,7 +2376,7 @@ fn loss_references(source: &str, mask: &str) -> HashMap<String, String> {
                 destination.push_str(&line[next_at..]);
                 definition_lines.insert(next);
             }
-            definitions.insert(label(&caps[1]), destination);
+            definitions.insert(definition_label(&caps[1]), destination);
             definition_lines.insert(n);
         }
         if let Some(heading) = heading
@@ -2313,7 +2417,11 @@ fn loss_references(source: &str, mask: &str) -> HashMap<String, String> {
                 .or_insert_with(|| "#heading".to_owned());
         }
     }
-    definitions
+    (definitions, definition_lines)
+}
+
+fn loss_references(source: &str, mask: &str) -> HashMap<String, String> {
+    reference_definitions(source, mask).0
 }
 
 fn empty_description(lines: &[&str], masks: &[&str], n: usize) -> bool {
