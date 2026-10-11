@@ -141,7 +141,7 @@ fn quoted_list_boundaries<'a>(
     let mut boundary = String::new();
     let mut paragraph = false;
     let mut previous_blank = true;
-    let mut lists: Vec<(usize, usize, usize)> = Vec::new();
+    let mut lists: Vec<(usize, usize, usize, usize, usize, usize)> = Vec::new();
     for (row_index, ((line, masked), fenced)) in source
         .split('\n')
         .zip(mask.split('\n'))
@@ -156,6 +156,7 @@ fn quoted_list_boundaries<'a>(
         }
         let line_offset = offset;
         let mut item_edit = None;
+        let mut item_target = None;
         offset += line.len() + 1;
         if fenced != line {
             depth = 0;
@@ -166,11 +167,13 @@ fn quoted_list_boundaries<'a>(
         let prefix = quote.find(line).unwrap().as_str();
         let quote_depth = prefix.bytes().filter(|&b| b == b'>').count();
         let mut columns = Vec::new();
+        let mut bases = Vec::new();
         let mut positions = Vec::new();
         let bytes = line.as_bytes();
         let mut at = 0;
         for level in 0..=quote_depth {
             let start = at;
+            bases.push(start);
             while bytes.get(at).is_some_and(|b| matches!(b, b' ' | b'\t')) {
                 at += 1;
             }
@@ -191,49 +194,82 @@ fn quoted_list_boundaries<'a>(
             continue;
         }
         let remainder = &line[prefix.len()..];
-        let indent = remainder.len() - remainder.trim_start_matches([' ', '\t']).len();
-        let text = &remainder[indent..];
-        let visible = masked.get(prefix.len() + indent..).unwrap_or("");
+        let raw_indent = remainder.len() - remainder.trim_start_matches([' ', '\t']).len();
+        let source_prefix = lists
+            .last()
+            .filter(|&&(owner_depth, _, _, _, _, _)| owner_depth == quote_depth)
+            .map_or(prefix.len(), |&(_, _, _, source_prefix, _, _)| {
+                source_prefix
+            });
+        let indent = (raw_indent + prefix.len()).saturating_sub(source_prefix);
+        columns[quote_depth] = indent;
+        let column_at = |owner_depth: usize, owner_prefix: usize| {
+            if quote_depth > owner_depth {
+                (columns[owner_depth] + bases[owner_depth]).saturating_sub(owner_prefix)
+            } else {
+                indent
+            }
+        };
+        let text = &remainder[raw_indent..];
+        let visible = masked.get(prefix.len() + raw_indent..).unwrap_or("");
         if previous_blank && !line.trim_matches([' ', '\t']).is_empty() {
             if depth > quote_depth
                 && !paragraph
                 && !marker.is_match(visible)
-                && lists.last().is_some_and(|&(owner_depth, column, _width)| {
-                    owner_depth > quote_depth
-                        || owner_depth == quote_depth && columns[owner_depth] < column + 1
-                })
+                && lists.last().is_some_and(
+                    |&(owner_depth, column, _width, _source_prefix, _, _)| {
+                        owner_depth > quote_depth
+                            || owner_depth == quote_depth
+                                && column_at(owner_depth, _source_prefix) < column + 1
+                    },
+                )
             {
                 insertions.push((line_offset, line_offset, format!("{}\n", prefix.trim_end())));
             }
-            while lists.last().is_some_and(|&(owner_depth, column, _width)| {
-                owner_depth > quote_depth
-                    || owner_depth == quote_depth && columns[owner_depth] < column + 1
-            }) {
+            while lists.last().is_some_and(
+                |&(owner_depth, column, _width, _source_prefix, _, _)| {
+                    owner_depth > quote_depth
+                        || owner_depth == quote_depth
+                            && column_at(owner_depth, _source_prefix) < column + 1
+                },
+            ) {
                 lists.pop();
             }
         }
-        let ends_item = lists.last().is_some_and(|&(owner_depth, column, _)| {
-            owner_depth > quote_depth || owner_depth == quote_depth && indent <= column
-        });
+        let ends_item =
+            lists
+                .last()
+                .is_some_and(|&(owner_depth, column, _, _source_prefix, _, _)| {
+                    owner_depth > quote_depth || owner_depth == quote_depth && indent <= column
+                });
         if thematic(visible)
             || heading.is_match(visible)
             || visible.starts_with(":::")
             || visible.starts_with('|')
         {
-            while lists.last().is_some_and(|&(owner_depth, column, _)| {
-                owner_depth > quote_depth || owner_depth == quote_depth && indent <= column
-            }) {
+            while lists
+                .last()
+                .is_some_and(|&(owner_depth, column, _, _source_prefix, _, _)| {
+                    owner_depth > quote_depth || owner_depth == quote_depth && indent <= column
+                })
+            {
                 lists.pop();
             }
         }
-        let outside_item = lists.last().is_some_and(|&(owner_depth, column, _width)| {
-            quote_depth > owner_depth && columns[owner_depth] < column + 1
-        });
+        let outside_item =
+            lists
+                .last()
+                .is_some_and(|&(owner_depth, column, _width, _source_prefix, _, _)| {
+                    quote_depth > owner_depth && column_at(owner_depth, _source_prefix) < column + 1
+                });
         if quote_depth > depth && paragraph && !outside_item {
             let mut owned = vec![None; depth];
-            for &(owner_depth, column, width) in &lists {
-                if owner_depth < depth && columns[owner_depth] > column {
-                    owned[owner_depth] = Some(column + width);
+            for &(owner_depth, column, width, _source_prefix, target, _) in lists
+                .iter()
+                .take_while(|&&(owner_depth, _, _, _, _, _)| owner_depth < depth)
+            {
+                if owner_depth < depth && column_at(owner_depth, _source_prefix) > column {
+                    owned[owner_depth] = Some(target + width);
                 }
             }
             let mut normalized = String::new();
@@ -256,9 +292,13 @@ fn quoted_list_boundaries<'a>(
         {
             if !has_definition_syntax {
                 let mut owned = vec![None; quote_depth];
-                for &(owner_depth, column, width) in &lists {
-                    if owner_depth < quote_depth && columns[owner_depth] > column {
-                        owned[owner_depth] = Some(column + width);
+                for &(owner_depth, column, width, _source_prefix, target, _) in lists
+                    .iter()
+                    .take_while(|&&(owner_depth, _, _, _, _, _)| owner_depth < quote_depth)
+                {
+                    if owner_depth < quote_depth && column_at(owner_depth, _source_prefix) > column
+                    {
+                        owned[owner_depth] = Some(target + width);
                     }
                 }
                 let mut normalized = String::new();
@@ -274,16 +314,18 @@ fn quoted_list_boundaries<'a>(
                 }
             }
             insertions.push((
-                line_offset + prefix.len() + indent,
-                line_offset + prefix.len() + indent,
+                line_offset + prefix.len() + raw_indent,
+                line_offset + prefix.len() + raw_indent,
                 "\\".to_owned(),
             ));
             continue;
         }
         if outside_item {
-            while lists.last().is_some_and(|&(owner_depth, column, _width)| {
-                quote_depth > owner_depth && columns[owner_depth] < column + 1
-            }) {
+            while lists.last().is_some_and(
+                |&(owner_depth, column, _width, _source_prefix, _, _)| {
+                    quote_depth > owner_depth && column_at(owner_depth, _source_prefix) < column + 1
+                },
+            ) {
                 lists.pop();
             }
             paragraph = false;
@@ -291,26 +333,39 @@ fn quoted_list_boundaries<'a>(
         previous_blank =
             line.trim_matches([' ', '\t']).is_empty() || quote_depth > 0 && text.is_empty();
         if line.trim_matches([' ', '\t']).is_empty() {
+            while lists
+                .last()
+                .is_some_and(|&(owner_depth, _, _, _, _, _)| owner_depth > quote_depth)
+            {
+                lists.pop();
+            }
             depth = 0;
             paragraph = false;
         } else if let Some(item) = marker.captures(visible).filter(|_| {
             !thematic(visible)
                 && (!paragraph
                     || quote_depth < depth
-                    || lists.last().is_some_and(|&(owner_depth, column, _)| {
-                        owner_depth == quote_depth && indent <= column
-                    }))
+                    || lists.last().is_some_and(
+                        |&(owner_depth, column, _, _source_prefix, _, _)| {
+                            owner_depth == quote_depth && indent <= column
+                        },
+                    ))
         }) {
-            while lists.last().is_some_and(|&(owner_depth, column, _)| {
-                owner_depth > quote_depth || owner_depth == quote_depth && column > indent
-            }) {
+            while lists
+                .last()
+                .is_some_and(|&(owner_depth, column, _, _source_prefix, _, _)| {
+                    owner_depth > quote_depth || owner_depth == quote_depth && column > indent
+                })
+            {
                 lists.pop();
             }
             if quote_depth < depth {
                 if paragraph
-                    && !lists.last().is_some_and(|&(owner_depth, column, _)| {
-                        owner_depth == quote_depth && indent <= column
-                    })
+                    && !lists.last().is_some_and(
+                        |&(owner_depth, column, _, _source_prefix, _, _)| {
+                            owner_depth == quote_depth && indent <= column
+                        },
+                    )
                 {
                     let end = boundary
                         .match_indices('>')
@@ -325,16 +380,33 @@ fn quoted_list_boundaries<'a>(
             let compact = compact_djot_list_prefix(text);
             if compact != text {
                 item_edit = Some((
-                    line_offset + prefix.len() + indent,
+                    line_offset + prefix.len() + raw_indent,
                     line_offset + line.len(),
                     compact.into_owned(),
                 ));
             }
-            if !lists.last().is_some_and(|&(owner_depth, column, _)| {
-                owner_depth == quote_depth && column == indent
-            }) {
-                lists.push((quote_depth, indent, width));
+            if !lists
+                .last()
+                .is_some_and(|&(owner_depth, column, _, _source_prefix, _, _)| {
+                    owner_depth == quote_depth && column == indent
+                })
+            {
+                let target = lists
+                    .last()
+                    .filter(|&&(owner_depth, column, _, _, _, _)| {
+                        owner_depth == quote_depth && indent > column
+                    })
+                    .map_or(0, |&(_, _, width, _, target, _)| target + width);
+                lists.push((
+                    quote_depth,
+                    indent,
+                    width,
+                    source_prefix,
+                    target,
+                    item.get(1).unwrap().as_str().len(),
+                ));
             }
+            item_target = lists.last().map(|&(_, _, _, _, target, _)| target);
             let body_start = item.get(3).unwrap().start();
             let mut quote_body = &text[body_start..];
             let mut nested_depth = 0;
@@ -354,7 +426,14 @@ fn quoted_list_boundaries<'a>(
                     .take_while(|b| matches!(b, b' ' | b'\t'))
                     .count()
                     .saturating_sub(1);
-                lists.push((quote_depth + nested_depth, column, child_width));
+                lists.push((
+                    quote_depth + nested_depth,
+                    column,
+                    child_width,
+                    line.len() - quote_body.len() - column,
+                    column,
+                    child.get(1).unwrap().as_str().len(),
+                ));
                 let child_body = child.get(3).unwrap().start();
                 if !embedded.is_match(&quote_body[child_body..]) {
                     break;
@@ -371,7 +450,7 @@ fn quoted_list_boundaries<'a>(
                     };
                 boundary = format!(
                     "{prefix}{}{}",
-                    " ".repeat(indent + width),
+                    " ".repeat(item_target.unwrap_or(0) + width),
                     nested_prefix.trim_end()
                 );
             } else if quote_depth > 0 {
@@ -417,9 +496,12 @@ fn quoted_list_boundaries<'a>(
         }
         if quote_depth > 0 && !has_definition_syntax {
             let mut owned_columns = vec![None; quote_depth];
-            for &(owner_depth, column, width) in &lists {
-                if owner_depth < quote_depth && columns[owner_depth] > column {
-                    owned_columns[owner_depth] = Some(column + width);
+            for &(owner_depth, column, width, _source_prefix, target, _) in lists
+                .iter()
+                .take_while(|&&(owner_depth, _, _, _, _, _)| owner_depth < quote_depth)
+            {
+                if owner_depth < quote_depth && column_at(owner_depth, _source_prefix) > column {
+                    owned_columns[owner_depth] = Some(target + width);
                 }
             }
             let mut normalized_prefix = String::new();
@@ -434,21 +516,40 @@ fn quoted_list_boundaries<'a>(
             if normalized_prefix != prefix {
                 if boundary.trim_end() == prefix.trim_end() {
                     boundary = normalized_prefix.trim_end().to_owned();
+                } else if let Some(suffix) = boundary.strip_prefix(prefix) {
+                    boundary = normalized_prefix.clone() + suffix;
                 }
                 insertions.push((line_offset, line_offset + prefix.len(), normalized_prefix));
             }
+        }
+        let native_indent = item_target.unwrap_or_else(|| {
+            lists
+                .last()
+                .filter(|&&(owner_depth, column, _, _, _, _)| {
+                    owner_depth == quote_depth && indent > column
+                })
+                .map_or(indent, |&(_, column, width, _, target, source_width)| {
+                    target + width + indent.saturating_sub(column + source_width)
+                })
+        });
+        if quote_depth > 0 && raw_indent != native_indent && !rows[row_index] {
+            insertions.push((
+                line_offset + prefix.len(),
+                line_offset + prefix.len() + raw_indent,
+                " ".repeat(native_indent),
+            ));
         }
         if rows[row_index]
             && quote_depth > 0
             && !has_definition_syntax
             && !lists
                 .iter()
-                .any(|&(owner_depth, _, _)| owner_depth >= quote_depth)
+                .any(|&(owner_depth, _, _, _, _, _)| owner_depth >= quote_depth)
             && indent > 0
         {
             insertions.push((
                 line_offset + prefix.len(),
-                line_offset + prefix.len() + indent,
+                line_offset + prefix.len() + raw_indent,
                 String::new(),
             ));
         }
