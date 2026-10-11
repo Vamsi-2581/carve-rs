@@ -63,6 +63,10 @@ fn quoted_list_boundaries<'a>(
     let marker = cached_regex!(r"^((?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)(\[[ xX]\][ \t]+)?([^ \t])").unwrap();
     let embedded = cached_regex!(r"^(?:>(?:[ \t]+|$))+").unwrap();
     let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
+    let has_definition_syntax = source.contains("[^")
+        || cached_regex!(r"(?:^|\n)(?:[ \t]*>(?:[ \t]|$))*[ \t]*:[ \t]")
+            .unwrap()
+            .is_match(source);
     let mut insertions = Vec::new();
     let reference = cached_regex!(r"^\[[^\]\n]*\]:").unwrap();
     let mut offset = 0;
@@ -119,16 +123,16 @@ fn quoted_list_boundaries<'a>(
             if depth > quote_depth
                 && !paragraph
                 && !marker.is_match(visible)
-                && lists.last().is_some_and(|&(owner_depth, column, width)| {
+                && lists.last().is_some_and(|&(owner_depth, column, _width)| {
                     owner_depth > quote_depth
-                        || owner_depth == quote_depth && columns[owner_depth] < column + width
+                        || owner_depth == quote_depth && columns[owner_depth] < column + 1
                 })
             {
-                insertions.push((line_offset, format!("{}\n", prefix.trim_end())));
+                insertions.push((line_offset, line_offset, format!("{}\n", prefix.trim_end())));
             }
-            while lists.last().is_some_and(|&(owner_depth, column, width)| {
+            while lists.last().is_some_and(|&(owner_depth, column, _width)| {
                 owner_depth > quote_depth
-                    || owner_depth == quote_depth && columns[owner_depth] < column + width
+                    || owner_depth == quote_depth && columns[owner_depth] < column + 1
             }) {
                 lists.pop();
             }
@@ -144,16 +148,20 @@ fn quoted_list_boundaries<'a>(
                 lists.pop();
             }
         }
-        let outside_item = lists.last().is_some_and(|&(owner_depth, column, width)| {
-            quote_depth > owner_depth && columns[owner_depth] < column + width
+        let outside_item = lists.last().is_some_and(|&(owner_depth, column, _width)| {
+            quote_depth > owner_depth && columns[owner_depth] < column + 1
         });
         if quote_depth > depth && paragraph && !outside_item {
-            insertions.push((line_offset + positions[depth], "\\".to_owned()));
+            insertions.push((
+                line_offset + positions[depth],
+                line_offset + positions[depth],
+                "\\".to_owned(),
+            ));
             continue;
         }
         if outside_item {
-            while lists.last().is_some_and(|&(owner_depth, column, width)| {
-                quote_depth > owner_depth && columns[owner_depth] < column + width
+            while lists.last().is_some_and(|&(owner_depth, column, _width)| {
+                quote_depth > owner_depth && columns[owner_depth] < column + 1
             }) {
                 lists.pop();
             }
@@ -187,7 +195,7 @@ fn quoted_list_boundaries<'a>(
                         .match_indices('>')
                         .nth(quote_depth)
                         .map_or(boundary.len(), |(at, _)| at + 1);
-                    insertions.push((line_offset, format!("{}\n", &boundary[..end])));
+                    insertions.push((line_offset, line_offset, format!("{}\n", &boundary[..end])));
                 }
                 depth = quote_depth;
                 boundary = prefix.trim_end().to_owned();
@@ -278,16 +286,39 @@ fn quoted_list_boundaries<'a>(
             }
             paragraph = true;
         }
+        if quote_depth > 0 && !has_definition_syntax {
+            let mut owned_columns = vec![None; quote_depth];
+            for &(owner_depth, column, width) in &lists {
+                if owner_depth < quote_depth && columns[owner_depth] > column {
+                    owned_columns[owner_depth] = Some(column + width);
+                }
+            }
+            let mut normalized_prefix = String::new();
+            for (level, owned_column) in owned_columns.into_iter().enumerate() {
+                let column = owned_column.unwrap_or(0);
+                normalized_prefix.push_str(&" ".repeat(column));
+                normalized_prefix.push('>');
+                if level + 1 < quote_depth || !prefix.ends_with('>') {
+                    normalized_prefix.push(' ');
+                }
+            }
+            if normalized_prefix != prefix {
+                if boundary.trim_end() == prefix.trim_end() {
+                    boundary = normalized_prefix.trim_end().to_owned();
+                }
+                insertions.push((line_offset, line_offset + prefix.len(), normalized_prefix));
+            }
+        }
     }
     if insertions.is_empty() {
         return std::borrow::Cow::Borrowed(source);
     }
     let mut result = String::with_capacity(source.len());
     let mut start = 0;
-    for (at, text) in insertions {
+    for (at, end, text) in insertions {
         result.push_str(&source[start..at]);
         result.push_str(&text);
-        start = at;
+        start = end;
     }
     result.push_str(&source[start..]);
     std::borrow::Cow::Owned(result)

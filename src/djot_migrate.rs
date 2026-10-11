@@ -6690,13 +6690,32 @@ fn djot_content_start(line: &str) -> usize {
         while matches!(bytes.get(at), Some(b' ' | b'\t')) {
             at += 1;
         }
-        if bytes.get(at) == Some(&b'>') {
+        if bytes.get(at) == Some(&b'>')
+            && bytes
+                .get(at + 1)
+                .map_or(true, |b| matches!(b, b' ' | b'\t'))
+        {
             at += 1;
             continue;
         }
         let marker = marker_re.find(&line[at..]);
         match marker {
-            Some(marker) => at += marker.end(),
+            Some(marker) => {
+                at += marker.end();
+                let task = &bytes[at..];
+                if matches!(marker.as_str().as_bytes().first(), Some(b'-' | b'*' | b'+'))
+                    && task.len() >= 4
+                    && task[0] == b'['
+                    && matches!(task[1], b' ' | b'x' | b'X')
+                    && task[2] == b']'
+                    && matches!(task[3], b' ' | b'\t')
+                {
+                    at += 3;
+                    while matches!(bytes.get(at), Some(b' ' | b'\t')) {
+                        at += 1;
+                    }
+                }
+            }
             None => break,
         }
     }
@@ -6965,6 +6984,11 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
     if !source.contains('`') {
         return source.to_owned();
     }
+    let block_attributes = |value: &str| {
+        value.starts_with('{')
+            && read_djot_word_attributes(value, 0)
+                .is_some_and(|(end, _)| value[end..].trim_matches([' ', '\t']).is_empty())
+    };
     let bytes = source.as_bytes();
     let mask = mask_djot_opaque(
         &mask_djot_fences(source, None, &[], true),
@@ -7126,7 +7150,10 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                 break;
             };
             prefix_content = &prefix_content[item_prefix.end()..];
-            if !item_prefix.as_str().starts_with("[^") {
+            if matches!(
+                item_prefix.as_str().as_bytes().first(),
+                Some(b'-' | b'*' | b'+')
+            ) {
                 let b = prefix_content.as_bytes();
                 if b.len() >= 4
                     && b[0] == b'['
@@ -7208,21 +7235,14 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                 continue;
             }
             if let Some(item) = item {
-                item_column = indent
-                    + if item.as_str().starts_with("[^") {
-                        2
-                    } else {
-                        item.len()
-                    };
+                item_column = indent + 1;
                 item_quote = depth;
                 item_kind = item_kind_of(item.as_str());
             } else if !trimmed.is_empty()
                 && (depth < item_quote
                     || (depth == item_quote
                         && indent < item_column
-                        && (block.is_match(trimmed)
-                            || (trimmed.starts_with('{')
-                                && read_djot_word_attributes(trimmed, 0).is_some()))))
+                        && (block.is_match(trimmed) || block_attributes(trimmed))))
             {
                 item_column = 0;
             }
@@ -7358,8 +7378,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                         && close_div.is_match(next_trimmed)
                         && next_trimmed.trim().len() >= width
                 });
-                let attributes = next_trimmed.starts_with('{')
-                    && read_djot_word_attributes(next_trimmed, 0).is_some();
+                let attributes = block_attributes(next_trimmed);
                 if closes_div
                     || (outside
                         && (block.is_match(next_trimmed)
@@ -7385,7 +7404,9 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
             let closed = candidate <= limit && candidate < bytes.len();
             let end = if closed { candidate } else { limit };
             let mut payload = &source[i + width..end];
-            payload = payload.strip_suffix('\n').unwrap_or(payload);
+            if !closed {
+                payload = payload.strip_suffix('\n').unwrap_or(payload);
+            }
             if payload.starts_with(" `") {
                 payload = &payload[1..];
             }
@@ -7413,11 +7434,6 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                 (block.is_match(value) || value.starts_with('{'))
                     && (!separator.is_match(value) || line.as_bytes().get(at) != Some(&b'|'))
             }) || (item_kind.starts_with("[^") && normalized.len() > 1);
-            if closed && code_depth > depth && !raw_code {
-                i = end + width;
-                consumed = i;
-                continue;
-            }
             let raw_payload = if raw_code {
                 if let Some(callback) = on_raw_code.as_mut() {
                     callback(i);
@@ -7485,7 +7501,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
             && consumed <= line_end
             && (trimmed.is_empty()
                 || boundary.is_match(trimmed)
-                || (trimmed.starts_with('{') && read_djot_word_attributes(trimmed, 0).is_some())
+                || block_attributes(trimmed)
                 || (line.as_bytes().get(at) == Some(&b'|')
                     && line.trim_end().ends_with('|')
                     && !line.trim_end().ends_with("\\|")));
