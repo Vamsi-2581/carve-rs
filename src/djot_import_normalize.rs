@@ -487,7 +487,9 @@ fn quoted_list_boundaries<'a>(
                 || reference.is_match(quote_body)
                 || thematic(quote_body)
                 || quote_body.starts_with(":::")
-                || heading.is_match(quote_body));
+                || heading.is_match(quote_body)
+                || read_djot_word_attributes(quote_body, 0)
+                    .is_some_and(|(end, _)| end == quote_body.len()));
         } else if quote_depth > 0 && (!paragraph || depth > 0) {
             if quote_depth >= depth || text.is_empty() || !paragraph {
                 depth = quote_depth;
@@ -1564,6 +1566,9 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
             paragraph = !in_quote
                 && !item_div
                 && !in_heading
+                && !reference.is_match(item_body)
+                && !read_djot_word_attributes(item_body, 0)
+                    .is_some_and(|(end, _)| end == item_body.len())
                 && !empty_note.is_some_and(|marker| item_body.trim() == marker);
             previous_blank = item_div;
             continue;
@@ -1942,10 +1947,29 @@ fn reference_label(text: &str, explicit: &str) -> String {
         smart_typography: crate::SmartTypographyMode::Source,
         ..Default::default()
     };
-    definition_label(&crate::render::plain_inlines_typography(
-        &crate::parse::parse_inline_with_options(&converted, &options),
-        crate::SmartTypographyMode::Source,
-    ))
+    let nodes = crate::parse::parse_inline_with_options(&converted, &options);
+    let mut pending: Vec<_> = nodes.iter().rev().collect();
+    let mut text = String::new();
+    while let Some(node) = pending.pop() {
+        use crate::ast::InlineNode;
+        let children: Option<&[InlineNode]> = match node {
+            InlineNode::NonBreakingSpace(_) => continue,
+            InlineNode::Emphasis(node) => Some(&node.children),
+            InlineNode::Span(node) => Some(&node.children),
+            InlineNode::Link(node) => Some(&node.children),
+            InlineNode::Extension(node) => Some(&node.children),
+            _ => None,
+        };
+        if let Some(children) = children {
+            pending.extend(children.iter().rev());
+        } else {
+            text.push_str(&crate::render::plain_inlines_typography(
+                std::slice::from_ref(node),
+                crate::SmartTypographyMode::Source,
+            ));
+        }
+    }
+    definition_label(&text)
 }
 
 fn cached_reference_label<'a>(
@@ -1957,7 +1981,7 @@ fn cached_reference_label<'a>(
     if !explicit.is_empty() {
         return label(explicit);
     }
-    if !text.bytes().any(|byte| b"_*`~^".contains(&byte)) {
+    if !text.bytes().any(|byte| b"_*`~^\\".contains(&byte)) {
         return label(text);
     }
     // Bound retained values when nested labels overlap in the source.
@@ -2024,13 +2048,26 @@ fn reference_uses<'a>(source: &'a str, mask: &str) -> Vec<ReferenceUse<'a>> {
     let bytes = source.as_bytes();
     let mut table_pipes = HashSet::new();
     if source.contains('|') {
-        let rows = djot_table_rows(source, mask);
+        let pipe_mask = mask_djot_forms_with_options(
+            source,
+            false,
+            true,
+            None,
+            &[],
+            OpaqueOptions {
+                destinations: false,
+                autolinks: false,
+                attribute_values: false,
+                ..Default::default()
+            },
+        );
+        let rows = djot_table_rows(source, &pipe_mask);
         let mut offset = 0;
         for (n, line) in source.split('\n').enumerate() {
             if rows[n] {
                 let mut escaped = false;
                 for (at, byte) in line.bytes().enumerate() {
-                    if byte == b'|' && !escaped {
+                    if byte == b'|' && pipe_mask.as_bytes()[offset + at] == b'|' && !escaped {
                         table_pipes.insert(offset + at);
                     }
                     escaped = byte == b'\\' && !escaped;
@@ -2135,7 +2172,16 @@ pub(super) fn references(source: &str) -> String {
             let previous_line = &previous[previous_start..];
             let attribute_start = djot_content_start(previous_line);
             let attribute_content = &previous_line[attribute_start..];
-            if !attribute_content.starts_with('{')
+            let attribute_prefix = &previous_line[..attribute_start];
+            let prefix = &line[..content_start];
+            let opens_container = prefix.bytes().any(|byte| b"-*+.):".contains(&byte))
+                || prefix.bytes().filter(|&byte| byte == b'>').count()
+                    > attribute_prefix
+                        .bytes()
+                        .filter(|&byte| byte == b'>')
+                        .count();
+            if opens_container
+                || !attribute_content.starts_with('{')
                 || read_djot_word_attributes(attribute_content, 0)
                     .map_or(true, |(end, _)| end != attribute_content.len())
             {
@@ -2213,6 +2259,14 @@ pub(super) fn references(source: &str) -> String {
     let mut edits = removed;
     let mut moved_definitions = Vec::new();
     for (line_start, start, end, key) in indented_definitions {
+        if definition_ranges
+            .get(&key)
+            .and_then(|ranges| ranges.last())
+            .copied()
+            != Some((start, end))
+        {
+            continue;
+        }
         let close = source[start..end].find("]:").unwrap();
         let name = aliases
             .get(&key)
@@ -2224,6 +2278,11 @@ pub(super) fn references(source: &str) -> String {
             end,
             format!("{}{{%%}}", &source[line_start..start]),
         ));
+    }
+    for ranges in definition_ranges.values() {
+        for &(start, end) in ranges.iter().take(ranges.len().saturating_sub(1)) {
+            edits.push((start, end, "{%%}".to_owned()));
+        }
     }
     for (key, alias) in &aliases {
         for &(start, end) in definition_ranges.get(key).into_iter().flatten() {
@@ -3024,7 +3083,12 @@ mod tests {
         let classes = migrate_djot("{.a .b}\n[ref]: /url\n\n[ref][]\n");
         assert!(classes.value.contains("{.a .b}"));
         let image = migrate_djot("{title=t}\n[ref]: /url\n\n[![alt](i.png)][ref]\n");
-        assert!(image.value.contains("[![alt](i.png)](/url){title=\"t\"}"));
+        assert_eq!(
+            crate::to_html(&image.value),
+            "<p><a href=\"/url\" title=\"t\"><img src=\"i.png\" alt=\"alt\"></a></p>"
+        );
+        assert_eq!(image.value.matches("/url").count(), 1);
+        assert!(image.value.contains("[![alt](i.png)][ref]{title=\"t\"}"));
         assert_eq!(
             crate::to_html(&migrate_djot("<https://example.com/a{}b>\n").value),
             "<p><a href=\"https://example.com/a{}b\">https://example.com/a{}b</a></p>"
@@ -3093,6 +3157,14 @@ mod tests {
             crate::to_html(&migrate_djot(source).value),
             "<p><span title=\"[x][]\">hi</span></p>"
         );
+    }
+
+    #[test]
+    fn djot_reference_attribute_pipes_remain_cell_boundaries() {
+        let source = "{.c}\n[x]: /u\n\n| h |\n|---|\n| [a{k=\"a|b\"}][x] |\n";
+        let normalized = super::references(source);
+        assert!(normalized.contains("[a{k=\"a|b\"}][x]"));
+        assert!(!normalized.contains("[x]{.c}"));
     }
 
     #[test]

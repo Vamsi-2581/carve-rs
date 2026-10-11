@@ -144,15 +144,17 @@ fn escaped_reference_names_keep_long_destinations_shared() {
 
 #[test]
 fn nonbreaking_label_whitespace_does_not_resolve_space_definition() {
-    let result = carve::migrate_djot("[a b]: /x\n\n[a\\ b][]\n");
-    assert!(!carve::to_html(&result.value).contains("href=\"/x\""));
-    assert_eq!(
-        result
-            .report
-            .diagnostics
-            .iter()
-            .filter(|row| row.message.contains("unresolved Djot reference"))
-            .count(),
-        1
-    );
+    for label in ["a b", "a\u{00a0}b"] {
+        let result = carve::migrate_djot(&format!("[{label}]: /x\n\n[a\\ b][]\n"));
+        assert!(!carve::to_html(&result.value).contains("href=\"/x\""));
+        assert_eq!(
+            result
+                .report
+                .diagnostics
+                .iter()
+                .filter(|row| row.message.contains("unresolved Djot reference"))
+                .count(),
+            1
+        );
+    }
 }
