@@ -51,6 +51,68 @@ fn drop_orphan_attribute_line(result: &mut Vec<String>) {
     }
 }
 
+fn compact_djot_list_prefix(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('0') && !text.contains('(') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let marker = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
+    let quote = cached_regex!(r"^>(?:[ \t]|$)").unwrap();
+    let task = cached_regex!(r"^\[[ xX]\][ \t]+").unwrap();
+    let mut result = String::with_capacity(text.len());
+    let mut at = 0;
+    let mut changed = false;
+    while at < text.len() {
+        let indent = text[at..]
+            .bytes()
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .count();
+        result.push_str(&text[at..at + indent]);
+        at += indent;
+        if let Some(prefix) = quote.find(&text[at..]) {
+            result.push_str(prefix.as_str());
+            at += prefix.end();
+            continue;
+        }
+        let Some(item) = marker.find(&text[at..]) else {
+            break;
+        };
+        let prefix = item.as_str();
+        let start = usize::from(prefix.starts_with('('));
+        let mut end = start;
+        while prefix.as_bytes().get(end) == Some(&b'0')
+            && prefix
+                .as_bytes()
+                .get(end + 1)
+                .is_some_and(u8::is_ascii_digit)
+        {
+            end += 1;
+        }
+        changed |= end > start;
+        if prefix.starts_with('(') {
+            let close = prefix.find(')').unwrap();
+            result.push_str(&prefix[end..close]);
+            result.push('.');
+            result.push_str(&prefix[close + 1..]);
+            changed = true;
+        } else {
+            result.push_str(&prefix[end..]);
+        }
+        at += item.end();
+        if matches!(prefix.as_bytes()[0], b'-' | b'*' | b'+') {
+            if let Some(prefix) = task.find(&text[at..]) {
+                result.push_str(prefix.as_str());
+                at += prefix.end();
+            }
+        }
+    }
+    result.push_str(&text[at..]);
+    if changed {
+        std::borrow::Cow::Owned(result)
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 fn quoted_list_boundaries<'a>(
     source: &'a str,
     mask: &str,
@@ -81,6 +143,7 @@ fn quoted_list_boundaries<'a>(
         .zip(fence_mask.split('\n'))
     {
         let line_offset = offset;
+        let mut item_edit = None;
         offset += line.len() + 1;
         if fenced != line {
             depth = 0;
@@ -200,7 +263,15 @@ fn quoted_list_boundaries<'a>(
                 depth = quote_depth;
                 boundary = prefix.trim_end().to_owned();
             }
-            let width = item.get(1).unwrap().end();
+            let width = compact_djot_list_prefix(item.get(1).unwrap().as_str()).len();
+            let compact = compact_djot_list_prefix(text);
+            if compact != text {
+                item_edit = Some((
+                    line_offset + prefix.len() + indent,
+                    line_offset + line.len(),
+                    compact.into_owned(),
+                ));
+            }
             if !lists.last().is_some_and(|&(owner_depth, column, _)| {
                 owner_depth == quote_depth && column == indent
             }) {
@@ -217,7 +288,7 @@ fn quoted_list_boundaries<'a>(
                 let Some(child) = marker.captures(quote_body) else {
                     break;
                 };
-                let child_width = child.get(1).unwrap().end();
+                let child_width = compact_djot_list_prefix(child.get(1).unwrap().as_str()).len();
                 let column = nested
                     .as_str()
                     .bytes()
@@ -308,6 +379,9 @@ fn quoted_list_boundaries<'a>(
                 }
                 insertions.push((line_offset, line_offset + prefix.len(), normalized_prefix));
             }
+        }
+        if let Some(edit) = item_edit {
+            insertions.push(edit);
         }
     }
     if insertions.is_empty() {
@@ -706,7 +780,8 @@ pub(super) fn blocks(source: &str) -> String {
                 .map_or(result.len(), |list| list.start);
             let marker_end = item.get(2).unwrap().end();
             let payload_start = item.get(0).unwrap().end();
-            let mut payload = text.to_owned();
+            let native_marker_end = compact_djot_list_prefix(&text[..marker_end]).len();
+            let mut payload = compact_djot_list_prefix(text).into_owned();
             if is_bullet {
                 payload.replace_range(..1, &(written as char).to_string());
             }
@@ -724,7 +799,7 @@ pub(super) fn blocks(source: &str) -> String {
                 source: indent,
                 column: indent + marker_end,
                 target,
-                target_column: target + marker_end,
+                target_column: target + native_marker_end,
                 written,
                 kind,
                 start: list_start,
@@ -738,7 +813,7 @@ pub(super) fn blocks(source: &str) -> String {
             if item_div {
                 divs.push((
                     div_width,
-                    " ".repeat(target + marker_end),
+                    " ".repeat(target + native_marker_end),
                     crate::parse::lint_invalid_container_metadata(item_body),
                     Some(indent + marker_end),
                     line_offsets[n],

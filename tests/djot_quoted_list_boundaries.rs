@@ -47,3 +47,14 @@ fn container_prefixes_do_not_report_code_loss() {
         );
     }
 }
+
+#[test]
+fn output_growth_is_linear_for_wide_numeric_list_markers() {
+    for size in [64, 128, 256] {
+        let source = format!("{}1. > a\n{}", "0".repeat(size), " > b\n".repeat(size));
+        let result = carve::djot_to_carve(&source);
+        assert!(result.len() <= source.len() * 2);
+        let expected = format!("1. > a\n{}", "   > b\n".repeat(size));
+        assert_eq!(carve::to_html(&result), carve::to_html(&expected));
+    }
+}
