@@ -2736,6 +2736,7 @@ fn mask_djot_fences(
     let mut mask = source.as_bytes().to_vec();
     let opener = cached_regex!(r"^([ \t]*)(?:(\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+))?(`{3,}|~{3,})[ \t]*=?[A-Za-z0-9_+#.-]*[ \t]*$").unwrap();
     let boundary = cached_regex!(r"^[ \t]*(?:[-*+] |[0-9]+[.)] |:{1,2} |#{1,6} )").unwrap();
+    let nested_note_header = cached_regex!(r"\[\^[^\]\n]+\]:[ \t]*").unwrap();
     let mut fence: Option<(u8, usize, usize, Option<usize>, usize)> = None;
     let mut previous_block = true;
     let mut fence_target = String::new();
@@ -2870,6 +2871,27 @@ fn mask_djot_fences(
                 }
             }
         }
+        let ordinary_open = fence.is_none().then(|| opener.captures(content)).flatten();
+        let opening_at = if fence.is_none()
+            && ordinary_open.is_none()
+            && content.contains("[^")
+            && (content.contains("```") || content.contains("~~~"))
+        {
+            djot_content_start(content)
+        } else {
+            0
+        };
+        let opening_prefix = &content[..opening_at];
+        let nested_headers: Vec<_> = nested_note_header.find_iter(opening_prefix).collect();
+        let nested_note = nested_headers.len() > 1
+            && !nested_note_header
+                .replace_all(opening_prefix, "")
+                .contains('>');
+        let opening_content = if nested_note {
+            &content[opening_at..]
+        } else {
+            content
+        };
         if let Some((ch, run, _, _, owner_depth)) = fence {
             blank_out(&mut mask, offset, offset + line.len());
             let candidate = &content[indent..];
@@ -2900,29 +2922,55 @@ fn mask_djot_fences(
                     );
                 }
             }
-        } else if let Some(open) = opener.captures(content) {
-            let marker = open.get(2).map_or("", |value| value.as_str());
+        } else if let Some(open) = ordinary_open.or_else(|| {
+            nested_note
+                .then(|| opener.captures(opening_content))
+                .flatten()
+        }) {
+            let opening_indent = if nested_note {
+                &content[..content.len() - content.trim_start_matches([' ', '\t']).len()]
+            } else {
+                &open[1]
+            };
+            let marker = if nested_note {
+                &opening_prefix[opening_indent.len()..]
+            } else {
+                open.get(2).map_or("", |value| value.as_str())
+            };
+            let nested_note_column = nested_note.then(|| {
+                opening_prefix[..nested_headers.last().unwrap().start()]
+                    .encode_utf16()
+                    .count()
+            });
             if (!marker.starts_with(':') || previous_block)
                 && (!strict || can_normalize || !marker.is_empty())
             {
-                let container = if !marker.is_empty() {
-                    Some(open[1].len() + 1)
+                let container = if let Some(column) = nested_note_column {
+                    Some(column + 1)
+                } else if !marker.is_empty() {
+                    Some(opening_indent.len() + 1)
                 } else if nested {
                     Some(owner_indent + 1)
                 } else {
                     None
                 };
-                let target_column = if marker.starts_with("[^") {
-                    open[1].len() + 2
+                let target_column = if let Some(column) = nested_note_column {
+                    column + 2
+                } else if marker.starts_with("[^") {
+                    opening_indent.len() + 2
                 } else if !marker.is_empty() {
-                    open[1].len() + native_marker.replace(marker, "$1.$2").len()
+                    opening_indent.len() + native_marker.replace(marker, "$1.$2").len()
                 } else if nested {
                     owner_column
                 } else {
                     0
                 };
                 fence_normalize = can_normalize || !marker.is_empty();
-                fence_dedent = open[1].len() + marker.len();
+                fence_dedent = if nested_note {
+                    opening_prefix.encode_utf16().count()
+                } else {
+                    opening_indent.len() + marker.len()
+                };
                 fence_target = " ".repeat(target_column);
                 let native_prefix = native_marker.replace(marker, "$1.$2");
                 if fence_normalize && (marker.is_empty() || native_prefix != marker) {
@@ -2935,14 +2983,20 @@ fn mask_djot_fences(
                                 if marker.is_empty() {
                                     fence_target.clone()
                                 } else {
-                                    format!("{}{}", &open[1], native_prefix)
+                                    format!("{}{}", opening_indent, native_prefix)
                                 },
-                                &content[fence_dedent..]
+                                &content[if nested_note {
+                                    opening_at
+                                } else {
+                                    fence_dedent
+                                }..]
                             ),
                         );
                     }
                 }
-                let start = open.get(3).unwrap().start() + prefix_len;
+                let start = open.get(3).unwrap().start()
+                    + prefix_len
+                    + if nested_note { opening_at } else { 0 };
                 fence = Some((open[3].as_bytes()[0], open[3].len(), 0, container, depth));
                 blank_out(&mut mask, offset + start, offset + line.len());
             }

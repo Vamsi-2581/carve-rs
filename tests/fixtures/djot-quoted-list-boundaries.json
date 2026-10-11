@@ -7038,5 +7038,33 @@
   {
     "source": "[^a]: - [^b]: - item\n\n                para\n\nr[^a] r[^b]\n",
     "carve": "[^b]: - item\n\n    para\n\n[^a]: - %%%%\n\nr[^a] r[^b]\n"
+  },
+  {
+    "source": "[^a]: - [^b]: - [^c]: - item\n\n     para\n\nr[^a] r[^b] r[^c]\n",
+    "carve": "[^b]: - [^c]: - item\n\n[^a]: - %%%%\n  para\n\nr[^a] r[^b] r[^c]\n"
+  },
+  {
+    "source": "[^a]: one\n\n- > [^b]: two\n\nr[^a] r[^b]\n",
+    "carve": "[^a]: one\n\n- > [^b]: two\n\n\nr[^a] r[^b]\n"
+  },
+  {
+    "source": "> [^a]: one\n>\n> - > [^b]: two\n>\n> r[^a] r[^b]\n",
+    "carve": "[^a]: one\n\n>\n> - > [^b]: two\n>\n>\n> r[^a] r[^b]\n"
+  },
+  {
+    "source": "[^a]: - [^b]: ```\n         code\n         ```\n     para\n\nr[^a] r[^b]\n",
+    "carve": "[^b]: ```\n  code\n  ```\n\n[^a]: - %%%%\n  para\n\nr[^a] r[^b]\n"
+  },
+  {
+    "source": "[^a]: - [^b]: ```\n         code\n         ```\n      para\n\nr[^a] r[^b]\n",
+    "carve": "[^b]: ```\n  code\n  ```\n\n[^a]: - %%%%\n  para\n\nr[^a] r[^b]\n"
+  },
+  {
+    "source": "[^a]: - [^b]: ```\n         code\n         ```\n       para\n\nr[^a] r[^b]\n",
+    "carve": "[^b]: ```\n  code\n  ```\n\n[^a]: - %%%%\n    para\n\nr[^a] r[^b]\n"
+  },
+  {
+    "source": "[^a]: - [^b]: ```\n         code\n         ```\n        para\n\nr[^a] r[^b]\n",
+    "carve": "[^b]: ```\n  code\n  ```\n\n[^a]: - %%%%\n    para\n\nr[^a] r[^b]\n"
   }
 ]

@@ -765,25 +765,31 @@ pub(super) fn note_blocks(
             if fenced != line && (held_code.is_some() || !code.is_match(text)) {
                 break;
             }
-            let column = columns.get(note.depth).copied().unwrap_or(indent);
+            let column = if inline.is_some() && note.depth == physical_depth {
+                physical_indent
+            } else {
+                columns.get(note.depth).copied().unwrap_or(indent)
+            };
             let outside = depth < note.depth || column <= note.column;
             let starts_block = head.is_some()
                 || code.is_match(text)
                 || depth > note.depth
+                || depth < note.depth && text.is_empty()
                 || block.is_match(visible)
                 || metadata.is_boundary(line);
             if outside
                 && !(note.paragraph && !note.blank && !starts_block && depth <= note.depth)
-                && (!text.is_empty() || depth > note.depth)
+                && (!text.is_empty() || depth != note.depth)
             {
                 let closed = notes.pop().unwrap();
                 if let Some(parent) = notes.last_mut() {
-                    if closed.blank
+                    if (closed.blank || !closed.paragraph)
                         && parent.item_column.is_some_and(|column| indent <= column)
                         && !block.is_match(visible)
                         && !item.is_match(text)
                     {
                         parent.body.push(String::new());
+                        parent.blank = true;
                     }
                     parent.paragraph = false;
                 }
@@ -901,9 +907,19 @@ pub(super) fn note_blocks(
                     && !code.is_match(nested_body);
                 let child_padding = if child_item {
                     nested.as_str().encode_utf16().count()
+                } else if code.is_match(nested_body) {
+                    2
                 } else {
                     0
                 };
+                if let Some(opener) = code.captures(nested_body) {
+                    held_code = Some((
+                        opener[1].as_bytes()[0],
+                        opener[1].len(),
+                        depth,
+                        Some(child_column + 1),
+                    ));
+                }
                 notes.push(NoteBuffer {
                     depth,
                     column: child_column,
