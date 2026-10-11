@@ -117,6 +117,8 @@ fn quoted_list_boundaries<'a>(
     source: &'a str,
     mask: &str,
     fence_mask: &str,
+    rows: &[bool],
+    slot_prefix: Option<&str>,
 ) -> std::borrow::Cow<'a, str> {
     if !source.contains('>') || !source.contains('\n') {
         return std::borrow::Cow::Borrowed(source);
@@ -125,11 +127,14 @@ fn quoted_list_boundaries<'a>(
     let marker = cached_regex!(r"^((?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)(\[[ xX]\][ \t]+)?([^ \t])").unwrap();
     let embedded = cached_regex!(r"^(?:>(?:[ \t]+|$))+").unwrap();
     let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
-    let has_definition_syntax = source.contains("[^")
-        || cached_regex!(r"(?:^|\n)(?:[ \t]*>(?:[ \t]|$))*[ \t]*:[ \t]")
-            .unwrap()
-            .is_match(source);
+    let has_definition_syntax = cached_regex!(r"(?:^|\n)(?:[ \t]*>(?:[ \t]|$))*[ \t]*:[ \t]")
+        .unwrap()
+        .is_match(source);
     let mut insertions = Vec::new();
+    let mut div_closers = HashMap::new();
+    if source.contains(":::") {
+        djot_inline_boundaries_with_div_closers(source, mask, true, Some(&mut div_closers));
+    }
     let reference = cached_regex!(r"^\[[^\]\n]*\]:").unwrap();
     let mut offset = 0;
     let mut depth = 0;
@@ -137,11 +142,18 @@ fn quoted_list_boundaries<'a>(
     let mut paragraph = false;
     let mut previous_blank = true;
     let mut lists: Vec<(usize, usize, usize)> = Vec::new();
-    for ((line, masked), fenced) in source
+    for (row_index, ((line, masked), fenced)) in source
         .split('\n')
         .zip(mask.split('\n'))
         .zip(fence_mask.split('\n'))
+        .enumerate()
     {
+        if slot_prefix.is_some_and(|prefix| line.starts_with(prefix)) {
+            paragraph = false;
+            previous_blank = true;
+            offset += line.len() + 1;
+            continue;
+        }
         let line_offset = offset;
         let mut item_edit = None;
         offset += line.len() + 1;
@@ -200,6 +212,9 @@ fn quoted_list_boundaries<'a>(
                 lists.pop();
             }
         }
+        let ends_item = lists.last().is_some_and(|&(owner_depth, column, _)| {
+            owner_depth > quote_depth || owner_depth == quote_depth && indent <= column
+        });
         if thematic(visible)
             || heading.is_match(visible)
             || visible.starts_with(":::")
@@ -215,9 +230,52 @@ fn quoted_list_boundaries<'a>(
             quote_depth > owner_depth && columns[owner_depth] < column + 1
         });
         if quote_depth > depth && paragraph && !outside_item {
+            let mut owned = vec![None; depth];
+            for &(owner_depth, column, width) in &lists {
+                if owner_depth < depth && columns[owner_depth] > column {
+                    owned[owner_depth] = Some(column + width);
+                }
+            }
+            let mut normalized = String::new();
+            for column in owned {
+                normalized.push_str(&" ".repeat(column.unwrap_or(0)));
+                normalized.push_str("> ");
+            }
+            normalized.push('\\');
+            normalized.push_str(&prefix[positions[depth]..]);
+            insertions.push((line_offset, line_offset + prefix.len(), normalized));
+            continue;
+        }
+        if paragraph
+            && !outside_item
+            && !ends_item
+            && !div_closers.contains_key(&line_offset)
+            && quote_depth == depth
+            && quote_depth > 0
+            && (heading.is_match(visible) || thematic(visible) || visible.starts_with(":::"))
+        {
+            if !has_definition_syntax {
+                let mut owned = vec![None; quote_depth];
+                for &(owner_depth, column, width) in &lists {
+                    if owner_depth < quote_depth && columns[owner_depth] > column {
+                        owned[owner_depth] = Some(column + width);
+                    }
+                }
+                let mut normalized = String::new();
+                for (level, column) in owned.into_iter().enumerate() {
+                    normalized.push_str(&" ".repeat(column.unwrap_or(0)));
+                    normalized.push('>');
+                    if level + 1 < quote_depth || !prefix.ends_with('>') {
+                        normalized.push(' ');
+                    }
+                }
+                if normalized != prefix {
+                    insertions.push((line_offset, line_offset + prefix.len(), normalized));
+                }
+            }
             insertions.push((
-                line_offset + positions[depth],
-                line_offset + positions[depth],
+                line_offset + prefix.len() + indent,
+                line_offset + prefix.len() + indent,
                 "\\".to_owned(),
             ));
             continue;
@@ -380,6 +438,20 @@ fn quoted_list_boundaries<'a>(
                 insertions.push((line_offset, line_offset + prefix.len(), normalized_prefix));
             }
         }
+        if rows[row_index]
+            && quote_depth > 0
+            && !has_definition_syntax
+            && !lists
+                .iter()
+                .any(|&(owner_depth, _, _)| owner_depth >= quote_depth)
+            && indent > 0
+        {
+            insertions.push((
+                line_offset + prefix.len(),
+                line_offset + prefix.len() + indent,
+                String::new(),
+            ));
+        }
         if let Some(edit) = item_edit {
             insertions.push(edit);
         }
@@ -398,11 +470,318 @@ fn quoted_list_boundaries<'a>(
     std::borrow::Cow::Owned(result)
 }
 
+struct NoteBuffer {
+    depth: usize,
+    column: usize,
+    label: String,
+    body: Vec<String>,
+    paragraph: bool,
+    blank: bool,
+    paragraph_depth: usize,
+    item_column: Option<usize>,
+    slot: Option<String>,
+}
+
+pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -> String {
+    if !source.contains("[^") {
+        return blocks(source);
+    }
+    let quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
+    let header = cached_regex!(r"^(\[\^[^\]\n]+\]:[ \t]*)(.*)$").unwrap();
+    let item = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
+    let block = cached_regex!(r"^(?:#{1,6}(?:[ \t]|$)|:{3,}|[|]|[`~]{3,}|[-*+][ \t]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)[ \t]|\[[^\]^\n][^\]\n]*\]:)").unwrap();
+    let code = cached_regex!(r"^(`{3,}|~{3,})[ \t]*[A-Za-z0-9_+#.-]*$").unwrap();
+    let mask = mask_code_and_destinations(source);
+    let rows = djot_table_rows(source, &mask);
+    let fence_mask = mask_djot_fences(source, None, &rows, true);
+    let slot_prefix = djot_placeholder_prefix(source, "\0DJOTNOTESLOT\0");
+    let mut main = Vec::<String>::new();
+    let mut notes = Vec::<NoteBuffer>::new();
+    let mut completed = Vec::<NoteBuffer>::new();
+    let mut paragraph = false;
+    let mut blank = true;
+    let mut previous_depth = 0;
+    let mut last_boundary = false;
+    let mut held_code: Option<(u8, usize, usize, Option<usize>)> = None;
+    for ((line, masked), fenced) in source
+        .split('\n')
+        .zip(mask.split('\n'))
+        .zip(fence_mask.split('\n'))
+    {
+        let prefix = quote.find(line).unwrap().as_str();
+        let depth = prefix.bytes().filter(|&b| b == b'>').count();
+        let rest = &line[prefix.len()..];
+        let indent = rest
+            .bytes()
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .count();
+        let text = &rest[indent..];
+        let visible = masked.get(prefix.len() + indent..).unwrap_or("");
+        let mut columns = Vec::with_capacity(depth + 1);
+        let mut ends = Vec::with_capacity(depth);
+        let mut at = 0;
+        for level in 0..=depth {
+            let start = at;
+            while line
+                .as_bytes()
+                .get(at)
+                .is_some_and(|b| matches!(b, b' ' | b'\t'))
+            {
+                at += 1;
+            }
+            columns.push(at - start);
+            if level < depth {
+                at += 1;
+                if line
+                    .as_bytes()
+                    .get(at)
+                    .is_some_and(|b| matches!(b, b' ' | b'\t'))
+                {
+                    at += 1;
+                }
+                ends.push(at);
+            }
+        }
+        if held_code.is_some_and(|(_, _, host, floor)| {
+            depth < host
+                || floor.is_some_and(|floor| depth == host && indent < floor && !text.is_empty())
+        }) {
+            held_code = None;
+        }
+        let active = notes.last();
+        let can_define = blank
+            || !paragraph
+            || last_boundary
+            || depth < previous_depth
+            || active.is_some_and(|n| depth <= n.depth && indent <= n.column);
+        let head = can_define
+            .then(|| header.captures(text))
+            .flatten()
+            .filter(|caps| {
+                let colon = caps[1].trim_end_matches([' ', '\t']).len() - 1;
+                masked.as_bytes().get(prefix.len() + indent + colon) == Some(&b':')
+                    || held_code.is_none()
+                        && fenced != line
+                        && code.is_match(&caps[2][djot_content_start(&caps[2])..])
+            });
+        while let Some(note) = notes.last() {
+            if fenced != line {
+                break;
+            }
+            let column = columns.get(note.depth).copied().unwrap_or(indent);
+            let outside = depth < note.depth || column <= note.column;
+            let starts_block = head.is_some()
+                || depth > note.depth
+                || block.is_match(visible)
+                || metadata.is_boundary(line);
+            if outside
+                && !(note.paragraph && !note.blank && !starts_block && depth <= note.depth)
+                && (!text.is_empty() || depth > note.depth)
+            {
+                completed.push(notes.pop().unwrap());
+                if let Some(parent) = notes.last_mut() {
+                    parent.paragraph = false;
+                }
+            } else {
+                break;
+            }
+        }
+        if let Some(caps) = head {
+            let parent = notes.last_mut();
+            let slot = if parent.is_none() && depth == 0 && indent == 0 {
+                Some(format!("{slot_prefix}{}\0", completed.len()))
+            } else {
+                None
+            };
+            let separator = if let Some(parent) = parent {
+                let kept = prefix
+                    .get(ends.get(parent.depth.wrapping_sub(1)).copied().unwrap_or(0)..)
+                    .unwrap_or("")
+                    .trim_end()
+                    .to_owned();
+                parent.body.push(kept);
+                None
+            } else {
+                if depth > 0 {
+                    main.push(prefix.trim_end().to_owned());
+                }
+                Some(())
+            };
+            if separator.is_some() {
+                if let Some(slot) = &slot {
+                    main.push(slot.clone());
+                }
+            }
+            let body = &caps[2];
+            if let Some(opener) = code.captures(&body[djot_content_start(body)..]) {
+                held_code = Some((
+                    opener[1].as_bytes()[0],
+                    opener[1].len(),
+                    depth,
+                    Some(indent + 1),
+                ));
+            }
+            let first_padding = if item.is_match(body) {
+                indent + caps[1].encode_utf16().count()
+            } else if code.is_match(body) {
+                2
+            } else {
+                0
+            };
+            let body_paragraph = !body.is_empty() && !block.is_match(body) && !code.is_match(body);
+            notes.push(NoteBuffer {
+                depth,
+                column: indent,
+                label: caps[1].to_owned(),
+                body: vec![format!("{}{body}", " ".repeat(first_padding))],
+                item_column: item
+                    .is_match(body)
+                    .then_some(indent + caps[1].encode_utf16().count()),
+                paragraph_depth: depth
+                    + body[..djot_content_start(body)]
+                        .bytes()
+                        .filter(|&b| b == b'>')
+                        .count(),
+                paragraph: body_paragraph || item.is_match(body) || starts_quote(body),
+                blank: !body_paragraph && !item.is_match(body) && !starts_quote(body),
+                slot,
+            });
+            paragraph = notes.last().unwrap().paragraph;
+            blank = notes.last().unwrap().blank;
+            previous_depth = depth;
+            last_boundary = false;
+            continue;
+        }
+        if fenced != line {
+            if let Some((kind, width, host, _)) = held_code {
+                let start = ends.get(host.wrapping_sub(1)).copied().unwrap_or(0);
+                let content = line[start..].trim_matches([' ', '\t']);
+                let run = content.bytes().take_while(|&b| b == kind).count();
+                if run >= width && content[run..].trim_matches([' ', '\t']).is_empty() {
+                    held_code = None;
+                }
+            } else if let Some(opener) = code.captures(&line[djot_content_start(line)..]) {
+                held_code = Some((
+                    opener[1].as_bytes()[0],
+                    opener[1].len(),
+                    depth,
+                    notes.last().map(|note| note.column + 1),
+                ));
+            }
+        }
+        if let Some(note) = notes.last_mut() {
+            let host = ends.get(note.depth.wrapping_sub(1)).copied().unwrap_or(0);
+            let payload = &line[host..];
+            let padding = payload
+                .bytes()
+                .take_while(|b| matches!(b, b' ' | b'\t'))
+                .count();
+            note.body
+                .push(payload[padding.min(note.column)..].to_owned());
+            let outside_item = note.item_column.is_some_and(|column| {
+                columns.get(note.depth).copied().unwrap_or(indent) <= column
+                    && (note.blank || depth > note.depth || block.is_match(visible))
+            });
+            if outside_item {
+                note.item_column = None;
+                note.paragraph = false;
+                note.paragraph_depth = note.depth;
+            }
+            if item.is_match(text) && (!note.paragraph || outside_item) {
+                note.item_column = Some(indent);
+            }
+            let literal_quote = depth > note.paragraph_depth && note.paragraph;
+            note.blank = text.is_empty() && !literal_quote;
+            if !note.paragraph && depth > note.depth {
+                note.paragraph_depth = depth;
+            }
+            note.paragraph = !note.blank && fenced == line && !block.is_match(visible);
+            paragraph = note.paragraph;
+            blank = note.blank;
+        } else {
+            main.push(line.to_owned());
+            blank = text.is_empty();
+            paragraph = !blank && !block.is_match(visible);
+        }
+        previous_depth = depth;
+        last_boundary = metadata.is_boundary(line);
+    }
+    while let Some(note) = notes.pop() {
+        completed.push(note);
+    }
+    if completed.is_empty() {
+        return blocks(source);
+    }
+    let mut definitions = HashMap::<String, String>::new();
+    let mut unplaced = Vec::new();
+    for note in completed {
+        let body = normalize_djot_fences(&note.body.join("\n"));
+        let converted = blocks(&body);
+        let mut lines = converted.split('\n');
+        let mut definition = format!(
+            "{}{}",
+            note.label,
+            lines.next().unwrap_or("").trim_start_matches([' ', '\t'])
+        );
+        for line in lines {
+            definition.push('\n');
+            if !line.is_empty() {
+                definition.push_str("  ");
+                definition.push_str(line);
+            }
+        }
+        if let Some(slot) = note.slot {
+            definitions.insert(slot, definition);
+        } else {
+            unplaced.push(definition);
+        }
+    }
+    let normalized_main = blocks_with_slot(&main.join("\n"), Some(&slot_prefix));
+    let mut result = unplaced.join("\n\n");
+    if !result.is_empty() {
+        result.push_str("\n\n");
+    }
+    for (n, line) in normalized_main.split('\n').enumerate() {
+        if n > 0 {
+            result.push('\n');
+        }
+        if let Some(definition) = definitions.remove(line) {
+            result.push_str(&definition);
+        } else {
+            result.push_str(line);
+        }
+    }
+    result
+}
+
 pub(super) fn blocks(source: &str) -> String {
+    blocks_with_slot(source, None)
+}
+
+fn blocks_with_slot(source: &str, slot_prefix: Option<&str>) -> String {
     let initial_mask = mask_code_and_destinations(source);
-    let initial_rows = djot_table_rows(source, &initial_mask);
+    let row_source = slot_prefix.map(|prefix| {
+        source
+            .split('\n')
+            .map(|line| {
+                if line.starts_with(prefix) {
+                    " ".repeat(line.len())
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    let initial_rows = djot_table_rows(row_source.as_deref().unwrap_or(source), &initial_mask);
     let initial_fences = mask_djot_fences(source, None, &initial_rows, true);
-    let normalized = quoted_list_boundaries(source, &initial_mask, &initial_fences);
+    let normalized = quoted_list_boundaries(
+        source,
+        &initial_mask,
+        &initial_fences,
+        &initial_rows,
+        slot_prefix,
+    );
     let changed = matches!(&normalized, std::borrow::Cow::Owned(_));
     let source = normalized.as_ref();
     let mask = if changed {
@@ -426,7 +805,20 @@ pub(super) fn blocks(source: &str) -> String {
     let masks: Vec<_> = mask.split('\n').collect();
     let lines: Vec<_> = source.split('\n').collect();
     let rows = if changed {
-        djot_table_rows(source, &mask)
+        let row_source = slot_prefix.map(|prefix| {
+            source
+                .split('\n')
+                .map(|line| {
+                    if line.starts_with(prefix) {
+                        " ".repeat(line.len())
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        djot_table_rows(row_source.as_deref().unwrap_or(source), &mask)
     } else {
         initial_rows
     };
@@ -457,6 +849,13 @@ pub(super) fn blocks(source: &str) -> String {
     let mut in_quote = false;
     let mut quote_paragraph_depth = None;
     for (n, raw) in lines.iter().enumerate() {
+        if slot_prefix.is_some_and(|prefix| raw.starts_with(prefix)) {
+            paragraph = false;
+            previous_blank = true;
+            in_heading = false;
+            result.push((*raw).to_owned());
+            continue;
+        }
         let (indent, indent_bytes) = leading_indent(raw);
         let text = &raw[indent_bytes..];
         let visible = masks[n].get(indent_bytes..).unwrap_or("");
@@ -488,6 +887,7 @@ pub(super) fn blocks(source: &str) -> String {
             }
             in_heading = false;
         }
+        let outer_source = lists.first().map(|list| list.source);
         let block = rows[n]
             || fence_masks[n] != *raw
             || heading.is_match(visible)
@@ -512,9 +912,7 @@ pub(super) fn blocks(source: &str) -> String {
             }
         }
         if block {
-            while lists.last().is_some_and(|list| {
-                indent <= list.source || lists.len() > 1 && indent < list.column
-            }) {
+            while lists.last().is_some_and(|list| indent <= list.source) {
                 lists.pop();
                 paragraph = false;
                 in_heading = false;
@@ -549,8 +947,10 @@ pub(super) fn blocks(source: &str) -> String {
         }
         let target_indent = lists
             .last()
-            .filter(|list| indent >= list.column)
-            .map_or(indent, |list| list.target_column + indent - list.column);
+            .filter(|list| indent > list.source)
+            .map_or(indent, |list| {
+                list.target_column + indent.saturating_sub(list.column)
+            });
         let display = if target_indent == indent {
             (*raw).to_owned()
         } else {
@@ -671,7 +1071,11 @@ pub(super) fn blocks(source: &str) -> String {
                 definition_columns.pop();
             }
         }
-        if let Some(item) = marker.captures(visible).filter(|_| !thematic(text)) {
+        if let Some(item) = marker
+            .captures(visible)
+            .and_then(|_| marker.captures(text))
+            .filter(|_| !thematic(text))
+        {
             if in_quote && !previous_blank {
                 if !paragraph && !lists.last().is_some_and(|list| indent <= list.source) {
                     result.push(String::new());
@@ -685,6 +1089,8 @@ pub(super) fn blocks(source: &str) -> String {
                 .is_some_and(|list| indent < list.source);
             while lists.last().is_some_and(|list| indent < list.source) {
                 lists.pop();
+                paragraph = false;
+                in_heading = false;
             }
             if let Some(parent) = lists
                 .last_mut()
@@ -825,7 +1231,7 @@ pub(super) fn blocks(source: &str) -> String {
             continue;
         }
         if previous_blank {
-            while lists.last().is_some_and(|list| indent < list.column) {
+            while lists.last().is_some_and(|list| indent <= list.source) {
                 lists.pop();
             }
         }
@@ -872,7 +1278,7 @@ pub(super) fn blocks(source: &str) -> String {
                     crate::parse::lint_invalid_container_metadata(text),
                     lists
                         .last()
-                        .filter(|list| indent >= list.column)
+                        .filter(|list| indent > list.source)
                         .map(|list| list.column),
                     line_offsets[n],
                 ));
@@ -920,13 +1326,26 @@ pub(super) fn blocks(source: &str) -> String {
                 && !text.contains(':')
                 && rows.get(n + 1) == Some(&true))
             {
-                result.push(display.clone());
+                result.push(if lists.is_empty() && definition_columns.is_empty() {
+                    text.to_owned()
+                } else {
+                    display.clone()
+                });
             }
             paragraph = false;
         } else {
             let attribute = text.starts_with('{')
                 && read_djot_word_attributes(text, 0).is_some_and(|(end, _)| end == text.len());
-            result.push(display.clone());
+            result.push(
+                if previous_blank
+                    && lists.is_empty()
+                    && outer_source.is_some_and(|source| indent <= source)
+                {
+                    text.to_owned()
+                } else {
+                    display.clone()
+                },
+            );
             if previous_blank && !attribute && !reference.is_match(text) {
                 for list in &mut lists {
                     if indent > list.source {

@@ -105,7 +105,7 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     let (literal_attributes, inherited) = escape_invalid_djot_attributes(body);
     let attributes = normalize_djot_attribute_lines(&literal_attributes);
     let fences = normalize_djot_fences(&attributes);
-    let blocks = normalize::blocks(&fences);
+    let blocks = normalize::note_blocks(&fences, stripped_definitions);
     let fence_closers = normalize::table_edges(&blocks);
     let folded_references = fold_djot_references(&fence_closers);
     let inline = normalize::inline(&folded_references);
@@ -2711,9 +2711,23 @@ fn mask_djot_fences(
     let mut previous_depth = 0;
     let block_definition = cached_regex!(r"^[ \t]*\[[^\^\]][^\]]*\]:").unwrap();
     let mut ancestors: Vec<Vec<(usize, usize, usize)>> = Vec::new();
+    let quote_prefix = cached_regex!(r"\A[ \t]*>(?:[ \t]|$)").unwrap();
     for (line_index, raw) in source.split_inclusive('\n').enumerate() {
         let line = raw.trim_end_matches('\n');
-        let (depth, content) = quoted(line);
+        let (depth, content) = if let Some((_, _, _, _, host)) = fence {
+            let mut depth = 0;
+            let mut at = 0;
+            while depth < host {
+                let Some(prefix) = quote_prefix.find(&line[at..]) else {
+                    break;
+                };
+                depth += 1;
+                at += prefix.end();
+            }
+            (depth, &line[at..])
+        } else {
+            quoted(line)
+        };
         let mut can_normalize = normalize_boundary
             || row_boundaries.get(line_index.wrapping_sub(1)) == Some(&true)
             || depth < previous_depth;
@@ -6016,13 +6030,15 @@ fn normalize_djot_footnotes(
     let reference_div = cached_regex!(r"^(:{3,})(?:[ \t]+\S.*)?[ \t]*$").unwrap();
     let reference_fence_end = cached_regex!(r"^(?:`{3,}|~{3,})[ \t]*$").unwrap();
     let reference_continuation = cached_regex!(r"^[^ \t\r\n]+\r?$").unwrap();
+    let note_paragraph_head = cached_regex!(r"^\[\^[^\]\n]+\]:[ \t]*(.+)$").unwrap();
+    let note_paragraph_block = cached_regex!(r"^(?:>(?:[ \t]|$)|[-*+][ \t]|#{1,6}(?:[ \t]|$)|[`~]{3,}|:{3,}|[|]|\{|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)[ \t])").unwrap();
     for (n, line) in note_lines.iter().enumerate() {
         let at = prefix.find(line).unwrap().len();
         line_heads.insert(offset + at);
         let previous_line = n.checked_sub(1).map_or("", |n| note_lines[n]);
         let previous_prefix = prefix.find(previous_line).unwrap().as_str();
         let previous = previous_line[previous_prefix.len()..].trim();
-        let boundary = boundaries.is_some_and(|strip| strip.is_boundary(previous_line))
+        let mut boundary = boundaries.is_some_and(|strip| strip.is_boundary(previous_line))
             || previous.is_empty()
             || thematic.is_match(previous_line)
             || at < previous_prefix.len() && item.is_match(previous_prefix)
@@ -6030,6 +6046,13 @@ fn normalize_djot_footnotes(
             || item.is_match(&line[..at])
             || line[..at].matches('>').count() < previous_prefix.matches('>').count()
             || block.is_match(previous);
+        if at > previous_prefix.len() {
+            if let Some(previous_note) = note_paragraph_head.captures(previous) {
+                if !note_paragraph_block.is_match(&previous_note[1]) {
+                    boundary = false;
+                }
+            }
+        }
         let content = &line[at..];
         let item_prefix = item.is_match(&line[..at]);
         let (quote_depth, quote_content) = quoted(line);
@@ -6731,6 +6754,11 @@ fn djot_table_rows(source: &str, mask: &str) -> Vec<bool> {
     let mut previous_row = false;
     let mut previous_block = true;
     let mut footnote_column = None;
+    let mut note_container: Option<(usize, usize)> = None;
+    let physical_quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
+    let actual_item = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
+    let mut item_owners: Vec<(usize, usize)> = Vec::new();
+    let mut held_quote = 0;
     let note = cached_regex!(
         r"^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\))[ \t]+)*\[\^[^\]\n]+\]:"
     )
@@ -6742,15 +6770,91 @@ fn djot_table_rows(source: &str, mask: &str) -> Vec<bool> {
             let bytes = line.as_bytes();
             let end = line.trim_end().len().saturating_sub(1);
             let content = &line[at..];
+            let prefix = physical_quote.find(line).unwrap().as_str();
+            let depth = prefix.bytes().filter(|&b| b == b'>').count();
+            let body = &line[prefix.len()..];
+            let indent = body
+                .bytes()
+                .take_while(|b| matches!(b, b' ' | b'\t'))
+                .count();
+            let text = &body[indent..];
+            let visible_quote = prefix
+                .find('>')
+                .is_some_and(|at| mask.as_bytes().get(offset + at) == Some(&b'>'));
             let closes_note = footnote_column.is_some_and(|column| at < column);
+            let literal_quote_blank =
+                depth > held_quote && !previous_block && !closes_note && content.trim().is_empty();
+            let closes_quote = depth < held_quote && content.starts_with('|');
+            let closes_item = item_owners.last().is_some_and(|&(owner_depth, column)| {
+                depth < owner_depth || depth == owner_depth && indent <= column
+            }) && content.starts_with('|');
+            let opens_item = actual_item.is_match(text)
+                && (previous_block
+                    || previous_row
+                    || item_owners.last().is_some_and(|&(owner_depth, column)| {
+                        depth == owner_depth && indent <= column
+                    }));
+            if opens_item || closes_item {
+                while item_owners.last().is_some_and(|&(owner_depth, column)| {
+                    depth < owner_depth || depth == owner_depth && indent <= column
+                }) {
+                    item_owners.pop();
+                }
+                if opens_item {
+                    item_owners.push((depth, indent));
+                }
+            }
+            if visible_quote && (previous_block || closes_note || held_quote > 0) {
+                held_quote = depth;
+            } else if depth == 0 && previous_block && !content.trim().is_empty() {
+                held_quote = 0;
+            }
+            let closes_container = note_container.is_some_and(|(column, owner_depth)| {
+                at <= column
+                    && !content.trim().is_empty()
+                    && (owner_depth == 0 || depth < owner_depth)
+            });
+            if closes_container {
+                note_container = None;
+            }
             if closes_note {
                 footnote_column = None;
+                note_container = None;
             }
-            let allowed =
-                previous_block || previous_row || item_re.is_match(&line[..at]) || closes_note;
+            let allowed = previous_block
+                || previous_row
+                || item_re.is_match(&line[..at])
+                || closes_note
+                || closes_container
+                || closes_quote
+                || closes_item;
             if allowed {
                 if let Some(m) = note.find(line) {
                     footnote_column = Some(m.as_str().find("[^").unwrap() + 2);
+                    let after = &line[m.end()..];
+                    let padding = after
+                        .bytes()
+                        .take_while(|b| matches!(b, b' ' | b'\t'))
+                        .count();
+                    let body = &after[padding..];
+                    if actual_item.is_match(body)
+                        || body.starts_with('>')
+                            && body
+                                .as_bytes()
+                                .get(1)
+                                .map_or(true, |b| matches!(b, b' ' | b'\t'))
+                    {
+                        let inline_prefix = physical_quote.find(body).unwrap().as_str();
+                        let inline_depth = inline_prefix.bytes().filter(|&b| b == b'>').count();
+                        note_container = Some((
+                            m.end() + padding,
+                            if inline_depth > 0 {
+                                depth + inline_depth
+                            } else {
+                                0
+                            },
+                        ));
+                    }
                 }
             }
             let row = allowed
@@ -6759,7 +6863,8 @@ fn djot_table_rows(source: &str, mask: &str) -> Vec<bool> {
                 && bytes.get(end) == Some(&b'|')
                 && mask.as_bytes().get(offset + end) == Some(&b'|')
                 && end.checked_sub(1).and_then(|p| bytes.get(p)) != Some(&b'\\');
-            previous_block = content.trim().is_empty() || boundary_re.is_match(content);
+            previous_block = !literal_quote_blank
+                && (content.trim().is_empty() || boundary_re.is_match(content));
             previous_row = row;
             offset += line.len() + 1;
             row
@@ -7278,6 +7383,13 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                     || depth < previous_quote)
             {
                 output.push_str(&source[cursor..offset]);
+                let mut quote_end = 0;
+                for _ in 0..depth {
+                    if let Some(prefix) = quote_re.find(&line[quote_end..]) {
+                        quote_end += prefix.end();
+                    }
+                }
+                output.push_str(line[..quote_end].trim_end_matches([' ', '\t']));
                 output.push('\n');
                 cursor = offset;
             }

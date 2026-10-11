@@ -80,3 +80,23 @@ fn multiline_footnote_code_loss_uses_the_original_opener() {
         "Multiline inline code uses raw HTML; plain-text export omits it."
     );
 }
+
+#[test]
+fn nested_notes_with_lazy_continuation_have_bounded_output() {
+    for size in [16, 32, 64] {
+        let headers = (0..size)
+            .map(|n| format!("{}[^n{n}]: a", " ".repeat(n)))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let references = (0..size)
+            .map(|n| format!("[^n{n}]"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let source = format!("{headers}\n{}\n{references}\n", "lazy\n".repeat(4096));
+        let result = carve::djot_to_carve(&source);
+        assert!(result.len() <= source.len() * 2);
+        let html = carve::to_html(&result);
+        assert_eq!(html.matches("lazy").count(), 4096);
+        assert_eq!(html.matches("role=\"doc-noteref\"").count(), size);
+    }
+}
