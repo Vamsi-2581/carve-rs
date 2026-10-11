@@ -100,3 +100,13 @@ fn nested_notes_with_lazy_continuation_have_bounded_output() {
         assert_eq!(html.matches("role=\"doc-noteref\"").count(), size);
     }
 }
+
+#[test]
+fn deep_inline_lists_with_lazy_quoted_text_have_bounded_output() {
+    for size in [16, 32, 64] {
+        let source = format!("{}a\n{}", "- > ".repeat(size), " > lazy\n".repeat(1024));
+        let result = carve::djot_to_carve(&source);
+        assert!(result.len() <= source.len() * 2);
+        assert_eq!(carve::to_html(&result).matches("lazy").count(), 1024);
+    }
+}

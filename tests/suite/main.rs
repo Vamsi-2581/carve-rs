@@ -1872,10 +1872,10 @@ mod a_closed_marker_line_fence_ends_its_host;
 #[path = "../a_literal_caption_marker_after_an_empty_quote_needs_no_escape.rs"]
 mod a_literal_caption_marker_after_an_empty_quote_needs_no_escape;
 
-#[path = "../raw_html_carriers_follow_the_import_trust_mode.rs"]
-mod raw_html_carriers_follow_the_import_trust_mode;
 
 #[path = "../a_closed_colon_in_a_quoted_item_releases_ownership.rs"]
 mod a_closed_colon_in_a_quoted_item_releases_ownership;
 #[path = "../djot_quoted_list_boundaries.rs"]
 mod djot_quoted_list_boundaries;
+#[path = "../raw_html_carriers_follow_the_import_trust_mode.rs"]
+mod raw_html_carriers_follow_the_import_trust_mode;

@@ -236,6 +236,14 @@ fn quoted_list_boundaries<'a>(
                 lists.pop();
             }
         }
+        if text.is_empty() {
+            while lists
+                .last()
+                .is_some_and(|&(owner_depth, _, _, _, _, _)| owner_depth > quote_depth)
+            {
+                lists.pop();
+            }
+        }
         let ends_item =
             lists
                 .last()
@@ -255,6 +263,24 @@ fn quoted_list_boundaries<'a>(
             {
                 lists.pop();
             }
+        }
+        if let Some(index) = lists
+            .iter()
+            .take_while(|&&(owner_depth, _, _, _, _, _)| owner_depth < quote_depth)
+            .position(|&(owner_depth, column, _, owner_prefix, _, _)| {
+                owner_depth < quote_depth && column_at(owner_depth, owner_prefix) <= column
+            })
+        {
+            let owner_depth = lists[index].0;
+            if paragraph && !previous_blank {
+                let end = boundary
+                    .match_indices('>')
+                    .nth(owner_depth)
+                    .map_or(boundary.len(), |(at, _)| at + 1);
+                insertions.push((line_offset, line_offset, format!("{}\n", &boundary[..end])));
+            }
+            lists.truncate(index);
+            paragraph = false;
         }
         let outside_item =
             lists
@@ -603,6 +629,7 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
     let mut blank = true;
     let mut previous_depth = 0;
     let mut last_boundary = false;
+    let mut main_item: Option<(usize, usize)> = None;
     let mut held_code: Option<(u8, usize, usize, Option<usize>)> = None;
     for ((line, masked), fenced) in source
         .split('\n')
@@ -650,9 +677,17 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
             held_code = None;
         }
         let active = notes.last();
+        let outside_main_item = active.is_none()
+            && main_item.is_some_and(|(owner_depth, column)| {
+                depth < owner_depth
+                    || columns
+                        .get(owner_depth)
+                        .is_some_and(|current| *current <= column)
+            });
         let can_define = blank
             || !paragraph
             || last_boundary
+            || outside_main_item
             || depth < previous_depth
             || active.is_some_and(|n| depth <= n.depth && indent <= n.column);
         let head = can_define
@@ -666,12 +701,13 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
                         && code.is_match(&caps[2][djot_content_start(&caps[2])..])
             });
         while let Some(note) = notes.last() {
-            if fenced != line {
+            if fenced != line && (held_code.is_some() || !code.is_match(text)) {
                 break;
             }
             let column = columns.get(note.depth).copied().unwrap_or(indent);
             let outside = depth < note.depth || column <= note.column;
             let starts_block = head.is_some()
+                || code.is_match(text)
                 || depth > note.depth
                 || block.is_match(visible)
                 || metadata.is_boundary(line);
@@ -722,7 +758,10 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
                     Some(indent + 1),
                 ));
             }
-            let first_padding = if item.is_match(body) {
+            let quoted_item = quote
+                .find(body)
+                .is_some_and(|prefix| !prefix.is_empty() && item.is_match(&body[prefix.end()..]));
+            let first_padding = if item.is_match(body) || quoted_item {
                 indent + caps[1].encode_utf16().count()
             } else if code.is_match(body) {
                 2
@@ -800,9 +839,23 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
             paragraph = note.paragraph;
             blank = note.blank;
         } else {
+            if outside_main_item
+                && (blank || !paragraph || block.is_match(visible))
+                && !item.is_match(text)
+                && !text.is_empty()
+            {
+                main_item = None;
+            }
             main.push(line.to_owned());
             blank = text.is_empty();
-            paragraph = !blank && !block.is_match(visible);
+            if item.is_match(text) && (!paragraph || outside_main_item) {
+                main_item = Some((depth, indent));
+                let content = &text[djot_content_start(text)..];
+                paragraph =
+                    !content.is_empty() && !block.is_match(content) && !code.is_match(content);
+            } else {
+                paragraph = !blank && !block.is_match(visible);
+            }
         }
         previous_depth = depth;
         last_boundary = metadata.is_boundary(line);
@@ -837,7 +890,22 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
             unplaced.push(definition);
         }
     }
-    let normalized_main = blocks_with_slot(&main.join("\n"), Some(&slot_prefix));
+    let mut main_source = String::new();
+    for (index, line) in main.iter().enumerate() {
+        if index > 0 {
+            main_source.push('\n');
+        }
+        main_source.push_str(line);
+        if line.starts_with(&slot_prefix)
+            && main
+                .get(index + 1)
+                .is_some_and(|next| code.is_match(next.trim_start_matches([' ', '\t'])))
+        {
+            main_source.push('\n');
+        }
+    }
+    let main = normalize_djot_fences(&main_source);
+    let normalized_main = blocks_with_slot(&main, Some(&slot_prefix));
     let mut result = unplaced.join("\n\n");
     if !result.is_empty() {
         result.push_str("\n\n");

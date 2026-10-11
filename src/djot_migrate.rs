@@ -3508,6 +3508,9 @@ fn normalize_plus_bullets(source: &str) -> String {
 }
 
 fn table_continuation_lines(source: &str) -> HashSet<usize> {
+    if !source.contains('|') {
+        return HashSet::new();
+    }
     let _paragraph_cache = ParagraphCacheScope::new(source);
     fn visit(blocks: &[BlockNode], lines: &mut HashSet<usize>) {
         for block in blocks {
