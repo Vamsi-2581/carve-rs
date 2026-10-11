@@ -35,7 +35,12 @@ fn multiline_code_fallback_reports_plain_export_loss() {
 
 #[test]
 fn container_prefixes_do_not_report_code_loss() {
-    for source in ["> a `b\n> c` d\n", "- > a `b\n  > c` d\n"] {
+    for source in [
+        "> a `b\n> c` d\n",
+        "- > a `b\n  > c` d\n",
+        "ref[^n]\n\n[^n]: a\n\np `b\nc` d\n",
+        "ref[^n]\n\n[^n]: a\n> p `b\n> c` d\n",
+    ] {
         let result = carve::migrate_djot(source);
         assert!(
             !result
@@ -57,4 +62,21 @@ fn output_growth_is_linear_for_wide_numeric_list_markers() {
         let expected = format!("1. > a\n{}", "   > b\n".repeat(size));
         assert_eq!(carve::to_html(&result), carve::to_html(&expected));
     }
+}
+
+#[test]
+fn multiline_footnote_code_loss_uses_the_original_opener() {
+    let result = carve::migrate_djot("ref[^n]\n\n[^n]: a `b\nc` d\n");
+    let losses: Vec<_> = result
+        .report
+        .diagnostics
+        .iter()
+        .filter(|row| row.code == "structure-unspellable")
+        .collect();
+    assert_eq!(losses.len(), 1);
+    assert_eq!(losses[0].path.as_deref(), Some("line:3"));
+    assert_eq!(
+        losses[0].message,
+        "Multiline inline code uses raw HTML; plain-text export omits it."
+    );
 }
