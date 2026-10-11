@@ -6382,11 +6382,9 @@ fn normalize_djot_footnotes(
 
 fn has_djot_code_layout_candidates(source: &str) -> bool {
     source.contains("\\|")
-        || (source.contains('`') && cached_regex!(r"\n[ \t]*>").unwrap().is_match(source))
+        || (source.contains('`') && cached_regex!(r"(?:^|\n)[ \t]*(?:(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+(?:\[[ xX]\][ \t]+)?|\[\^[^\]\n]+\]:[ \t]*)*>").unwrap().is_match(source))
         || (source.contains("```")
-            && cached_regex!(r"(?:^|\n)(?:[ \t]*>(?:[ \t]|$))*[ \t]+`{3,}")
-                .unwrap()
-                .is_match(source))
+            && cached_regex!(r"(?:^|\n)(?:[ \t]*>(?:[ \t]|$))*[ \t]+`{3,}").unwrap().is_match(source))
 }
 
 fn normalize_djot_fences(source: &str) -> String {
