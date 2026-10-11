@@ -609,13 +609,19 @@ struct NoteBuffer {
     slot: Option<String>,
 }
 
-pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -> String {
+pub(super) fn note_blocks(
+    source: &str,
+    metadata: &DjotFootnoteAttributeStrip,
+    empty_note: &str,
+) -> String {
     if !source.contains("[^") {
         return blocks(source);
     }
     let quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
     let header = cached_regex!(r"^(\[\^[^\]\n]+\]:[ \t]*)(.*)$").unwrap();
+    let first_header = cached_regex!(r"^\[\^[^\]\n]+\]:[ \t]*").unwrap();
     let item = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
+    let inline_header = cached_regex!(r"^((?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)((?:>[ \t](?:[ \t]*>[ \t])*)?)[ \t]*(\[\^[^\]\n]+\]:[ \t]*)(.*)$").unwrap();
     let block = cached_regex!(r"^(?:#{1,6}(?:[ \t]|$)|:{3,}|[|]|[`~]{3,}|[-*+][ \t]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)[ \t]|\[[^\]^\n][^\]\n]*\]:)").unwrap();
     let code = cached_regex!(r"^(`{3,}|~{3,})[ \t]*[A-Za-z0-9_+#.-]*$").unwrap();
     let mask = mask_code_and_destinations(source);
@@ -631,26 +637,80 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
     let mut last_boundary = false;
     let mut main_item: Option<(usize, usize)> = None;
     let mut held_code: Option<(u8, usize, usize, Option<usize>)> = None;
-    for ((line, masked), fenced) in source
+    for (note_line_index, ((line, masked), fenced)) in source
         .split('\n')
         .zip(mask.split('\n'))
         .zip(fence_mask.split('\n'))
+        .enumerate()
     {
-        let prefix = quote.find(line).unwrap().as_str();
+        let physical_prefix = quote.find(line).unwrap().as_str();
+        let physical_depth = physical_prefix.bytes().filter(|&b| b == b'>').count();
+        let physical_rest = &line[physical_prefix.len()..];
+        let physical_indent = physical_rest
+            .bytes()
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .count();
+        let may_open_inline = blank
+            || !paragraph
+            || last_boundary
+            || physical_depth < previous_depth
+            || main_item.is_some_and(|(owner_depth, column)| {
+                physical_depth <= owner_depth && physical_indent <= column
+            })
+            || notes.last().is_some_and(|note| {
+                physical_depth <= note.depth
+                    && (physical_indent <= note.column
+                        || note
+                            .item_column
+                            .is_some_and(|column| physical_indent <= column))
+            });
+        let inline = may_open_inline
+            .then(|| inline_header.captures(&physical_rest[physical_indent..]))
+            .flatten();
+        let virtual_prefix = inline
+            .as_ref()
+            .filter(|caps| !caps[2].is_empty())
+            .map(|caps| {
+                format!(
+                    "{physical_prefix}{}{}{}",
+                    " ".repeat(physical_indent),
+                    &caps[1],
+                    &caps[2]
+                )
+            });
+        let prefix = virtual_prefix.as_deref().unwrap_or(physical_prefix);
         let depth = prefix.bytes().filter(|&b| b == b'>').count();
         let rest = &line[prefix.len()..];
         let indent = rest
             .bytes()
             .take_while(|b| matches!(b, b' ' | b'\t'))
             .count();
-        let text = &rest[indent..];
-        let visible = masked.get(prefix.len() + indent..).unwrap_or("");
+        let inline_width = inline
+            .as_ref()
+            .filter(|caps| caps[2].is_empty())
+            .map_or(0, |caps| caps[1].len());
+        let header_column = indent + inline_width;
+        let text = &rest[indent + inline_width..];
+        let visible = masked
+            .get(prefix.len() + indent + inline_width..)
+            .unwrap_or("");
+        let quote_view = virtual_prefix.as_ref().map(|_| {
+            let marker = &inline.as_ref().unwrap()[1];
+            let start = physical_prefix.len() + physical_indent;
+            format!(
+                "{}{}{}",
+                &line[..start],
+                " ".repeat(marker.len()),
+                &line[start + marker.len()..]
+            )
+        });
+        let column_line = quote_view.as_deref().unwrap_or(line);
         let mut columns = Vec::with_capacity(depth + 1);
         let mut ends = Vec::with_capacity(depth);
         let mut at = 0;
         for level in 0..=depth {
             let start = at;
-            while line
+            while column_line
                 .as_bytes()
                 .get(at)
                 .is_some_and(|b| matches!(b, b' ' | b'\t'))
@@ -660,7 +720,7 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
             columns.push(at - start);
             if level < depth {
                 at += 1;
-                if line
+                if column_line
                     .as_bytes()
                     .get(at)
                     .is_some_and(|b| matches!(b, b' ' | b'\t'))
@@ -684,7 +744,8 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
                         .get(owner_depth)
                         .is_some_and(|current| *current <= column)
             });
-        let can_define = blank
+        let can_define = inline.is_some()
+            || blank
             || !paragraph
             || last_boundary
             || outside_main_item
@@ -695,7 +756,7 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
             .flatten()
             .filter(|caps| {
                 let colon = caps[1].trim_end_matches([' ', '\t']).len() - 1;
-                masked.as_bytes().get(prefix.len() + indent + colon) == Some(&b':')
+                masked.as_bytes().get(prefix.len() + header_column + colon) == Some(&b':')
                     || held_code.is_none()
                         && fenced != line
                         && code.is_match(&caps[2][djot_content_start(&caps[2])..])
@@ -715,17 +776,47 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
                 && !(note.paragraph && !note.blank && !starts_block && depth <= note.depth)
                 && (!text.is_empty() || depth > note.depth)
             {
-                completed.push(notes.pop().unwrap());
+                let closed = notes.pop().unwrap();
                 if let Some(parent) = notes.last_mut() {
+                    if closed.blank
+                        && parent.item_column.is_some_and(|column| indent <= column)
+                        && !block.is_match(visible)
+                        && !item.is_match(text)
+                    {
+                        parent.body.push(String::new());
+                    }
                     parent.paragraph = false;
                 }
+                completed.push(closed);
             } else {
                 break;
             }
         }
         if let Some(caps) = head {
+            if let Some(inline) = &inline {
+                let dummy = format!(
+                    "{physical_prefix}{}{}{}{empty_note}",
+                    " ".repeat(physical_indent),
+                    &inline[1],
+                    &inline[2]
+                );
+                if let Some(parent) = notes.last_mut() {
+                    let host = ends.get(parent.depth.wrapping_sub(1)).copied().unwrap_or(0);
+                    let payload = &dummy[host..];
+                    let padding = payload
+                        .bytes()
+                        .take_while(|b| matches!(b, b' ' | b'\t'))
+                        .count();
+                    parent
+                        .body
+                        .push(payload[padding.min(parent.column)..].to_owned());
+                } else {
+                    main.push(dummy);
+                    main_item = Some((physical_depth, physical_indent));
+                }
+            }
             let parent = notes.last_mut();
-            let slot = if parent.is_none() && depth == 0 && indent == 0 {
+            let slot = if parent.is_none() && depth == 0 && header_column == 0 {
                 Some(format!("{slot_prefix}{}\0", completed.len()))
             } else {
                 None
@@ -736,10 +827,12 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
                     .unwrap_or("")
                     .trim_end()
                     .to_owned();
-                parent.body.push(kept);
+                if inline.is_none() {
+                    parent.body.push(kept);
+                }
                 None
             } else {
-                if depth > 0 {
+                if depth > 0 && inline.is_none() {
                     main.push(prefix.trim_end().to_owned());
                 }
                 Some(())
@@ -755,14 +848,14 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
                     opener[1].as_bytes()[0],
                     opener[1].len(),
                     depth,
-                    Some(indent + 1),
+                    Some(header_column + 1),
                 ));
             }
             let quoted_item = quote
                 .find(body)
                 .is_some_and(|prefix| !prefix.is_empty() && item.is_match(&body[prefix.end()..]));
             let first_padding = if item.is_match(body) || quoted_item {
-                indent + caps[1].encode_utf16().count()
+                caps[1].encode_utf16().count()
             } else if code.is_match(body) {
                 2
             } else {
@@ -771,12 +864,12 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
             let body_paragraph = !body.is_empty() && !block.is_match(body) && !code.is_match(body);
             notes.push(NoteBuffer {
                 depth,
-                column: indent,
+                column: header_column,
                 label: caps[1].to_owned(),
                 body: vec![format!("{}{body}", " ".repeat(first_padding))],
                 item_column: item
                     .is_match(body)
-                    .then_some(indent + caps[1].encode_utf16().count()),
+                    .then_some(header_column + caps[1].encode_utf16().count()),
                 paragraph_depth: depth
                     + body[..djot_content_start(body)]
                         .bytes()
@@ -786,6 +879,51 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
                 blank: !body_paragraph && !item.is_match(body) && !starts_quote(body),
                 slot,
             });
+            let mut nested_body = body;
+            while let Some(marker) = item.find(nested_body) {
+                let after_marker = &nested_body[marker.end()..];
+                let Some(nested) = first_header.find(after_marker) else {
+                    break;
+                };
+                let parent = notes.last_mut().unwrap();
+                let child_column = parent.column
+                    + parent.label.encode_utf16().count()
+                    + marker.as_str().encode_utf16().count();
+                parent.body[0] = format!(
+                    "{}{}{empty_note}",
+                    " ".repeat(parent.label.encode_utf16().count()),
+                    marker.as_str()
+                );
+                nested_body = &after_marker[nested.end()..];
+                let child_item = item.is_match(nested_body);
+                let child_paragraph = !nested_body.is_empty()
+                    && !block.is_match(nested_body)
+                    && !code.is_match(nested_body);
+                let child_padding = if child_item {
+                    nested.as_str().encode_utf16().count()
+                } else {
+                    0
+                };
+                notes.push(NoteBuffer {
+                    depth,
+                    column: child_column,
+                    label: nested.as_str().to_owned(),
+                    body: vec![if item
+                        .find(nested_body)
+                        .is_some_and(|marker| first_header.is_match(&nested_body[marker.end()..]))
+                    {
+                        String::new()
+                    } else {
+                        format!("{}{nested_body}", " ".repeat(child_padding))
+                    }],
+                    item_column: child_item
+                        .then_some(child_column + nested.as_str().encode_utf16().count()),
+                    paragraph_depth: depth,
+                    paragraph: child_paragraph || child_item || starts_quote(nested_body),
+                    blank: !child_paragraph && !child_item && !starts_quote(nested_body),
+                    slot: None,
+                });
+            }
             paragraph = notes.last().unwrap().paragraph;
             blank = notes.last().unwrap().blank;
             previous_depth = depth;
@@ -816,8 +954,16 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
                 .bytes()
                 .take_while(|b| matches!(b, b' ' | b'\t'))
                 .count();
-            note.body
-                .push(payload[padding.min(note.column)..].to_owned());
+            let removed = padding.min(note.column);
+            let mut payload = payload[removed..].to_owned();
+            let content_at = djot_content_start(line);
+            if !rows[note_line_index]
+                && line.as_bytes().get(content_at) == Some(&b'|')
+                && masked.as_bytes().get(content_at) == Some(&b'|')
+            {
+                payload.insert(content_at - host - removed, '\\');
+            }
+            note.body.push(payload);
             let outside_item = note.item_column.is_some_and(|column| {
                 columns.get(note.depth).copied().unwrap_or(indent) <= column
                     && (note.blank || depth > note.depth || block.is_match(visible))
@@ -870,7 +1016,7 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
     let mut unplaced = Vec::new();
     for note in completed {
         let body = normalize_djot_fences(&note.body.join("\n"));
-        let converted = blocks(&body);
+        let converted = blocks_with_slot(&body, None, Some(empty_note));
         let mut lines = converted.split('\n');
         let mut definition = format!(
             "{}{}",
@@ -905,7 +1051,7 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
         }
     }
     let main = normalize_djot_fences(&main_source);
-    let normalized_main = blocks_with_slot(&main, Some(&slot_prefix));
+    let normalized_main = blocks_with_slot(&main, Some(&slot_prefix), Some(empty_note));
     let mut result = unplaced.join("\n\n");
     if !result.is_empty() {
         result.push_str("\n\n");
@@ -924,10 +1070,10 @@ pub(super) fn note_blocks(source: &str, metadata: &DjotFootnoteAttributeStrip) -
 }
 
 pub(super) fn blocks(source: &str) -> String {
-    blocks_with_slot(source, None)
+    blocks_with_slot(source, None, None)
 }
 
-fn blocks_with_slot(source: &str, slot_prefix: Option<&str>) -> String {
+fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<&str>) -> String {
     let initial_mask = mask_code_and_destinations(source);
     let row_source = slot_prefix.map(|prefix| {
         source
@@ -942,7 +1088,11 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     });
-    let initial_rows = djot_table_rows(row_source.as_deref().unwrap_or(source), &initial_mask);
+    let initial_rows = djot_table_rows_with_empty_note(
+        row_source.as_deref().unwrap_or(source),
+        &initial_mask,
+        empty_note,
+    );
     let initial_fences = mask_djot_fences(source, None, &initial_rows, true);
     let normalized = quoted_list_boundaries(
         source,
@@ -987,7 +1137,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>) -> String {
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        djot_table_rows(row_source.as_deref().unwrap_or(source), &mask)
+        djot_table_rows_with_empty_note(row_source.as_deref().unwrap_or(source), &mask, empty_note)
     } else {
         initial_rows
     };
@@ -1395,7 +1545,10 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>) -> String {
                 ));
             }
             in_heading = heading.is_match(item_body);
-            paragraph = !in_quote && !item_div && !in_heading;
+            paragraph = !in_quote
+                && !item_div
+                && !in_heading
+                && !empty_note.is_some_and(|marker| item_body.trim() == marker);
             previous_blank = item_div;
             continue;
         }

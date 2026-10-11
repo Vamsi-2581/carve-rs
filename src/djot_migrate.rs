@@ -105,7 +105,8 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     let (literal_attributes, inherited) = escape_invalid_djot_attributes(body);
     let attributes = normalize_djot_attribute_lines(&literal_attributes);
     let fences = normalize_djot_fences(&attributes);
-    let blocks = normalize::note_blocks(&fences, stripped_definitions);
+    let empty_note = djot_placeholder_prefix(body, "\0DJOTEMPTYNOTE\0");
+    let blocks = normalize::note_blocks(&fences, stripped_definitions, &empty_note);
     let fence_closers = normalize::table_edges(&blocks);
     let folded_references = fold_djot_references(&fence_closers);
     let inline = normalize::inline(&folded_references);
@@ -114,7 +115,6 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     // definition, so an empty Djot body needs a body that renders nothing - a
     // comment. It travels as a NUL token so the text escaper cannot reach it and
     // turn the comment into a literal `%%%%` the reader was never shown.
-    let empty_note = djot_placeholder_prefix(&references, "\0DJOTEMPTYNOTE\0");
     let footnotes = normalize_djot_footnotes(
         &references,
         Some(stripped_definitions),
@@ -123,7 +123,10 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     );
     let links = normalize_djot_links(&footnotes, &inherited);
     let autolinks = normalize_djot_autolinks(&links);
-    let table_pipes = escape_djot_non_table_rows(&normalize_djot_table_pipes(&autolinks));
+    let table_pipes = escape_djot_non_table_rows(
+        &normalize_djot_table_pipes(&autolinks, &empty_note),
+        &empty_note,
+    );
     let folded = fold_heading_continuations(&table_pipes);
     let collapsed = cached_regex!(r"(!?\[([^\[\]\n]*)\])\[\]").unwrap();
     let mut collapsed_mask = mask_code_and_destinations(&folded).into_bytes();
@@ -1880,6 +1883,8 @@ fn convert_djot_block_markers(source: &str) -> String {
     }
     let mut containers: Vec<(usize, bool)> = Vec::new();
     let host_prefix = cached_regex!(r"^(?:[ \t]*> ?|[ \t]*(?:(?:[-*+]|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-zA-Z])[.)]|\([0-9A-Za-z]+\)) +(?:\[[ xX]\] +)?|: |\[\^[^\]\r\n]+\]: +))").unwrap();
+    let parenthesized_marker =
+        cached_regex!(r"^(?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})$").unwrap();
     for index in 0..lines.len() {
         let prefix = quote_prefix_len(masked[index]);
         let quote = &masked[index][..prefix];
@@ -1925,7 +1930,7 @@ fn convert_djot_block_markers(source: &str) -> String {
             let token = &content[1..close + 1];
             let tail = &content[close + 2..];
             if !token.is_empty()
-                && token.chars().all(|ch| ch.is_ascii_alphanumeric())
+                && parenthesized_marker.is_match(token)
                 && tail.starts_with([' ', '\t'])
                 && !tail.trim().is_empty()
             {
@@ -6007,7 +6012,7 @@ fn normalize_djot_footnotes(
         return source.to_owned();
     }
     let mask = mask_djot_inline(source, false);
-    let rows = djot_table_rows(source, &mask);
+    let rows = djot_table_rows_with_empty_note(source, &mask, Some(empty_note));
     let bytes = source.as_bytes();
     let mut non_rows = HashSet::new();
     let mut row_offset = 0;
@@ -6049,13 +6054,13 @@ fn normalize_djot_footnotes(
     };
     let unsupported = |key: &str| key.contains(['[', ']', '`', '<', '>', '|', '\\', '\u{c}', '\0']);
     let prefix = cached_regex!(
-        r"^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\)|:)[ \t]+)*"
+        r"^[ \t]*(?:>[ \t]+|>$)*(?:(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})\)|:)[ \t]+)*"
     )
     .unwrap();
     let head = cached_regex!(r"^\[\^([^\]\n]+)\]:(?:[ \t]|$)").unwrap();
     let thematic = cached_regex!(r"^(?:[ \t]*>[ \t]*)*[ \t]*(?:[-*][ \t]*){3,}$").unwrap();
     let note_lines: Vec<_> = source.split('\n').collect();
-    let item = cached_regex!(r"(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\)|:)[ \t]+").unwrap();
+    let item = cached_regex!(r"(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})\)|:)[ \t]+").unwrap();
     let block = cached_regex!(r"^(?:#{1,6} |`{3,}|~{3,}|:{3,}|\{|\[[^\]]*\]:|(?:[-*][ \t]*){3,}$)")
         .unwrap();
     let reference_head =
@@ -6072,6 +6077,7 @@ fn normalize_djot_footnotes(
     let reference_continuation = cached_regex!(r"^[^ \t\r\n]+\r?$").unwrap();
     let note_paragraph_head = cached_regex!(r"^\[\^[^\]\n]+\]:[ \t]*(.+)$").unwrap();
     let note_paragraph_block = cached_regex!(r"^(?:>(?:[ \t]|$)|[-*+][ \t]|#{1,6}(?:[ \t]|$)|[`~]{3,}|:{3,}|[|]|\{|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)[ \t])").unwrap();
+    let nested_head = cached_regex!(r"\[\^([^\]\n]+)\]:(?:[ \t]|$)").unwrap();
     for (n, line) in note_lines.iter().enumerate() {
         let at = prefix.find(line).unwrap().len();
         line_heads.insert(offset + at);
@@ -6083,7 +6089,7 @@ fn normalize_djot_footnotes(
             || thematic.is_match(previous_line)
             || at < previous_prefix.len() && item.is_match(previous_prefix)
             || n.checked_sub(1).is_some_and(|n| rows.get(n) == Some(&true))
-            || item.is_match(&line[..at])
+            || item.is_match(&line[..at]) && item.is_match(previous_prefix)
             || line[..at].matches('>').count() < previous_prefix.matches('>').count()
             || block.is_match(previous);
         if at > previous_prefix.len() {
@@ -6178,6 +6184,25 @@ fn normalize_djot_footnotes(
                 if unsupported(&key) {
                     djot_note_alias(&key, &mut labels, &mut serial, &reserved);
                 }
+                let body_at = at + caps.get(0).unwrap().end();
+                for nested in
+                    nested_head.captures_iter(&line[body_at..at + djot_content_start(&line[at..])])
+                {
+                    let nested_at = body_at + nested.get(0).unwrap().start();
+                    if mask.as_bytes().get(offset + nested_at) != Some(&b'[') {
+                        continue;
+                    }
+                    let nested_key = key_of(&nested[1]);
+                    defined.insert(nested_key.clone());
+                    definitions.insert(
+                        offset + nested_at,
+                        (nested_key.clone(), offset + nested_at + 2 + nested[1].len()),
+                    );
+                    line_heads.insert(offset + nested_at);
+                    if unsupported(&nested_key) {
+                        djot_note_alias(&nested_key, &mut labels, &mut serial, &reserved);
+                    }
+                }
             }
         }
         offset += line.len() + 1;
@@ -6198,7 +6223,7 @@ fn normalize_djot_footnotes(
         .map(|m| (m.start(), m.end()))
         .collect();
     let mut i = 0;
-    let blank = cached_regex!(r"^\n[ \t]*(?:>[ \t]*)*\n").unwrap();
+    let blank = cached_regex!(r"^\n[ \t]*(?:>[ \t]+)*>?\n").unwrap();
     let mut destinations = HashMap::new();
     let mut accepted_destinations = HashSet::new();
     let mut destination_line = 0;
@@ -6747,7 +6772,7 @@ fn djot_content_start(line: &str) -> usize {
     let bytes = line.as_bytes();
     let mut at = 0;
     let marker_re = cached_regex!(
-        r"^(?:\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\)|:)[ \t]+)"
+        r"^(?:\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})\)|:)[ \t]+)"
     )
     .unwrap();
     while at < bytes.len() {
@@ -6787,22 +6812,31 @@ fn djot_content_start(line: &str) -> usize {
 }
 
 fn djot_table_rows(source: &str, mask: &str) -> Vec<bool> {
+    djot_table_rows_with_empty_note(source, mask, None)
+}
+
+fn djot_table_rows_with_empty_note(
+    source: &str,
+    mask: &str,
+    empty_note: Option<&str>,
+) -> Vec<bool> {
     let _paragraph_cache = ParagraphCacheScope::new(source);
     let item_re = cached_regex!(r"(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\)|:)[ \t]+").unwrap();
     let boundary_re = cached_regex!(r"^(?:#{1,6} |`{3,}|~{3,}|:{3,}|\{|\[[^\]]+\]:)").unwrap();
+    let nested_note_label = cached_regex!(r"\[\^[^\]\n]+\]:[ \t]*").unwrap();
+    let structural_quote = cached_regex!(r">[ \t]").unwrap();
+    let mut inline_note: Option<(usize, usize)> = None;
     let mut offset = 0;
     let mut previous_row = false;
     let mut previous_block = true;
     let mut footnote_column = None;
     let mut note_container: Option<(usize, usize)> = None;
+    let mut note_item: Option<(usize, usize, usize)> = None;
     let physical_quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
     let actual_item = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
     let mut item_owners: Vec<(usize, usize)> = Vec::new();
     let mut held_quote = 0;
-    let note = cached_regex!(
-        r"^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\))[ \t]+)*\[\^[^\]\n]+\]:"
-    )
-    .unwrap();
+    let note = cached_regex!(r"^\[\^[^\]\n]+\]:").unwrap();
     source
         .split('\n')
         .map(|line| {
@@ -6849,10 +6883,21 @@ fn djot_table_rows(source: &str, mask: &str) -> Vec<bool> {
             } else if depth == 0 && previous_block && !content.trim().is_empty() {
                 held_quote = 0;
             }
+            if opens_item {
+                held_quote = depth
+                    + nested_note_label
+                        .replace_all(&text[..djot_content_start(text)], "")
+                        .bytes()
+                        .filter(|&byte| byte == b'>')
+                        .count();
+            }
             let closes_container = note_container.is_some_and(|(column, owner_depth)| {
-                at <= column
-                    && !content.trim().is_empty()
-                    && (owner_depth == 0 || depth < owner_depth)
+                !content.trim().is_empty()
+                    && if owner_depth == 0 {
+                        at <= column
+                    } else {
+                        depth < owner_depth
+                    }
             });
             if closes_container {
                 note_container = None;
@@ -6861,22 +6906,79 @@ fn djot_table_rows(source: &str, mask: &str) -> Vec<bool> {
                 footnote_column = None;
                 note_container = None;
             }
-            let allowed = previous_block
+            let closes_note_item = note_item.is_some_and(|(column, owner_depth, owner_prefix)| {
+                let current = if depth > owner_depth {
+                    prefix
+                        .match_indices('>')
+                        .nth(owner_depth)
+                        .map_or(0, |(at, _)| at)
+                        .saturating_sub(owner_prefix)
+                } else {
+                    (indent + prefix.len()).saturating_sub(owner_prefix)
+                };
+                content.starts_with('|') && (depth < owner_depth || current <= column)
+            });
+            if closes_note_item || closes_note {
+                note_item = None;
+            }
+            let closes_inline_note = inline_note.is_some_and(|(owner_depth, column)| {
+                !content.trim().is_empty()
+                    && (depth < owner_depth || depth == owner_depth && indent <= column)
+            });
+            if closes_inline_note {
+                inline_note = None;
+            }
+            let allowed = closes_inline_note
+                || previous_block
                 || previous_row
                 || item_re.is_match(&line[..at])
                 || closes_note
                 || closes_container
                 || closes_quote
-                || closes_item;
+                || closes_item
+                || closes_note_item;
             if allowed {
-                if let Some(m) = note.find(line) {
-                    footnote_column = Some(m.as_str().find("[^").unwrap() + 2);
-                    let after = &line[m.end()..];
+                let note_at = line[..at].find("[^");
+                if let Some((note_at, m)) = note_at.and_then(|note_at| {
+                    note.find(&line[note_at..])
+                        .filter(|m| {
+                            mask.as_bytes().get(offset + note_at + m.end() - 1) == Some(&b':')
+                        })
+                        .map(|m| (note_at, m))
+                }) {
+                    let note_end = note_at + m.end();
+                    if let Some(nested) = nested_note_label.find_iter(&line[note_end..at]).last() {
+                        let nested_at = note_end + nested.start();
+                        let structural = nested_note_label
+                            .replace_all(&line[..nested_at], |m: &regex::Captures<'_>| {
+                                " ".repeat(m[0].len())
+                            });
+                        let quotes: Vec<_> = structural_quote.find_iter(&structural).collect();
+                        let quote_end = quotes.last().map_or(0, |q| q.end());
+                        inline_note = Some((
+                            quotes.len(),
+                            line[quote_end..nested_at].encode_utf16().count(),
+                        ));
+                    }
+                    let note_depth = line[..note_at].bytes().filter(|&byte| byte == b'>').count();
+                    footnote_column = Some(note_at + 2);
+                    let after = &line[note_end..];
                     let padding = after
                         .bytes()
                         .take_while(|b| matches!(b, b' ' | b'\t'))
                         .count();
                     let body = &after[padding..];
+                    note_item = actual_item.is_match(body).then_some((
+                        line[note_at..note_end].encode_utf16().count() + padding,
+                        note_depth,
+                        note_at,
+                    ));
+                    held_quote = note_depth
+                        + nested_note_label
+                            .replace_all(&body[..djot_content_start(body)], "")
+                            .bytes()
+                            .filter(|&byte| byte == b'>')
+                            .count();
                     if actual_item.is_match(body)
                         || body.starts_with('>')
                             && body
@@ -6884,12 +6986,15 @@ fn djot_table_rows(source: &str, mask: &str) -> Vec<bool> {
                                 .get(1)
                                 .map_or(true, |b| matches!(b, b' ' | b'\t'))
                     {
-                        let inline_prefix = physical_quote.find(body).unwrap().as_str();
-                        let inline_depth = inline_prefix.bytes().filter(|&b| b == b'>').count();
+                        let inline_depth = nested_note_label
+                            .replace_all(&body[..djot_content_start(body)], "")
+                            .bytes()
+                            .filter(|&byte| byte == b'>')
+                            .count();
                         note_container = Some((
-                            m.end() + padding,
+                            line[..note_end].encode_utf16().count() + padding,
                             if inline_depth > 0 {
-                                depth + inline_depth
+                                note_depth + inline_depth
                             } else {
                                 0
                             },
@@ -6904,7 +7009,9 @@ fn djot_table_rows(source: &str, mask: &str) -> Vec<bool> {
                 && mask.as_bytes().get(offset + end) == Some(&b'|')
                 && end.checked_sub(1).and_then(|p| bytes.get(p)) != Some(&b'\\');
             previous_block = !literal_quote_blank
-                && (content.trim().is_empty() || boundary_re.is_match(content));
+                && (content.trim().is_empty()
+                    || empty_note.is_some_and(|marker| content.trim() == marker)
+                    || boundary_re.is_match(content));
             previous_row = row;
             offset += line.len() + 1;
             row
@@ -7677,7 +7784,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
     output
 }
 
-fn escape_djot_non_table_rows(source: &str) -> String {
+fn escape_djot_non_table_rows(source: &str, empty_note: &str) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
     if !source.contains('|') {
         return source.to_owned();
@@ -7695,7 +7802,7 @@ fn escape_djot_non_table_rows(source: &str) -> String {
             ..OpaqueOptions::default()
         },
     );
-    let rows = djot_table_rows(source, &mask);
+    let rows = djot_table_rows_with_empty_note(source, &mask, Some(empty_note));
     let mut out = String::with_capacity(source.len());
     let mut offset = 0;
     for (n, line) in source.split('\n').enumerate() {
@@ -7723,7 +7830,7 @@ fn escape_djot_non_table_rows(source: &str) -> String {
     out
 }
 
-fn normalize_djot_table_pipes(source: &str) -> String {
+fn normalize_djot_table_pipes(source: &str, empty_note: &str) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
     if !source.contains("\\|") {
         return source.to_owned();
@@ -7760,7 +7867,7 @@ fn normalize_djot_table_pipes(source: &str) -> String {
     let boundary_re = cached_regex!(r"^(?:#{1,6} |`{3,}|~{3,}|:{3,}|\[[^\]]+\]:)").unwrap();
     let attribute_pipes_re = cached_regex!(r"\\+\|?|\|").unwrap();
     let mut definitions: HashMap<String, (String, String)> = HashMap::new();
-    let row_flags = djot_table_rows(source, &mask);
+    let row_flags = djot_table_rows_with_empty_note(source, &mask, Some(empty_note));
     let thematic_re = cached_regex!(r"^(?:\*[ \t]*){3,}$|^(?:-[ \t]*){3,}$").unwrap();
     for n in 0..lines.len() {
         let line = lines[n].clone();
