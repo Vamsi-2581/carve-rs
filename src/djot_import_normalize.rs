@@ -116,6 +116,16 @@ fn quoted_list_boundaries<'a>(
         let text = &remainder[indent..];
         let visible = masked.get(prefix.len() + indent..).unwrap_or("");
         if previous_blank && !line.trim_matches([' ', '\t']).is_empty() {
+            if depth > quote_depth
+                && !paragraph
+                && !marker.is_match(visible)
+                && lists.last().is_some_and(|&(owner_depth, column, width)| {
+                    owner_depth > quote_depth
+                        || owner_depth == quote_depth && columns[owner_depth] < column + width
+                })
+            {
+                insertions.push((line_offset, format!("{}\n", prefix.trim_end())));
+            }
             while lists.last().is_some_and(|&(owner_depth, column, width)| {
                 owner_depth > quote_depth
                     || owner_depth == quote_depth && columns[owner_depth] < column + width
@@ -1519,7 +1529,7 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
         .count();
     let mask = reference_mask(source);
     let mut findings: Vec<(usize, &'static str)> = Vec::new();
-    if !djot_code_quote_markers(source).is_empty() {
+    if has_djot_code_layout_candidates(source) {
         let mut raw_code = Vec::new();
         let _ = close_djot_table_code(source, Some(&mut |at| raw_code.push(at)));
         findings.extend(raw_code.into_iter().map(|at| {
@@ -1945,7 +1955,7 @@ mod tests {
         );
         assert_eq!(
             migrate_djot("- a\n\n  - c\n  ```\n  x\n  ```\n\n- d\n").value,
-            "- a\n  - c\n  `\n  x\n  `\n- d\n"
+            "- a\n\n  - c\n  ```\n  x\n  ```\n\n- d\n"
         );
     }
 

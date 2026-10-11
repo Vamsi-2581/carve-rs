@@ -6380,36 +6380,18 @@ fn normalize_djot_footnotes(
     stubs
 }
 
-fn djot_code_quote_markers(source: &str) -> Vec<usize> {
-    if !source.contains('`') {
-        return Vec::new();
-    }
-    let markers: Vec<_> = cached_regex!(r"\n[ \t]*>")
-        .unwrap()
-        .find_iter(source)
-        .map(|m| m.end() - 1)
-        .collect();
-    if markers.is_empty() {
-        return markers;
-    }
-    let fenced = mask_djot_fences(source, None, &[], true);
-    let masked = mask_djot_opaque(&fenced, OpaqueOptions::default());
-    let exposed = mask_djot_opaque(
-        &fenced,
-        OpaqueOptions {
-            code: false,
-            ..OpaqueOptions::default()
-        },
-    );
-    markers
-        .into_iter()
-        .filter(|&at| masked[at] != b'>' && exposed[at] == b'>')
-        .collect()
+fn has_djot_code_layout_candidates(source: &str) -> bool {
+    source.contains("\\|")
+        || (source.contains('`') && cached_regex!(r"\n[ \t]*>").unwrap().is_match(source))
+        || (source.contains("```")
+            && cached_regex!(r"(?:^|\n)(?:[ \t]*>(?:[ \t]|$))*[ \t]+`{3,}")
+                .unwrap()
+                .is_match(source))
 }
 
 fn normalize_djot_fences(source: &str) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
-    let quote_code = !djot_code_quote_markers(source).is_empty();
+    let quote_code = has_djot_code_layout_candidates(source);
     if !source.contains("```") && !source.contains("~~~") {
         return if source.contains("\\|") || quote_code {
             close_djot_table_code(source, None)
@@ -6429,13 +6411,7 @@ fn normalize_djot_fences(source: &str) -> String {
         &rows,
     );
     let normalized = normalize_djot_paragraph_fences(&lines.join("\n"));
-    let indented_ticks = cached_regex!(r"^[ \t]+`{3,}").unwrap();
-    if quote_code
-        || source.contains("\\|")
-        || source
-            .lines()
-            .any(|line| indented_ticks.is_match(quoted(line).1))
-    {
+    if quote_code {
         close_djot_table_code(&normalized, None)
     } else {
         normalized
@@ -6992,11 +6968,14 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
         return source.to_owned();
     }
     let bytes = source.as_bytes();
-    let paragraph_ends: Vec<usize> = cached_regex!(r"\n[ \t]*(?:>[ \t]*)*\n")
-        .unwrap()
-        .find_iter(source)
-        .map(|m| m.start())
-        .collect();
+    let mask = mask_djot_opaque(
+        &mask_djot_fences(source, None, &[], true),
+        OpaqueOptions {
+            code: false,
+            unclosed_code: false,
+            ..OpaqueOptions::default()
+        },
+    );
     let ticks = cached_regex!(r"`+").unwrap();
     let mut runs: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
     for run in ticks.find_iter(source) {
@@ -7095,7 +7074,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
         }
         at += 1;
     }
-    let block = cached_regex!(r"^(?:[-*+] |(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}|>|\||\^ |\[[^\]]+\]:)").unwrap();
+    let block = cached_regex!(r"^(?:[-*+] |(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}|>(?:[ \t]|$)|\||\^ |\[[^\]]+\]:)").unwrap();
     let marker = cached_regex!(
         r"^(?:\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+)"
     )
@@ -7112,11 +7091,11 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
         cached_regex!(r"^<(?:[A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*|[^<>\s@]+@[^<>\s]+)>").unwrap();
     let div_re = cached_regex!(r"^(:{3,})(?:[ \t]+\S.*)?[ \t]*$").unwrap();
     let close_div = cached_regex!(r"^:{3,}[ \t]*$").unwrap();
-    let quote_re = cached_regex!(r"^[ \t]*>[ ]?").unwrap();
+    let quote_re = cached_regex!(r"^[ \t]*>(?:[ \t]|$)").unwrap();
     let separator = cached_regex!(r"^\|[ \t:|-]*\|$").unwrap();
     let fence_open = cached_regex!(r"^(`{3,}|~{3,})[ \t]*=?[a-zA-Z0-9_+#.-]*$").unwrap();
     let boundary = cached_regex!(r"^(?:#{1,6} |:{3,}|\[[^\]]+\]:)").unwrap();
-    let mut paragraph = 0;
+    let mut code_host_depth = 0;
     let mut offset = 0;
     let mut cursor = 0;
     let mut consumed = 0;
@@ -7131,25 +7110,57 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
     for line in source.split('\n') {
         let at = djot_content_start(line);
         let line_end = offset + line.len();
-        let code_depth = line
-            .bytes()
-            .enumerate()
-            .take(at)
-            .filter(|&(p, b)| {
-                b == b'>'
-                    && line
-                        .as_bytes()
-                        .get(p + 1)
-                        .map_or(true, |b| matches!(b, b' ' | b'\t'))
-            })
-            .count();
-        let (depth, content) = quoted(line);
-        let trimmed = content.trim_start();
+        let mut code_depth = 0;
+        let mut prefix_content = line;
+        loop {
+            prefix_content = prefix_content.trim_start_matches([' ', '\t']);
+            if prefix_content.starts_with('>')
+                && prefix_content
+                    .as_bytes()
+                    .get(1)
+                    .map_or(true, |b| matches!(b, b' ' | b'\t'))
+            {
+                code_depth += 1;
+                prefix_content = &prefix_content[if prefix_content.len() > 1 { 2 } else { 1 }..];
+                continue;
+            }
+            let Some(item_prefix) = marker.find(prefix_content) else {
+                break;
+            };
+            prefix_content = &prefix_content[item_prefix.end()..];
+            if !item_prefix.as_str().starts_with("[^") {
+                let b = prefix_content.as_bytes();
+                if b.len() >= 4
+                    && b[0] == b'['
+                    && matches!(b[1], b' ' | b'x' | b'X')
+                    && b[2] == b']'
+                    && matches!(b[3], b' ' | b'\t')
+                {
+                    prefix_content = prefix_content[3..].trim_start_matches([' ', '\t']);
+                }
+            }
+        }
+        let (parsed_depth, content) = quoted(line);
+        let trimmed = content.trim_start_matches([' ', '\t']);
         let indent = content.len() - trimmed.len();
         let item = marker.find(trimmed);
         let old_column = item_column;
         let old_quote = item_quote;
         let began_inside = offset < consumed;
+        let depth = if began_inside {
+            code_host_depth
+        } else {
+            parsed_depth
+        };
+        if began_inside {
+            code_depth = code_host_depth;
+        } else if !previous_block
+            && parsed_depth < previous_quote
+            && !trimmed.is_empty()
+            && !block.is_match(trimmed)
+        {
+            code_depth = code_depth.max(previous_quote);
+        }
         if !began_inside {
             if fenced.is_some_and(|(_, _, owner_depth, _, owner_item)| {
                 !trimmed.is_empty()
@@ -7222,7 +7233,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                     depth == owner_depth && close_div.is_match(&line[at..]) && div[1].len() >= width
                 }) {
                     divs.pop();
-                } else {
+                } else if mask[offset + at] != b' ' {
                     divs.push((div[1].len(), depth, at));
                 }
             }
@@ -7234,12 +7245,16 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                 output.push('\n');
                 cursor = offset;
             }
-            previous_quote = depth;
+            previous_quote = depth.max(code_depth);
         }
         let mut i = (offset + at).max(consumed);
         let mut pending = Vec::new();
         let mut footnotes = Vec::new();
         while i < line_end {
+            if mask[i] == b' ' && bytes[i] != b' ' {
+                i += 1;
+                continue;
+            }
             if bytes[i] == b'\\' && bytes.get(i + 1).is_some_and(u8::is_ascii_punctuation) {
                 i += 2;
                 continue;
@@ -7298,28 +7313,46 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                 continue;
             }
             let width = bytes[i..].iter().take_while(|&&b| b == b'`').count();
+            code_host_depth = code_depth;
             let candidate = close_run(i, width);
             if candidate + width <= line_end {
                 i = candidate + width;
                 consumed = i;
                 continue;
             }
-            while paragraph_ends.get(paragraph).is_some_and(|&end| end <= i) {
-                paragraph += 1;
-            }
-            let mut limit = candidate.min(
-                paragraph_ends
-                    .get(paragraph)
-                    .copied()
-                    .unwrap_or(bytes.len()),
-            );
+            let mut limit = candidate.min(bytes.len());
             let mut separate = false;
+            let mut separate_depth = 0;
             let mut next = line_end + 1;
             while next < limit {
                 let newline = source[next..].find('\n').map(|at| next + at);
                 let end = newline.unwrap_or(bytes.len());
-                let (next_depth, next_content) = quoted(&source[next..end]);
-                let next_trimmed = next_content.trim_start();
+                let following = &source[next..end];
+                let (next_depth, next_content) = quoted(following);
+                let next_trimmed = next_content.trim_start_matches([' ', '\t']);
+                let mut owner_content = following;
+                for _ in 0..item_quote {
+                    let prefix = owner_content.trim_start_matches([' ', '\t']);
+                    if !prefix.starts_with('>')
+                        || !prefix
+                            .as_bytes()
+                            .get(1)
+                            .map_or(true, |b| matches!(b, b' ' | b'\t'))
+                    {
+                        break;
+                    }
+                    owner_content = &prefix[if prefix.len() > 1 { 2 } else { 1 }..];
+                }
+                let owner_indent =
+                    owner_content.len() - owner_content.trim_start_matches([' ', '\t']).len();
+                let outside = (code_depth > 0 && next_depth < code_depth)
+                    || (item_column > 0 && owner_indent < item_column);
+                if (next_depth <= code_depth || outside)
+                    && next_content.trim_matches([' ', '\t']).is_empty()
+                {
+                    limit = next - 1;
+                    break;
+                }
                 let next_indent = next_content.len() - next_trimmed.len();
                 let closes_div = divs.last().is_some_and(|&(width, owner_depth, column)| {
                     next_depth == owner_depth
@@ -7327,17 +7360,23 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                         && close_div.is_match(next_trimmed)
                         && next_trimmed.trim().len() >= width
                 });
-                let outside = (depth > 0 && next_depth < depth)
-                    || (item_column > 0 && next_depth <= item_quote && next_indent < item_column);
                 let attributes = next_trimmed.starts_with('{')
                     && read_djot_word_attributes(next_trimmed, 0).is_some();
-                if closes_div || (outside && (block.is_match(next_trimmed) || attributes)) {
+                if closes_div
+                    || (outside
+                        && (block.is_match(next_trimmed)
+                            || (item_column > 0
+                                && owner_indent < item_column
+                                && block.is_match(owner_content.trim_start_matches([' ', '\t'])))
+                            || attributes))
+                {
                     limit = next - 1;
                     let next_item = marker
                         .find(next_trimmed)
                         .map(|item| item_kind_of(item.as_str()));
                     separate = outside
                         && (next_depth < depth || next_item.as_deref() != Some(item_kind.as_str()));
+                    separate_depth = depth.min(next_depth);
                     break;
                 }
                 let Some(newline) = newline else {
@@ -7360,7 +7399,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                 .enumerate()
                 .map(|(n, value)| {
                     if n == 0 {
-                        return value.trim_end_matches([' ', '\t']).to_owned();
+                        return value.to_owned();
                     }
                     let mut rest = value;
                     for _ in 0..code_depth {
@@ -7369,7 +7408,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                         };
                         rest = &rest[prefix.end()..];
                     }
-                    rest.trim_matches([' ', '\t']).to_owned()
+                    rest.trim_start_matches([' ', '\t']).to_owned()
                 })
                 .collect();
             let raw_code = normalized.iter().skip(1).any(|value| {
@@ -7395,10 +7434,12 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                 }
                 html.push_str("</code>");
                 html
+            } else if code_depth > 0 {
+                normalized.join("\n")
             } else {
                 String::new()
             };
-            if raw_code {
+            if raw_code || code_depth > 0 {
                 payload = &raw_payload;
             }
             let fence_width = ticks
@@ -7438,6 +7479,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
             consumed = cursor;
             if separate && !closed {
                 output.push('\n');
+                output.push_str("> ".repeat(separate_depth).trim_end());
             }
             i = consumed;
         }
