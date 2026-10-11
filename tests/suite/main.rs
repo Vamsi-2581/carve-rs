@@ -49,6 +49,8 @@ mod braced_span_host_boundaries;
 
 #[path = "../nested_braced_emphasis.rs"]
 mod nested_braced_emphasis;
+#[path = "../short_inline_words.rs"]
+mod short_inline_words;
 
 #[path = "../the_markdown_target_carries_attributes_on_an_unspellable_inline.rs"]
 mod the_markdown_target_carries_attributes_on_an_unspellable_inline;
@@ -1891,5 +1893,6 @@ mod djot_quoted_list_boundaries;
 mod markdown_image_alt_text;
 #[path = "../markdown_nested_emphasis.rs"]
 mod markdown_nested_emphasis;
-#[path = "../raw_html_carriers_follow_the_import_trust_mode.rs"]
-mod raw_html_carriers_follow_the_import_trust_mode;
+
+#[path = "../markdown_footnote_continuation.rs"]
+mod markdown_footnote_continuation;
