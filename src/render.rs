@@ -116,6 +116,9 @@ fn render_html_inner(
     // the parse tree deliberately does not (markup-carve/carve#1660). This is
     // the one place that difference is resolved, ahead of every layout decision
     // below, so nothing downstream has to know about the second shape.
+    if options.html_carriers() {
+        crate::roundtrip::report_reserved_attributes(&mut doc);
+    }
     crate::parse::collapse_lone_image_paragraphs(&mut doc);
     let crossref_index = crossref_index.unwrap_or_else(|| {
         crate::parse::crossref_index_for_document(&doc, options.heading_id_options())
@@ -394,9 +397,7 @@ thread_local! {
     /// `FOOTNOTES_PLACEMENT` is one: the attribute writers take no options, and
     /// a nested render has to answer the same way.
     static DROPS_RESERVED_NAME: Cell<bool> = const { Cell::new(false) };
-    /// How deep the running render is inside an inline run, so a dropped
-    /// attribute's row can say which kind of node carried it.
-    static INLINE_RUN_DEPTH: Cell<usize> = const { Cell::new(0) };
+
 }
 
 struct ReservedNameGuard(bool);
@@ -416,22 +417,15 @@ impl Drop for ReservedNameGuard {
 /// Whether an authored attribute reaches the element: its name is safe and
 /// spellable, and roundtrip export does not reserve it.
 ///
-/// Every authored key-value passes through here exactly once per element, so
-/// this is also where the reserved name's `carrier-attribute-dropped` row is
-/// recorded.
+/// Reserved names are reported separately before the render pass.
 pub(crate) fn writes_authored_key(key: &str) -> bool {
     if is_dangerous_attr_name(key) || !is_valid_attr_name(key) {
         return false;
     }
-    if !key.eq_ignore_ascii_case(crate::roundtrip::SRC) || !DROPS_RESERVED_NAME.with(Cell::get) {
+    if crate::roundtrip::canonical(key).is_none() || !DROPS_RESERVED_NAME.with(Cell::get) {
         return true;
     }
-    let node_type = if INLINE_RUN_DEPTH.with(Cell::get) > 0 {
-        crate::render_loss::RawNodeType::Inline
-    } else {
-        crate::render_loss::RawNodeType::Block
-    };
-    crate::render_loss::record_reserved_name_dropped(key, node_type);
+
     false
 }
 
@@ -1585,7 +1579,7 @@ fn render_section(
             let slot = heading
                 .attrs
                 .as_ref()
-                .and_then(|attrs| attrs.order.iter().position(|s| matches!(s, AttrSlot::Id)))
+                .and_then(|attrs| attrs.order.iter().filter(|slot| !matches!(slot, AttrSlot::Key(name) if crate::roundtrip::canonical(name).is_some())).position(|s| matches!(s, AttrSlot::Id)))
                 .unwrap_or(0);
             if slot > 0 {
                 write_carrier(
@@ -1599,14 +1593,7 @@ fn render_section(
             }
         } else {
             // The id is generated, so an importer drops it without guessing.
-            write_carrier(
-                out,
-                crate::roundtrip::EXT,
-                crate::roundtrip::EXT_SECTION,
-                &None,
-                pos,
-                block,
-            );
+            write_carrier(out, crate::roundtrip::GENERATED_ID, "1", &None, pos, block);
         }
     }
     out.push_str(">\n");
@@ -1829,6 +1816,16 @@ fn render_heading(
             crate::roundtrip::EXPLICIT_ID,
             "1",
             &h.attrs,
+            h.pos.as_ref(),
+            crate::render_loss::RawNodeType::Block,
+        );
+    }
+    if options.html_carriers() && !authored_id {
+        write_carrier(
+            out,
+            crate::roundtrip::GENERATED_ID,
+            "1",
+            &None,
             h.pos.as_ref(),
             crate::render_loss::RawNodeType::Block,
         );
@@ -2220,7 +2217,7 @@ fn render_list(
         write_carrier(
             out,
             crate::roundtrip::TIGHT,
-            "true",
+            "1",
             &l.attrs,
             l.pos.as_ref(),
             crate::render_loss::RawNodeType::Block,
@@ -3781,11 +3778,9 @@ fn render_inlines_stateful(
         return;
     }
     state.inline_depth += 1;
-    INLINE_RUN_DEPTH.with(|depth| depth.set(depth.get() + 1));
     for node in nodes {
         render_inline_after(out, node, options, state);
     }
-    INLINE_RUN_DEPTH.with(|depth| depth.set(depth.get() - 1));
     state.inline_depth -= 1;
 }
 
@@ -5000,28 +4995,21 @@ pub(crate) fn render_attrs(attrs: &Option<Attrs>) -> String {
     out
 }
 
-/// Write one PART 10 §13a carrier, reporting an authored attribute of the same
-/// name as dropped.
-///
-/// RULED on markup-carve/carve#2902 question 1: THE CARRIER WINS and the
-/// authored attribute is dropped with a diagnostic naming it. Emitting both,
-/// which carve-php did with a precedence that differed per carrier, is invalid
-/// HTML. The caller passes the same name to [`render_attrs_without_keys`] (or
-/// its block-level twin), so the suppression and the report stay one decision.
+/// Write one HTML roundtrip carrier. Reserved authored names are reported
+/// before rendering and excluded from the authored attribute walk.
 pub(crate) fn write_carrier(
     out: &mut String,
     name: &'static str,
     value: &str,
-    attrs: &Option<Attrs>,
-    pos: Option<&Pos>,
-    node_type: crate::render_loss::RawNodeType,
+    _attrs: &Option<Attrs>,
+    _pos: Option<&Pos>,
+    _node_type: crate::render_loss::RawNodeType,
 ) {
     out.push(' ');
     out.push_str(name);
     out.push_str("=\"");
     write_escaped_attr(out, value);
     out.push('"');
-    report_carrier_collision(name, attrs, pos, node_type);
 }
 
 /// Write a PRESENCE carrier bare, with no value at all.
@@ -5034,24 +5022,12 @@ pub(crate) fn write_carrier(
 pub(crate) fn write_bare_carrier(
     out: &mut String,
     name: &'static str,
-    attrs: &Option<Attrs>,
-    pos: Option<&Pos>,
-    node_type: crate::render_loss::RawNodeType,
+    _attrs: &Option<Attrs>,
+    _pos: Option<&Pos>,
+    _node_type: crate::render_loss::RawNodeType,
 ) {
     out.push(' ');
     out.push_str(name);
-    report_carrier_collision(name, attrs, pos, node_type);
-}
-
-fn report_carrier_collision(
-    name: &'static str,
-    attrs: &Option<Attrs>,
-    pos: Option<&Pos>,
-    node_type: crate::render_loss::RawNodeType,
-) {
-    if attrs_has_key(attrs, name) {
-        crate::render_loss::record_carrier_collision(name, name, pos, node_type);
-    }
 }
 
 /// The attribute set without the named keys, for a caller that has to hand the

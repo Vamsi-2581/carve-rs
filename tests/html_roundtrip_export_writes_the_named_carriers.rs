@@ -121,18 +121,18 @@ fn an_authored_heading_id_says_it_was_authored() {
 fn a_generated_section_wrapper_says_it_was_generated() {
     let html = rt("# Generated\n");
     assert!(
-        html.contains(r#"<section id="Generated" data-carve-ext="section">"#),
+        html.contains(r#"<section id="Generated" data-carve-generated-id="1">"#),
         "{html}"
     );
     // An authored id carries the other carrier, never both.
-    assert!(!rt("{#chosen}\n# Explicit\n").contains("data-carve-ext"));
+    assert!(!rt("{#chosen}\n# Explicit\n").contains("data-carve-generated-id"));
     // No wrapper, nothing to mark.
     let flat = to_html_with_options(
         "# Generated\n",
         &Options::default().with_roundtrip(true).with_sections(false),
     );
-    assert!(!flat.contains("data-carve-ext"), "{flat}");
-    assert!(!to_html("# Generated\n").contains("data-carve-ext"));
+    assert!(flat.contains("data-carve-generated-id"), "{flat}");
+    assert!(!to_html("# Generated\n").contains("data-carve-generated-id"));
 }
 
 #[test]
@@ -169,12 +169,12 @@ fn an_authored_id_past_the_first_slot_carries_its_slot() {
 #[test]
 fn a_tight_list_whose_paragraph_keeps_its_p_says_it_is_tight() {
     for (source, opener) in [
-        ("- {.x}\n  a\n- b\n", r#"<ul data-carve-tight="true">"#),
+        ("- {.x}\n  a\n- b\n", r#"<ul data-carve-tight="1">"#),
         (
             "* {.x}\n  a\n* b\n",
-            r#"<ul data-marker="*" data-carve-tight="true">"#,
+            r#"<ul data-marker="*" data-carve-tight="1">"#,
         ),
-        ("1. {.x}\n   a\n2. b\n", r#"<ol data-carve-tight="true">"#),
+        ("1. {.x}\n   a\n2. b\n", r#"<ol data-carve-tight="1">"#),
     ] {
         let html = rt(source);
         assert!(html.contains(opener), "{source}: {html}");
@@ -385,7 +385,7 @@ fn a_tight_collision_on_a_list_drops_the_authored_copy() {
     let source = "{data-carve-tight=no}\n- {.x}\n  a\n- b\n";
     let report = roundtrip_losses(source);
     assert_eq!(report.value.matches("data-carve-tight").count(), 1);
-    assert!(report.value.contains(r#"<ul data-carve-tight="true">"#));
+    assert!(report.value.contains(r#"<ul data-carve-tight="1">"#));
     let rows: Vec<_> = report
         .losses
         .iter()
@@ -685,4 +685,68 @@ mod cli {
         assert!(ok, "{stderr}");
         assert!(!stdout.contains("data-char"), "{stdout}");
     }
+}
+
+#[test]
+fn reserved_names_are_dropped_once_on_every_host_with_default_bytes_preserved() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/roundtrip_reserved_every_host.json")).unwrap();
+    for row in rows.as_array().unwrap() {
+        let source = row["source"].as_str().unwrap();
+        assert_eq!(
+            carve::to_html(source).trim(),
+            row["defaultHtml"].as_str().unwrap(),
+            "{}",
+            row["id"]
+        );
+        let result = carve::to_html_with_options_and_report(
+            source,
+            &Options::default().with_roundtrip(true).with_positions(true),
+            carve::CheckedRenderOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .losses
+                .iter()
+                .filter(|loss| loss.code == "carrier-attribute-dropped")
+                .count(),
+            row["dropped"].as_u64().unwrap() as usize,
+            "{}: {:?}",
+            row["id"],
+            result.losses
+        );
+        assert!(result.value.contains("data-keep=\"y\""), "{}", row["id"]);
+        assert!(
+            !result.value.contains("=\"x\""),
+            "{}: {}",
+            row["id"],
+            result.value
+        );
+        assert!(result
+            .losses
+            .iter()
+            .all(|loss| loss.pos.is_some() && loss.format.is_none()));
+    }
+}
+
+#[test]
+fn reserved_attribute_losses_preserve_the_original_paragraph_wrapper() {
+    let source = "- {data-carve-ref=x}\n  a\n- b\n";
+    let result = carve::to_html_with_options_and_report(
+        source,
+        &Options::default().with_roundtrip(true),
+        carve::CheckedRenderOptions::default(),
+    )
+    .unwrap();
+    assert!(result.value.contains("<ul data-carve-tight=\"1\">"));
+    assert!(result.value.contains("<p>a</p>"));
+    assert_eq!(
+        result
+            .losses
+            .iter()
+            .filter(|loss| loss.code == "carrier-attribute-dropped")
+            .count(),
+        1
+    );
 }

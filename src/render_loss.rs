@@ -246,32 +246,6 @@ pub(crate) fn record_carrier_collision(
     });
 }
 
-/// One row per authored attribute whose name roundtrip export reserves without
-/// writing a carrier of that name (PART 10 §13a, `data-carve-src`).
-pub(crate) fn record_reserved_name_dropped(authored: &str, node_type: RawNodeType) {
-    COLLECTOR.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        let Some(c) = slot.as_mut() else { return };
-        c.total += 1;
-        *c.totals_by_code
-            .entry("carrier-attribute-dropped")
-            .or_default() += 1;
-        if c.losses.len() < c.max {
-            c.losses.push(RenderLoss {
-                code: "carrier-attribute-dropped",
-                attribute: Some(authored.to_owned()),
-                format: None,
-                target: c.target,
-                node_type,
-                pos: None,
-                message: format!(
-                    "Dropped authored attribute {authored:?}: roundtrip export reserves that name"
-                ),
-            });
-        }
-    });
-}
-
 pub(crate) fn record_ruby_flattened(ruby: &Ruby) {
     COLLECTOR.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -311,6 +285,28 @@ pub(crate) fn record_editorial_comment_flattened(pos: Option<&Pos>) {
                 node_type: RawNodeType::Inline,
                 pos: pos.cloned(),
                 message: "Flattened an editorial comment into the surrounding text".to_string(),
+            });
+        }
+    });
+}
+
+pub(crate) fn record_definition_list_flattened(pos: Option<&Pos>) {
+    COLLECTOR.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(c) = slot.as_mut() else { return };
+        c.total += 1;
+        *c.totals_by_code
+            .entry("definition-list-flattened")
+            .or_default() += 1;
+        if c.losses.len() < c.max {
+            c.losses.push(RenderLoss {
+                code: "definition-list-flattened",
+                attribute: None,
+                format: None,
+                target: c.target,
+                node_type: RawNodeType::Block,
+                pos: pos.cloned(),
+                message: "Flattened a nested definition list without carrier markers".to_string(),
             });
         }
     });

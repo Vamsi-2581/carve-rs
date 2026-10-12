@@ -4896,7 +4896,11 @@ fn render_link(session: &RenderSession, node: &Link, ctx: &mut CarveContext) -> 
                 &node.attrs,
                 ctx.reference_targets.get(&crate::parse::label_key(label)),
             );
-            return format!("[{text}][{label}]{}", render_inline_attrs(&attrs, ctx));
+            return format!(
+                "[{text}][{}]{}",
+                if text == *label { "" } else { label },
+                render_inline_attrs(&attrs, ctx)
+            );
         }
         crate::render_carve_error::record_unspellable(
             "link",

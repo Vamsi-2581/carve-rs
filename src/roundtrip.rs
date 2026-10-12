@@ -49,15 +49,12 @@ pub(crate) const COL_WIDTHS: &str = "data-carve-col-widths";
 pub(crate) const RAW: &str = "data-carve-raw";
 /// Presence; the span holds the escaped character (`<span>`).
 pub(crate) const ESCAPED: &str = "data-carve-escaped";
-/// `section`: the wrapper is the one a generated heading id gets (`<section>`).
-pub(crate) const EXT: &str = "data-carve-ext";
-/// The value [`EXT`] carries on a generated section wrapper, the only one the
-/// core writes.
-pub(crate) const EXT_SECTION: &str = "section";
+/// Presence: the heading id is generated, on its wrapper or heading.
+pub(crate) const GENERATED_ID: &str = "data-carve-generated-id";
 /// The authored id's index in the heading's `attrs.order`, omitted at 0
 /// (`<section>`, beside [`EXPLICIT_ID`]).
 pub(crate) const ID_SLOT: &str = "data-carve-id-slot";
-/// `true` on a tight list whose item paragraph keeps its `<p>` (`<ul>`, `<ol>`).
+/// Presence: the list is tight despite an attributed item paragraph.
 pub(crate) const TIGHT: &str = "data-carve-tight";
 /// Reserved without a row: no writer emits it, every importer consumes it, and
 /// roundtrip export drops an authored one.
@@ -78,7 +75,7 @@ pub(crate) const CARRIERS: [&str; 16] = [
     LABEL,
     RAW,
     ESCAPED,
-    EXT,
+    GENERATED_ID,
     ID_SLOT,
     TIGHT,
     SRC,
@@ -101,4 +98,64 @@ pub(crate) fn canonical(name: &str) -> Option<&'static str> {
         .iter()
         .copied()
         .find(|c| c.strip_prefix("data-carve-") == Some(rest))
+}
+
+/// Report reserved authored names before rendering without changing layout.
+pub(crate) fn report_reserved_attributes(doc: &mut crate::ast::Document) {
+    use crate::include_walk::SubtreeVisitor;
+    #[derive(Default)]
+    struct Reporter {
+        pos: Option<crate::ast::Pos>,
+    }
+    impl SubtreeVisitor for Reporter {
+        fn position_slot(&mut self, pos: &mut Option<crate::ast::Pos>) {
+            self.pos = pos.clone();
+        }
+        fn attributes(&mut self, attrs: &mut Option<crate::ast::Attrs>, inline: bool) {
+            let Some(held) = attrs else { return };
+            let mut names = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for slot in &held.order {
+                if let crate::ast::AttrSlot::Key(name) = slot {
+                    if held.key_values.contains_key(name) && seen.insert(name.as_str()) {
+                        names.push(name.as_str());
+                    }
+                }
+            }
+            for name in held.key_values.keys() {
+                if seen.insert(name.as_str()) {
+                    names.push(name.as_str());
+                }
+            }
+            for name in names {
+                if let Some(carrier) = canonical(name) {
+                    crate::render_loss::record_carrier_collision(
+                        carrier,
+                        name,
+                        self.pos.as_ref(),
+                        if inline {
+                            crate::render_loss::RawNodeType::Inline
+                        } else {
+                            crate::render_loss::RawNodeType::Block
+                        },
+                    );
+                }
+            }
+        }
+        fn blocks(&mut self, blocks: &mut Vec<crate::ast::BlockNode>) {
+            for block in blocks {
+                crate::include_walk::visit_block_children(block, self);
+            }
+        }
+        fn inlines(&mut self, inlines: &mut Vec<crate::ast::InlineNode>) {
+            for node in inlines {
+                crate::include_walk::visit_inline_children(node, self);
+            }
+        }
+    }
+    let mut reporter = Reporter::default();
+    reporter.blocks(&mut doc.children);
+    for blocks in doc.footnote_defs.values_mut() {
+        reporter.blocks(blocks);
+    }
 }

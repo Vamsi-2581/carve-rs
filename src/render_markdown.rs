@@ -674,7 +674,12 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
             carried(markers.as_ref(), prepend_label(body, div.label.as_deref()))
         }
         BlockNode::Section(section) => render_blocks(&section.children, ctx, depth + 1),
-        BlockNode::DefinitionList(list) => render_definition_list(&list.items, ctx, depth + 1),
+        BlockNode::DefinitionList(list) => {
+            if ctx.roundtrip && (ctx.definition_depth > 0 || ctx.single_line_depth > 0) {
+                crate::render_loss::record_definition_list_flattened(list.pos.as_ref());
+            }
+            render_definition_list(&list.items, ctx, depth + 1)
+        }
         BlockNode::Figure(figure) => render_figure(figure, ctx, depth + 1),
         BlockNode::FigureGroup(group) => render_figure_group(group, ctx, depth + 1),
         // A standalone block image is its own block: terminate it so the next

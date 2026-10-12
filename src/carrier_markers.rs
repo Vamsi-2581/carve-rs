@@ -642,9 +642,7 @@ fn validate_markers(
             }
             *entry = true;
         } else if payload.is_empty() {
-            if definitions.remove(&(parent, fences.len())) != Some(true) {
-                return None;
-            }
+            definitions.remove(&(parent, fences.len()))?;
         } else if carrier_is_closer(payload) {
             let (_, opener) = fences.pop()?;
             if next_marker.is_some_and(|next| next.payload.starts_with("^ "))

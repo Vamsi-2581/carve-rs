@@ -68,7 +68,7 @@ fn presence_is_authoritative_on_direct_and_hoisted_headings_in_every_mode() {
 }
 
 #[test]
-fn an_unmarked_generated_section_id_keeps_the_existing_heuristic() {
+fn an_unmarked_wrapper_uses_the_heuristic_but_a_heading_id_is_authored() {
     let html = "<section id=\"H\"><h1>H</h1></section>";
     assert_eq!(
         html_to_carve(html, &options(HtmlImportMode::Roundtrip))
@@ -80,7 +80,7 @@ fn an_unmarked_generated_section_id_keeps_the_existing_heuristic() {
         html_to_carve("<h1 id=\"H\">H</h1>", &options(HtmlImportMode::Roundtrip))
             .unwrap()
             .value,
-        "# H\n"
+        "{#H}\n# H\n"
     );
 }
 

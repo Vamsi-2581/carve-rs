@@ -162,7 +162,7 @@ fn dropped(html: &str, mode: HtmlImportMode, severity: HtmlImportSeverity) -> us
 fn a_marked_generated_section_drops_its_id_without_the_slug_guess() {
     // `custom` is not what `H` slugs to, so the unmarked wrapper keeps it as
     // authored; the carrier is what says it was generated.
-    let marked = r#"<section id="custom" data-carve-ext="section"><h1>H</h1></section>"#;
+    let marked = r#"<section id="custom" data-carve-generated-id="1"><h1>H</h1></section>"#;
     let unmarked = r#"<section id="custom"><h1>H</h1></section>"#;
     for mode in MODES {
         assert_eq!(import_in(marked, mode).value, "# H\n");
@@ -186,7 +186,7 @@ fn a_section_value_the_core_does_not_write_is_not_the_carrier() {
 }
 
 #[test]
-fn an_id_slot_places_the_id_and_clamps_to_the_last_slot() {
+fn an_id_slot_places_the_id_and_refuses_an_oversized_slot() {
     let section = |slot: &str, heading: &str| {
         format!(
             r#"<section id="mine" data-carve-explicit-id data-carve-id-slot="{slot}">{heading}</section>"#
@@ -198,9 +198,9 @@ fn an_id_slot_places_the_id_and_clamps_to_the_last_slot() {
             ("0", two, "{#mine .c k=v}\n# H\n"),
             ("1", two, "{.c #mine k=v}\n# H\n"),
             ("2", two, "{.c k=v #mine}\n# H\n"),
-            // Past the end, and past what an integer holds: last.
-            ("9", two, "{.c k=v #mine}\n# H\n"),
-            ("99999999999999999999999999", two, "{.c k=v #mine}\n# H\n"),
+            // A slot beyond the surviving attributes is refused.
+            ("9", two, "{#mine .c k=v}\n# H\n"),
+            ("99999999999999999999999999", two, "{#mine .c k=v}\n# H\n"),
             // The other slots keep the order the heading element spells.
             (
                 "1",
@@ -212,7 +212,11 @@ fn an_id_slot_places_the_id_and_clamps_to_the_last_slot() {
             let html = section(slot, heading);
             let result = import_in(&html, mode);
             assert_eq!(result.value, source, "{mode:?} {html}");
-            assert_eq!(dropped(&html, mode, HtmlImportSeverity::Info), 0, "{html}");
+            assert_eq!(
+                dropped(&html, mode, HtmlImportSeverity::Info),
+                usize::from(slot == "9" || slot.len() > 2 || heading == "<h1>H</h1>"),
+                "{html}"
+            );
             assert_eq!(
                 import_in(&html.replace("data-carve-", "data-djot-"), mode).value,
                 source
@@ -251,7 +255,7 @@ fn a_tight_carrier_wins_over_what_the_paragraphs_imply() {
         assert_eq!(tree(tight, mode)["children"][0]["tight"], true);
         assert_eq!(import_in(tight, mode).value, "- {.x}\n  a\n- b\n");
         let loose = r#"<ol data-carve-tight="false"><li>a</li><li>b</li></ol>"#;
-        assert_eq!(tree(loose, mode)["children"][0]["tight"], false);
+        assert_eq!(tree(loose, mode)["children"][0]["tight"], true);
         assert_eq!(
             tree("<ol><li>a</li><li>b</li></ol>", mode)["children"][0]["tight"],
             true
@@ -264,19 +268,15 @@ fn a_tight_carrier_wins_over_what_the_paragraphs_imply() {
             assert_eq!(dropped(html, mode, HtmlImportSeverity::Info), 0);
             assert!(!import_in(html, mode).value.contains("data-carve-"));
         }
-        // Outside `true`/`false` it is not a carrier: the `<p>` decides.
+        // Every value carries presence.
         for value in ["yes", "TRUE", "1", ""] {
             let html = format!(
                 r#"<ul data-carve-tight="{value}"><li><p class="x">a</p></li><li>b</li></ul>"#
             );
-            assert_eq!(
-                tree(&html, mode)["children"][0]["tight"],
-                false,
-                "{value:?}"
-            );
+            assert_eq!(tree(&html, mode)["children"][0]["tight"], true, "{value:?}");
             assert_eq!(
                 dropped(&html, mode, HtmlImportSeverity::Info),
-                1,
+                0,
                 "{value:?}"
             );
             assert!(!import_in(&html, mode).value.contains("data-carve-"));
@@ -295,7 +295,7 @@ fn contradicting_carriers_restore_neither_meaning_with_one_warning() {
             vec!["autolink", "link_reference_definition"],
         ),
         (
-            r#"<section id="custom" data-carve-ext="section" data-carve-explicit-id><h1>H</h1></section>"#,
+            r#"<section id="custom" data-carve-generated-id="1" data-carve-explicit-id><h1>H</h1></section>"#,
             r#"<section id="custom"><h1>H</h1></section>"#,
             vec![],
         ),
@@ -347,12 +347,10 @@ fn contradicting_carriers_restore_neither_meaning_with_one_warning() {
 #[test]
 fn a_carrier_on_the_wrong_element_contradicts_nothing() {
     for mode in MODES {
-        // `data-carve-ext` rides a `<section>`; on a heading it is dropped and
-        // the explicit-id carrier beside it stands.
-        let heading = r#"<h1 id="H" data-carve-explicit-id="1" data-carve-ext="section">H</h1>"#;
+        let heading = r#"<h1 id="H" data-carve-explicit-id="1" data-carve-generated-id="1">H</h1>"#;
         assert_eq!(import_in(heading, mode).value, "{#H}\n# H\n", "{mode:?}");
-        assert_eq!(dropped(heading, mode, HtmlImportSeverity::Warning), 0);
-        assert_eq!(dropped(heading, mode, HtmlImportSeverity::Info), 1);
+        assert_eq!(dropped(heading, mode, HtmlImportSeverity::Warning), 1);
+        assert_eq!(dropped(heading, mode, HtmlImportSeverity::Info), 0);
         // An autolink carrier means nothing on an image, so its label stands.
         let image =
             r#"<p>a <img src="/i" alt="i" href="/u" data-carve-autolink data-carve-ref="r"></p>"#;
@@ -395,5 +393,15 @@ fn the_default_export_is_unchanged_by_this_work() {
     ] {
         assert_eq!(to_html(source), export(source, false));
         assert!(!to_html(source).contains("data-carve-"));
+    }
+}
+
+#[test]
+fn an_id_slot_counts_only_the_surviving_heading_attributes() {
+    for mode in MODES {
+        let html = r#"<section id="mine" data-carve-explicit-id data-carve-id-slot="1"><h1 onclick="x">H</h1></section>"#;
+        let result = import_in(html, mode);
+        assert_eq!(result.value, "{#mine}\n# H\n");
+        assert_eq!(dropped(html, mode, HtmlImportSeverity::Info), 1);
     }
 }
