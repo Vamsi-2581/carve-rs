@@ -243,3 +243,32 @@ fn long_pending_values_survive_chained_quote_exits() {
         classes.join(" ")
     )));
 }
+
+#[test]
+fn references_after_footnotes_have_no_false_unresolved_loss() {
+    for padding in [" ", "", "\t"] {
+        let source = format!("[^n]: note\n  more\n[r]:{padding}/u\n\n[x][r]");
+        let result = carve::migrate_djot(&source);
+        assert!(carve::to_html(&result.value).contains("href=\"/u\""));
+        assert!(!result
+            .report
+            .diagnostics
+            .iter()
+            .any(|row| row.message.contains("unresolved Djot reference")));
+    }
+}
+
+#[test]
+fn paragraph_footnote_does_not_open_reference_boundary() {
+    let result = carve::migrate_djot("text\n[^n]: note\n[r]: /u\n\n[x][r]");
+    assert!(!carve::to_html(&result.value).contains("href=\"/u\""));
+    assert_eq!(
+        result
+            .report
+            .diagnostics
+            .iter()
+            .filter(|row| row.message.contains("unresolved Djot reference"))
+            .count(),
+        1
+    );
+}

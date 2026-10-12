@@ -2718,13 +2718,13 @@ pub(super) fn references(source: &str) -> String {
 }
 
 fn reference_definitions(source: &str, mask: &str) -> (HashMap<String, String>, HashSet<usize>) {
-    let definition = cached_regex!(r"^\[([^\]\n^][^\]\n]*)\]:[ \t]*([^ \t\r\n]*)\r?$").unwrap();
+    let mut accepted = HashMap::new();
+    super::fold_djot_references_with_decisions(source, Some(&mut accepted));
     let item = cached_regex!(r"(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\))[ \t]+").unwrap();
     let block =
         cached_regex!(r"^(?:#{1,6}(?: |$)|:{3,}|[`~]{3,}|\{|\[[^\]]+\]:|(?:[*-][ \t]*){3,}$)")
             .unwrap();
     let container = cached_regex!(r"(?:>|[-*+] |[0-9A-Za-z]+[.)] |\([0-9A-Za-z]+\) )").unwrap();
-    let destination_token = cached_regex!(r"^[^ \t\r\n]+$").unwrap();
     let heading = cached_regex!(r"^(#{1,6})(?:[ \t]+|$)").unwrap();
     let heading_break = cached_regex!(r"^(?:[#>|{]|[-*+][ \t]|[0-9A-Za-z]+[.)][ \t]|:[ \t]|:{2,}|\([0-9a-zA-Z]+\)[ \t]|[`~]{3,}|\[[^\]\n]*\]:|(?:[*-][ \t]*){3,}$)").unwrap();
     let lines: Vec<_> = source.split('\n').collect();
@@ -2749,30 +2749,11 @@ fn reference_definitions(source: &str, mask: &str) -> (HashMap<String, String>, 
             || n > 0 && definition_lines.contains(&(n - 1))
             || block.is_match(previous_content)
             || previous_at > at && container.is_match(&previous[..previous_at]);
-        if let Some(caps) = definition
-            .captures(content)
-            .filter(|_| visible.starts_with('[') && boundary)
-        {
-            let mut destination = caps[2].to_owned();
-            for (next, line) in lines.iter().enumerate().skip(n + 1) {
-                let next_at = djot_content_start(line);
-                let prefix = &line[..next_at];
-                let token = line[next_at..]
-                    .strip_suffix('\r')
-                    .unwrap_or(&line[next_at..]);
-                if quoted(line).0 != quoted(lines[n]).0
-                    || next_at <= at
-                    || prefix.contains("[^")
-                    || item.is_match(prefix)
-                    || cached_regex!(r":[ \t]+").unwrap().is_match(prefix)
-                    || !destination_token.is_match(token)
-                {
-                    break;
-                }
-                destination.push_str(token);
+        if let Some(decision) = accepted.get(&n) {
+            for next in n + 1..=decision.end {
                 definition_lines.insert(next);
             }
-            definitions.insert(definition_label(&caps[1]), destination);
+            definitions.insert(definition_label(&decision.label), decision.target.clone());
             definition_lines.insert(n);
         }
         if let Some(heading) = heading

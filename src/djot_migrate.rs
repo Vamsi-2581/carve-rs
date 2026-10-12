@@ -6302,6 +6302,19 @@ fn normalize_djot_attribute_lines(source: &str) -> String {
 }
 
 fn fold_djot_references(source: &str) -> String {
+    fold_djot_references_with_decisions(source, None)
+}
+
+pub(super) struct ReferenceDecision {
+    pub label: String,
+    pub target: String,
+    pub end: usize,
+}
+
+pub(super) fn fold_djot_references_with_decisions(
+    source: &str,
+    mut accepted: Option<&mut HashMap<usize, ReferenceDecision>>,
+) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
     if !source.contains("]:") {
         return source.to_owned();
@@ -6358,7 +6371,7 @@ fn fold_djot_references(source: &str) -> String {
                     .is_some_and(|mask| mask.as_bytes().get(offset + at) != Some(&b' ')));
         let outdented = metadata_exit
             || at < previous_owner
-                && (previous_note.is_some() || marker.is_match(&previous_line[..previous_at]));
+                && marker.is_match(&previous_line[..previous_note.unwrap_or(previous_at)]);
         let block_allowed = previous.is_empty()
             || previous_attribute_block
             || rows.get(n.wrapping_sub(1)) == Some(&true)
@@ -6438,7 +6451,13 @@ fn fold_djot_references(source: &str) -> String {
             if mask.as_bytes().get(offset + at) == Some(&b'[') && !allowed {
                 lines[n] = format!("{}{}", &line[..at], line[at..].replacen("]:", "]\\:", 1));
             }
-            if mask.as_bytes().get(offset + at) == Some(&b'[') && allowed {
+            if (mask.as_bytes().get(offset + at) == Some(&b'[')
+                || metadata_exit
+                    && fence_mask
+                        .as_ref()
+                        .is_some_and(|mask| mask.as_bytes().get(offset + at) == Some(&b'[')))
+                && allowed
+            {
                 let mut target = caps.get(2).map_or("", |m| m.as_str()).to_owned();
                 let mut end = n;
                 while end + 1 < lines.len() {
@@ -6457,6 +6476,16 @@ fn fold_djot_references(source: &str) -> String {
                     }
                     target.push_str(next_token);
                     end += 1;
+                }
+                if let Some(decisions) = accepted.as_deref_mut() {
+                    decisions.insert(
+                        n,
+                        ReferenceDecision {
+                            label: caps[1].to_owned(),
+                            target: target.clone(),
+                            end,
+                        },
+                    );
                 }
                 let next_byte = content.as_bytes().get(caps[1].len() + 3);
                 if end > n || !target.is_empty() && !matches!(next_byte, Some(b' ')) {

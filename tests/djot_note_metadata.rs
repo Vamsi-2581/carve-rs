@@ -44,6 +44,15 @@ fn definition_attributes_do_not_reach_later_content() {
         serde_json::from_str(include_str!("fixtures/djot-note-metadata.json")).unwrap();
     for row in cases {
         let result = carve::migrate_djot(&row.source);
+        assert!(
+            !result
+                .report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unresolved Djot reference")),
+            "{}",
+            row.name
+        );
         assert_eq!(
             result.value,
             carve::djot_to_carve(&row.source),
