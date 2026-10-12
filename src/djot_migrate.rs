@@ -6494,8 +6494,10 @@ fn normalize_djot_footnotes(
 fn normalize_djot_fences(source: &str) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
     if !source.contains("```") && !source.contains("~~~") {
-        return if source.contains("\\|") {
-            close_djot_table_code(source)
+        return if source.contains("\\|")
+            || (source.contains('`') && source.lines().skip(1).any(|line| quoted(line).0 > 0))
+        {
+            close_djot_table_code(source, !source.contains("\\|"))
         } else {
             source.to_owned()
         };
@@ -6514,11 +6516,18 @@ fn normalize_djot_fences(source: &str) -> String {
     let normalized = normalize_djot_paragraph_fences(&lines.join("\n"));
     let indented_ticks = cached_regex!(r"^[ \t]+`{3,}").unwrap();
     if source.contains("\\|")
+        || (source.contains('`') && source.lines().skip(1).any(|line| quoted(line).0 > 0))
         || source
             .lines()
             .any(|line| indented_ticks.is_match(quoted(line).1))
     {
-        close_djot_table_code(&normalized)
+        close_djot_table_code(
+            &normalized,
+            !source.contains("\\|")
+                && !source
+                    .lines()
+                    .any(|line| indented_ticks.is_match(quoted(line).1)),
+        )
     } else {
         normalized
     }
@@ -7068,7 +7077,7 @@ fn rename_djot_pipe_footnotes(source: &str) -> String {
     String::from_utf8(output).expect("only ASCII syntax changed")
 }
 
-fn close_djot_table_code(source: &str) -> String {
+fn close_djot_table_code(source: &str, only_closed: bool) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
     if !source.contains('`') {
         return source.to_owned();
@@ -7177,7 +7186,7 @@ fn close_djot_table_code(source: &str) -> String {
         }
         at += 1;
     }
-    let block = cached_regex!(r"^(?:[-*+] |(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}|>|\||\^ |\[[^\]]+\]:)").unwrap();
+    let block = cached_regex!(r"^(?:[-*+] |(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}|>(?:[ \t]|$)|\||\^ |\[[^\]]+\]:)").unwrap();
     let marker = cached_regex!(
         r"^(?:\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+)"
     )
@@ -7203,9 +7212,11 @@ fn close_djot_table_code(source: &str) -> String {
     let mut cursor = 0;
     let mut consumed = 0;
     let mut item_column = 0;
+    let mut item_marker_column = 0;
     let mut item_quote = 0;
     let mut previous_quote = 0;
     let mut item_kind = String::new();
+    let mut code_host_depth = 0;
     let mut previous_block = true;
     let mut fenced: Option<(usize, u8, usize, usize, usize)> = None;
     let mut divs: Vec<(usize, usize, usize)> = Vec::new();
@@ -7213,13 +7224,56 @@ fn close_djot_table_code(source: &str) -> String {
     for line in source.split('\n') {
         let at = djot_content_start(line);
         let line_end = offset + line.len();
-        let (depth, content) = quoted(line);
+        let (parsed_depth, content) = quoted(line);
+        let mut code_depth = 0;
+        let mut code_prefix = String::new();
+        let mut marker_has_tab = false;
+        let mut prefix_view = line;
+        loop {
+            let (quotes, content) = quoted(prefix_view);
+            code_depth += quotes;
+            if quotes > 0 {
+                code_prefix.push_str(&prefix_view[..prefix_view.len() - content.len()]);
+            }
+            let rest = content.trim_start_matches([' ', '\t']);
+            let Some(item_prefix) = marker.find(rest) else {
+                break;
+            };
+            code_prefix.push_str(&content[..content.len() - rest.len()]);
+            code_prefix.push_str(&" ".repeat(if item_prefix.as_str().starts_with("[^") {
+                2
+            } else {
+                item_prefix.len()
+            }));
+            marker_has_tab |= item_prefix.as_str().contains('\t');
+            prefix_view = &rest[item_prefix.end()..];
+            if prefix_view.starts_with("[ ] ")
+                || prefix_view.starts_with("[x] ")
+                || prefix_view.starts_with("[X] ")
+            {
+                prefix_view = &prefix_view[4..];
+            }
+        }
         let trimmed = content.trim_start();
         let indent = content.len() - trimmed.len();
         let item = marker.find(trimmed);
         let old_column = item_column;
         let old_quote = item_quote;
         let began_inside = offset < consumed;
+        let depth = if began_inside {
+            code_host_depth
+        } else {
+            parsed_depth
+        };
+        if began_inside {
+            code_depth = code_host_depth;
+        } else if !previous_block
+            && parsed_depth < previous_quote
+            && !trimmed.is_empty()
+            && !block.is_match(trimmed)
+        {
+            code_depth = code_depth.max(previous_quote);
+        }
         if !began_inside {
             if fenced.is_some_and(|(_, _, owner_depth, _, owner_item)| {
                 !trimmed.is_empty()
@@ -7269,6 +7323,7 @@ fn close_djot_table_code(source: &str) -> String {
                 continue;
             }
             if let Some(item) = item {
+                item_marker_column = indent;
                 item_column = indent
                     + if item.as_str().starts_with("[^") {
                         2
@@ -7304,7 +7359,7 @@ fn close_djot_table_code(source: &str) -> String {
                 output.push('\n');
                 cursor = offset;
             }
-            previous_quote = depth;
+            previous_quote = depth.max(code_depth);
         }
         let mut i = (offset + at).max(consumed);
         let mut pending = Vec::new();
@@ -7368,7 +7423,21 @@ fn close_djot_table_code(source: &str) -> String {
                 continue;
             }
             let width = bytes[i..].iter().take_while(|&&b| b == b'`').count();
+            code_host_depth = code_depth;
             let candidate = close_run(i, width);
+            if only_closed && candidate >= bytes.len() {
+                i += width;
+                continue;
+            }
+            if only_closed
+                && (marker_has_tab
+                    || (i > 0 && bytes[i - 1] == b'$' && !is_escaped(bytes, i - 1))
+                    || bytes.get(candidate + width) == Some(&b'{'))
+            {
+                i = candidate + width;
+                consumed = i;
+                continue;
+            }
             if candidate + width <= line_end {
                 i = candidate + width;
                 consumed = i;
@@ -7384,6 +7453,7 @@ fn close_djot_table_code(source: &str) -> String {
                     .unwrap_or(bytes.len()),
             );
             let mut separate = false;
+            let mut separate_depth = 0;
             let mut next = line_end + 1;
             while next < limit {
                 let newline = source[next..].find('\n').map(|at| next + at);
@@ -7397,17 +7467,40 @@ fn close_djot_table_code(source: &str) -> String {
                         && close_div.is_match(next_trimmed)
                         && next_trimmed.trim().len() >= width
                 });
-                let outside = (depth > 0 && next_depth < depth)
-                    || (item_column > 0 && next_depth <= item_quote && next_indent < item_column);
+                let mut owner_content = &source[next..end];
+                for _ in 0..item_quote {
+                    let Some(prefix) = quote_re.find(owner_content) else {
+                        break;
+                    };
+                    owner_content = &owner_content[prefix.end()..];
+                }
+                let owner_indent =
+                    owner_content.len() - owner_content.trim_start_matches([' ', '\t']).len();
+                let scope_edge =
+                    if item_kind.starts_with("[^") || item_kind == ":" || item_kind.is_empty() {
+                        item_column
+                    } else {
+                        item_marker_column + 1
+                    };
+                let outside_item = item_column > 0 && owner_indent < scope_edge;
+                let outside = (code_depth > 0 && next_depth < code_depth) || outside_item;
                 let attributes = next_trimmed.starts_with('{')
                     && read_djot_word_attributes(next_trimmed, 0).is_some();
-                if closes_div || (outside && (block.is_match(next_trimmed) || attributes)) {
+                if closes_div
+                    || (outside
+                        && (block.is_match(next_trimmed)
+                            || attributes
+                            || (outside_item
+                                && block.is_match(owner_content.trim_start_matches([' ', '\t'])))))
+                {
                     limit = next - 1;
                     let next_item = marker
                         .find(next_trimmed)
                         .map(|item| item_kind_of(item.as_str()));
                     separate = outside
-                        && (next_depth < depth || next_item.as_deref() != Some(item_kind.as_str()));
+                        && (next_depth < code_depth
+                            || next_item.as_deref() != Some(item_kind.as_str()));
+                    separate_depth = depth.min(next_depth);
                     break;
                 }
                 let Some(newline) = newline else {
@@ -7433,7 +7526,7 @@ fn close_djot_table_code(source: &str) -> String {
                         return value.trim_end_matches([' ', '\t']).to_owned();
                     }
                     let mut rest = value;
-                    for _ in 0..depth {
+                    for _ in 0..code_depth {
                         let Some(prefix) = quote_re.find(rest) else {
                             break;
                         };
@@ -7443,9 +7536,26 @@ fn close_djot_table_code(source: &str) -> String {
                 })
                 .collect();
             let raw_code = normalized.iter().skip(1).any(|value| {
-                (block.is_match(value) || value.starts_with('{'))
+                (block.is_match(value) || value.starts_with(['{', '>']))
                     && (!separator.is_match(value) || line.as_bytes().get(at) != Some(&b'|'))
             }) || (item_kind.starts_with("[^") && normalized.len() > 1);
+            let quoted_payload = (code_depth > 0 && !raw_code).then(|| {
+                normalized
+                    .iter()
+                    .enumerate()
+                    .map(|(line, value)| {
+                        if line == 0 {
+                            value.clone()
+                        } else {
+                            format!("{code_prefix}{value}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            if let Some(quoted) = quoted_payload.as_deref() {
+                payload = quoted;
+            }
             let raw_payload = if raw_code {
                 let mut html = String::from("<code>");
                 for ch in normalized.join("\n").chars() {
@@ -7500,6 +7610,7 @@ fn close_djot_table_code(source: &str) -> String {
             consumed = cursor;
             if separate && !closed {
                 output.push('\n');
+                output.push_str("> ".repeat(separate_depth).trim_end());
             }
             i = consumed;
         }

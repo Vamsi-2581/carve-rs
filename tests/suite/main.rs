@@ -1975,3 +1975,6 @@ mod quoted_list_opening_spans;
 
 #[path = "../djot_parenthesized_words.rs"]
 mod djot_parenthesized_words;
+
+#[path = "../djot_verbatim_quote_payload.rs"]
+mod djot_verbatim_quote_payload;
