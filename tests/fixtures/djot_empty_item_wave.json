@@ -414,5 +414,77 @@
     "carve": "a\n\\> -\n",
     "native_html": "<p>a\n&gt; -</p>\n",
     "html": "<p>a\n&gt; -</p>"
+  },
+  {
+    "id": "empty-review-single-plus",
+    "source": "+\n",
+    "carve": "- +\n",
+    "from": "djot",
+    "native_html": "<ul>\n<li>\n</li>\n</ul>\n",
+    "html": "<ul><li></li></ul>"
+  },
+  {
+    "id": "empty-final-guard-0",
+    "source": "(optional)\n",
+    "carve": "(optional)\n",
+    "from": "djot",
+    "native_html": "<p>(optional)</p>\n",
+    "html": "<p>(optional)</p>"
+  },
+  {
+    "id": "empty-final-guard-1",
+    "source": "(TODO)\n",
+    "carve": "(TODO)\n",
+    "from": "djot",
+    "native_html": "<p>(TODO)</p>\n",
+    "html": "<p>(TODO)</p>"
+  },
+  {
+    "id": "empty-final-guard-2",
+    "source": "(ab)\n",
+    "carve": "(ab)\n",
+    "from": "djot",
+    "native_html": "<p>(ab)</p>\n",
+    "html": "<p>(ab)</p>"
+  },
+  {
+    "id": "empty-final-guard-3",
+    "source": "Did.\n",
+    "carve": "Did.\n",
+    "from": "djot",
+    "native_html": "<p>Did.</p>\n",
+    "html": "<p>Did.</p>"
+  },
+  {
+    "id": "empty-final-guard-4",
+    "source": "Mix.\n",
+    "carve": "Mix.\n",
+    "from": "djot",
+    "native_html": "<p>Mix.</p>\n",
+    "html": "<p>Mix.</p>"
+  },
+  {
+    "id": "empty-final-guard-5",
+    "source": "`code`\n-\n",
+    "carve": "`code`\n-\n",
+    "from": "djot",
+    "native_html": "<p><code>code</code>\n-</p>\n",
+    "html": "<p><code>code</code>\n-</p>"
+  },
+  {
+    "id": "empty-final-inner-quote-exit",
+    "source": "> > a\n> -\n",
+    "carve": "> > a\n>\n> - +\n",
+    "from": "djot",
+    "native_html": "<blockquote>\n<blockquote>\n<p>a</p>\n</blockquote>\n<ul>\n<li>\n</li>\n</ul>\n</blockquote>\n",
+    "html": "<blockquote><blockquote><p>a</p></blockquote><ul><li></li></ul></blockquote>"
+  },
+  {
+    "id": "empty-final-quoted-inline",
+    "source": "> `a\n> b`\n> -\n",
+    "carve": "> `a\n> b`\n> -\n",
+    "from": "djot",
+    "native_html": "<blockquote>\n<p><code>a\nb</code>\n-</p>\n</blockquote>\n",
+    "html": "<blockquote><p><code>a\nb</code>\n-</p></blockquote>"
   }
 ]

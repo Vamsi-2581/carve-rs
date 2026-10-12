@@ -10379,17 +10379,32 @@ impl NestedFenceReplay {
                         return;
                     }
                 }
-                let row = is_table_start(inner);
+                let mut leaf = inner;
+                if block_start {
+                    loop {
+                        if detect_thematic_break(leaf) {
+                            break;
+                        }
+                        if let Some(rest) = strip_blockquote_prefix(leaf) {
+                            leaf = trim_ascii_start(rest);
+                        } else if let Some(marker) = detect_list_marker_full(leaf) {
+                            leaf = trim_ascii_start(marker.content);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let row = is_table_start(leaf);
                 if floor > 0
                     && col == floor
-                    && !block_start
                     && here.hosts.last().is_some_and(|&(_, _, item)| item)
                     && (row
-                        || detect_heading(inner).is_some()
-                        || detect_thematic_break(inner)
-                        || detect_prepass_def_term(inner).is_some()
-                        || standalone_attrs_block_len(&[inner]) == Some(1)
-                        || parse_link_def_line(inner).is_some())
+                        || detect_heading(leaf).is_some()
+                        || detect_thematic_break(leaf)
+                        || (!block_start && detect_prepass_def_term(inner).is_some())
+                        || standalone_attrs_block_len(&[leaf]) == Some(1)
+                        || parse_link_def_line(leaf).is_some()
+                        || (block_start && is_line_comment_any_column(leaf)))
                 {
                     here.para = false;
                     here.colon_absorption = false;
@@ -10422,6 +10437,12 @@ impl NestedFenceReplay {
                         return;
                     }
                     here.para = true;
+                    return;
+                }
+                if block_start && is_line_comment_any_column(inner) {
+                    here.para = false;
+                    here.colon_absorption = false;
+                    here.by_colon = true;
                     return;
                 }
             }

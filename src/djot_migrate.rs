@@ -1847,23 +1847,33 @@ fn convert_djot_block_markers(source: &str) -> String {
     let mut item_columns: Vec<(usize, usize)> = Vec::new();
     let mut boundary = true;
     let mut quote_depth = 0;
-    let mut quote_exit_items = HashSet::new();
+    let mut quote_exit_items = HashMap::new();
     let empty_marker = cached_regex!(
-        r"^(?:[-*+]|(?:[0-9]+|[ivxlcdmIVXLCDM]+|[a-zA-Z])[.)]|\([0-9A-Za-z]+\))[ \t]*$"
+        r"^(?:[-*+]|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-zA-Z])[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]*$"
     )
     .unwrap();
     let full_marker = cached_regex!(
-        r"^(?:[-*+]|(?:[0-9]+|[ivxlcdmIVXLCDM]+|[a-zA-Z])[.)]|\([0-9A-Za-z]+\))[ \t]+"
+        r"^(?:[-*+]|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-zA-Z])[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+"
     )
     .unwrap();
     let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
     let thematic = cached_regex!(r"^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,})$").unwrap();
     for index in 0..lines.len() {
         let prefix = quote_prefix_len(&lines[index]);
+        if prefix > 0
+            && !fenced_lines[index].trim().is_empty()
+            && !masked[index][..prefix].contains('>')
+        {
+            boundary = false;
+            continue;
+        }
         let depth = lines[index][..prefix]
             .bytes()
             .filter(|byte| *byte == b'>')
             .count();
+        if depth > quote_depth && !boundary {
+            continue;
+        }
         let exits_quote = depth < quote_depth;
         if depth != quote_depth {
             boundary = true;
@@ -1874,11 +1884,8 @@ fn convert_djot_block_markers(source: &str) -> String {
         let content = &rest[indent..];
         let authored = &lines[index][prefix + indent..];
         if content.trim().is_empty() {
-            if authored.trim().is_empty()
-                || (fenced_lines[index] != lines[index] && fenced_lines[index].trim().is_empty())
-            {
-                boundary = true;
-            }
+            boundary = authored.trim().is_empty()
+                || (fenced_lines[index] != lines[index] && fenced_lines[index].trim().is_empty());
             continue;
         }
         let colon_width = authored.bytes().take_while(|byte| *byte == b':').count();
@@ -1907,9 +1914,12 @@ fn convert_djot_block_markers(source: &str) -> String {
         let sibling = item_columns
             .iter()
             .any(|&(held_depth, held_column)| held_depth == depth && held_column == column);
-        if empty_marker.is_match(content) && (boundary || sibling) {
+        if empty_marker.is_match(content)
+            && empty_marker.is_match(authored)
+            && (boundary || sibling)
+        {
             if exits_quote {
-                quote_exit_items.insert(index);
+                quote_exit_items.insert(index, lines[index][..prefix].trim_end().to_owned());
             }
             let marker = content.trim_end();
             let marker = if marker == "+" { "-" } else { marker };
@@ -2042,8 +2052,8 @@ fn convert_djot_block_markers(source: &str) -> String {
         .into_iter()
         .enumerate()
         .map(|(index, line)| {
-            if quote_exit_items.contains(&index) {
-                format!("\n{line}")
+            if let Some(prefix) = quote_exit_items.get(&index) {
+                format!("{prefix}\n{line}")
             } else {
                 line
             }
@@ -4275,11 +4285,11 @@ mod tests {
         assert_eq!(djot_to_carve("+ a\n  + b\n"), "- a\n  \\+ b\n");
     }
 
-    /// BOUND: a lone `+` IS the Carve continuation marker, and mid-line text is
-    /// not a marker at all. Neither moves under this change.
+    /// An empty Djot plus bullet needs an explicit empty Carve item.
+    /// A plus inside ordinary text stays literal.
     #[test]
-    fn a_lone_plus_and_an_inline_plus_are_left_alone() {
-        assert_eq!(djot_to_carve("+\n"), "+\n");
+    fn an_empty_plus_item_and_inline_plus_keep_their_roles() {
+        assert_eq!(djot_to_carve("+\n"), "- +\n");
         assert_eq!(djot_to_carve("a + b\n"), "a + b\n");
     }
 
