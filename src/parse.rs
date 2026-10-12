@@ -13693,6 +13693,15 @@ fn parse_list(
             {
                 break;
             }
+            if !item_paragraph_open
+                && cur.peek().is_some_and(|line| {
+                    trim_ascii(line) == "+"
+                        && indent_columns(line) > base_indent
+                        && indent_columns(line) < content_col
+                })
+            {
+                break;
+            }
             continue;
         }
         // The item's first paragraph is the marker content plus any
@@ -15481,7 +15490,7 @@ fn collect_trailing_lazy_through_framed(
         if is_blank_line(line)
             || indent_columns(line) > base_indent
             || (is_list_marker(line) && indent_columns(line) <= list_base)
-            || trim_ascii(line) == "+"
+            || (trim_ascii(line) == "+" && indent_columns(line) == list_base)
             || {
                 // AS A CONTAINER: this collector runs only for a line folding
                 // into a container's open paragraph, and §7 recognizes an
@@ -16184,7 +16193,6 @@ fn collect_indented_block_mapped_with_columns(
             && !fence_owns_flush_left
             && fence.is_none()
             && indent < strip_cols
-            && trim_ascii(line) != "+"
             && !is_line_comment_any_column(line)
             && detect_comment_fence_line_any_column(line).is_none()
         {

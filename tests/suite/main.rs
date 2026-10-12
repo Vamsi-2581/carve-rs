@@ -1939,3 +1939,6 @@ mod term_ended_block_wave;
 
 #[path = "../description_band_wave.rs"]
 mod description_band_wave;
+
+#[path = "../closed_container_plus_wave.rs"]
+mod closed_container_plus_wave;
