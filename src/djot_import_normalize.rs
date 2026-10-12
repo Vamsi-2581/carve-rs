@@ -1427,7 +1427,6 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
                 && marker.is_match(block_body)
                 && !previous_blank
             {
-                result.push(raw[..raw.len() - body.len()].trim_end().to_owned());
                 quote_paragraph_depth = None;
             }
             let metadata_body = quote_paragraph_depth.is_none()
@@ -3528,17 +3527,18 @@ mod tests {
             assert!(super::losses(source).is_empty(), "{source:?}");
         }
         for label in ["[x]", "![x]"] {
+            let paragraph = if label.starts_with('!') { "{%%}" } else { "" };
             assert_eq!(
                 migrate_djot(&format!("{label}(a(b{{}}c))\n")).value,
-                format!("{label}(a%28b{{}}c%29)\n")
+                format!("{paragraph}{label}(a%28b{{}}c%29)\n")
             );
             assert_eq!(
                 migrate_djot(&format!("{label}(a` b `c)\n")).value,
-                format!("{label}(a%60%20b%20%60c)\n")
+                format!("{paragraph}{label}(a%60%20b%20%60c)\n")
             );
             assert_eq!(
                 migrate_djot(&format!("{label}(a` b `c) and ` code `\n")).value,
-                format!("{label}(a%60%20b%20%60c) and `  code  `\n")
+                format!("{paragraph}{label}(a%60%20b%20%60c) and `  code  `\n")
             );
         }
         for source in [
