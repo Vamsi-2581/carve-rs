@@ -14715,6 +14715,19 @@ fn nested_ends_with_open_paragraph(
     below_outer_column: bool,
     options: &Options<'_>,
 ) -> bool {
+    if !below_outer_column
+        && (body_ends_with_an_attribute_line(nested)
+            || nested
+                .lines()
+                .rev()
+                .find(|line| !is_blank_line(line))
+                .is_some_and(|line| {
+                    is_collected_definition_placeholder(trim_ascii_start(line))
+                        || parse_standalone_attrs(trim_ascii_start(line)).is_some()
+                }))
+    {
+        return false;
+    }
     let blocks = probe_blocks(nested, options);
     let mut end = blocks.len();
     if trailing_below_column {

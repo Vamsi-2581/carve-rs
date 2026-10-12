@@ -1966,3 +1966,6 @@ mod term_led_description_code;
 
 #[path = "../held_description_tightness.rs"]
 mod held_description_tightness;
+
+#[path = "../invisible_leaf_after_quote.rs"]
+mod invisible_leaf_after_quote;
