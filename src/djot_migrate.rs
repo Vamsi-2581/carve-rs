@@ -480,7 +480,7 @@ impl ImageBoundaryIndex {
         let mut div_closers = std::collections::HashMap::new();
         let mut divs: Vec<(usize, usize, usize)> = Vec::new();
         let mut offset = 0;
-        let block = cached_regex!(r"^(?:[-*+](?:[ \t]|$)|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}|\||\^ |\[[^\]]+\]:)").unwrap();
+        let block = cached_regex!(r"^(?:[-*+](?:[ \t]|$)|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}(?:[ \t]*[A-Za-z0-9_-]+)?[ \t]*$|\||\^ |\[[^\]]+\]:)").unwrap();
         for line in source.split('\n') {
             let (depth, body) = quoted(line);
             let blank = body.trim_matches([' ', '\t']).is_empty();
@@ -692,7 +692,7 @@ fn image_alt_layout(
         }
         if (depth < quotes || item_column > 0 && owner_indent < item_column)
             && cached_regex!(
-                r"^(?:[-*+](?:[ \t]|$)|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}|\||\^ |\[[^\]]+\]:)"
+                r"^(?:[-*+](?:[ \t]|$)|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}(?:[ \t]*[A-Za-z0-9_-]+)?[ \t]*$|\||\^ |\[[^\]]+\]:)"
             )
             .unwrap()
             .is_match(body.trim_start_matches([' ', '\t']))
@@ -6074,7 +6074,7 @@ fn djot_inline_boundaries_with_div_closers(
         cached_regex!(r"^(?:#{1,6}(?: |$)|:{3,}|[`~]{3,}|(?:[*-][ \t]*){3,}$)").unwrap();
     let scope_quote = cached_regex!(r"^(?:>[ \t]+)*").unwrap();
     let scope_ticks = cached_regex!(r"^(`{3,}|~{3,})(.*)$").unwrap();
-    let scope_div = cached_regex!(r"^(:{3,})[ \t]*[A-Za-z0-9_-]*[ \t]*$").unwrap();
+    let scope_div = cached_regex!(r"^(:{3,})(?:[ \t]*[A-Za-z0-9_-]+)?[ \t]*$").unwrap();
     let scope_heading =
         cached_regex!(r"^(?:#{1,6}(?: |$)|(?:[*-][ \t]*){3,}$|\[[^\]]+\]:)").unwrap();
     let mut boundaries = Vec::new();
@@ -8947,7 +8947,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
         }
         at += 1;
     }
-    let block = cached_regex!(r"^(?:[-*+] |(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}|>(?:[ \t]|$)|\||\^ |\[[^\]]+\]:)").unwrap();
+    let block = cached_regex!(r"^(?:[-*+] |(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)] |\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\) |: |#{1,6} |`{3,}|~{3,}|:{3,}(?:[ \t]*[A-Za-z0-9_-]+)?[ \t]*$|>(?:[ \t]|$)|\||\^ |\[[^\]]+\]:)").unwrap();
     let marker = cached_regex!(
         r"^(?:\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+)"
     )
@@ -8967,7 +8967,8 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
     let quote_re = cached_regex!(r"^[ \t]*>(?:[ \t]|$)").unwrap();
     let separator = cached_regex!(r"^\|[ \t:|-]*\|$").unwrap();
     let fence_open = cached_regex!(r"^(`{3,}|~{3,})[ \t]*=?[a-zA-Z0-9_+#.-]*$").unwrap();
-    let boundary = cached_regex!(r"^(?:#{1,6} |:{3,}|\[[^\]]+\]:)").unwrap();
+    let boundary =
+        cached_regex!(r"^(?:#{1,6} |:{3,}(?:[ \t]*[A-Za-z0-9_-]+)?[ \t]*$|\[[^\]]+\]:)").unwrap();
     let image_paragraph_valid = source
         .contains("![")
         .then(|| ImageBoundaryIndex::new(source, &mask));
@@ -9326,7 +9327,7 @@ fn close_djot_table_code(source: &str, mut on_raw_code: Option<&mut dyn FnMut(us
                 .collect();
             let raw_code =
                 normalized.iter().skip(1).any(|value| {
-                    (block.is_match(value) || value.starts_with('{'))
+                    (block.is_match(value) || value.starts_with(":::") || value.starts_with('{'))
                         && (!separator.is_match(value) || line.as_bytes().get(at) != Some(&b'|'))
                 }) || (item_column > 0 && item_kind.starts_with("[^") && normalized.len() > 1);
             let raw_payload = if raw_code {
