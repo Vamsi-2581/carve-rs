@@ -1904,6 +1904,9 @@ mod new_quote_definition_opacity;
 #[path = "../roundtrip_carriers_2.rs"]
 mod roundtrip_carriers_2;
 
+#[path = "../markdown_import_dollar_text_stays_text.rs"]
+mod markdown_import_dollar_text_stays_text;
+
 #[path = "../tab_authored_list_code_fences.rs"]
 mod tab_authored_list_code_fences;
 
@@ -1914,5 +1917,11 @@ mod inline_fence_paragraph_resume;
 
 #[path = "../nested_description_code_payload.rs"]
 mod nested_description_code_payload;
+
 #[path = "../pending_term_code_lazy_tails.rs"]
 mod pending_term_code_lazy_tails;
+#[path = "../quoted_document_definition_boundary.rs"]
+mod quoted_document_definition_boundary;
+
+#[path = "../continued_marker_note_code_floor.rs"]
+mod continued_marker_note_code_floor;
