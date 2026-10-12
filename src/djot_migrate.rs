@@ -2008,7 +2008,7 @@ fn convert_djot_block_markers(source: &str) -> String {
             let token = &content[1..close + 1];
             let tail = &content[close + 2..];
             if !token.is_empty()
-                && token.chars().all(|ch| ch.is_ascii_alphanumeric())
+                && full_marker.is_match(content)
                 && tail.starts_with([' ', '\t'])
                 && !tail.trim().is_empty()
             {

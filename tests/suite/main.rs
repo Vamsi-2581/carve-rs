@@ -1972,3 +1972,6 @@ mod invisible_leaf_after_quote;
 
 #[path = "../quoted_list_opening_spans.rs"]
 mod quoted_list_opening_spans;
+
+#[path = "../djot_parenthesized_words.rs"]
+mod djot_parenthesized_words;
