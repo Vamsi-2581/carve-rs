@@ -695,8 +695,16 @@ fn markdown_to_ast_with_code_lines(
         .as_ref()
         .map_or(&[][..], |prepared| prepared.1.as_slice());
     let mut bare_url_at = 0;
-    let mut parser = Parser::new_ext(parser_source, options).into_offset_iter();
+    let strikes = crate::markdown_strike::prepare(parser_source, options);
+    let mut reference = |link| strikes.reference(link);
+    let mut parser =
+        Parser::new_with_broken_link_callback(&strikes.text, options, Some(&mut reference))
+            .into_offset_iter();
     while let Some((mut event, range)) = parser.next() {
+        if strikes.synthetic_comment(&event, &range) {
+            continue;
+        }
+        let range = strikes.original_range(range);
         builder.current_line =
             claimed_lines + line_starts.partition_point(|start| *start <= range.start);
         if let Some((kept, rest)) = text_end.take().and_then(|end| {

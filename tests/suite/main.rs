@@ -1945,3 +1945,6 @@ mod closed_container_plus_wave;
 
 #[path = "../djot_literal_wave.rs"]
 mod djot_literal_wave;
+
+#[path = "../markdown_strike_wave.rs"]
+mod markdown_strike_wave;

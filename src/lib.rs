@@ -41,6 +41,7 @@ pub mod lint;
 mod markdown_assessment;
 mod markdown_gfm_autolinks;
 pub mod markdown_import;
+mod markdown_strike;
 pub mod migration;
 mod parse;
 pub mod profile;
