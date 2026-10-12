@@ -1993,3 +1993,6 @@ mod space_only_inline_slots;
 
 #[path = "../unfinished_nested_fences.rs"]
 mod unfinished_nested_fences;
+
+#[path = "../term_description_code.rs"]
+mod term_description_code;

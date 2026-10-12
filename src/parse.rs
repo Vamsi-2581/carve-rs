@@ -15915,6 +15915,8 @@ fn collect_indented_block_mapped_with_columns(
     let mut marker_definition_has_description = !marker_is_definition_term;
     let mut marker_description_code_admitted = false;
     let mut marker_description_has_inline_code = false;
+    let mut marker_description_has_lazy_tail = false;
+    let mut marker_description_is_paragraph = false;
     let mut marker_attribute_end = None;
     let mut term_code_lazy_tail = false;
     let mut term_code_tail_can_resume = false;
@@ -16102,6 +16104,16 @@ fn collect_indented_block_mapped_with_columns(
             continue;
         }
         let indent = indent_columns(line);
+        if marker_definition_has_description
+            && indent <= strip_cols
+            && fence.is_none()
+            && comment_fence.is_none()
+            && colon_open.is_empty()
+            && (is_line_comment_any_column(line)
+                || detect_comment_fence_line_any_column(line).is_some())
+        {
+            marker_description_is_paragraph = false;
+        }
         if literal_colon.is_some_and(|(_, _, floor)| indent < floor)
             && !is_line_comment_any_column(line)
             && detect_comment_fence_line_any_column(line).is_none()
@@ -16519,14 +16531,23 @@ fn collect_indented_block_mapped_with_columns(
                 marker_definition_has_description = false;
                 marker_description_code_admitted = false;
                 marker_description_has_inline_code = false;
+                marker_description_has_lazy_tail = false;
+                marker_description_is_paragraph = false;
                 marker_term_paragraph_open = true;
                 marker_term_open = true;
-            } else if strip_description_prefix(trim_ascii_start(line)).is_some() {
+            } else if let Some(body) = strip_description_prefix(trim_ascii_start(line)) {
                 marker_definition_has_description = true;
                 marker_description_code_admitted = false;
                 marker_description_has_inline_code = trim_ascii_start(line).contains('`');
+                marker_description_has_lazy_tail = false;
+                marker_description_is_paragraph = ParaOpen::from_line(body, false).get();
                 marker_term_paragraph_open = false;
                 marker_term_open = false;
+            } else if marker_definition_has_description
+                && line_starts_paragraph(trim_ascii_start(line))
+                && detect_fence_open(trim_ascii_start(line)).is_none()
+            {
+                marker_description_has_lazy_tail = true;
             } else if marker_term_open
                 && detect_fence_open(trim_ascii_start(line)).is_none()
                 && ((matches!(
@@ -16597,6 +16618,21 @@ fn collect_indented_block_mapped_with_columns(
         if authored_code_base.is_none()
             && (marker_definition_has_description || !marker_term_open)
             && !marker_description_code_admitted
+            && !(marker_is_definition_term
+                && marker_description_is_paragraph
+                && !marker_description_has_inline_code
+                && !marker_description_has_lazy_tail
+                && lines
+                    .iter()
+                    .rev()
+                    .take(2)
+                    .filter(|line| is_blank_line(line))
+                    .count()
+                    < 2
+                && marker_definition_has_description
+                && detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
+                    list_code_fence_closer_ahead(cur, open, indent, parent_indent)
+                }))
             && fence.is_none()
             && !in_comment_span
             && colon_open.is_empty()
