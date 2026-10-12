@@ -5262,7 +5262,7 @@ fn guard_code_lines(
     }
     static MARKER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let marker =
-        MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|\[[^\]\n]+\]:[ \t])").unwrap());
+        MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|\[[^\]\n]+\]:[ \t]|[-*] +|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-z]|[A-Z])[.)] +)").unwrap());
     written
         .split('\n')
         .enumerate()

@@ -10426,7 +10426,7 @@ impl NestedFenceReplay {
                 } else {
                     if is_comment_fence_close(trim_ascii_start(text), width) {
                         chain[level].host_comment = None;
-                        chain[level].by_comment = false;
+                        chain[level].by_comment = true;
                     }
                     if !provisional {
                         chain.truncate(level + 1);
@@ -10500,6 +10500,14 @@ impl NestedFenceReplay {
                 && (!chain[level].colons.is_empty() || chain[level].by_colon)
                 && is_line_comment_any_column(text)
             {
+                if let Some(open) = detect_comment_fence_line_any_column(text) {
+                    let column = indent_columns(text);
+                    if closer_ahead(lines, at, level, |line| {
+                        is_comment_fence_close_any_column(line, open.fence_len)
+                    }) {
+                        chain[level].host_comment = Some((open.fence_len, column, false));
+                    }
+                }
                 chain[level].by_comment = false;
                 chain[level].para = false;
                 chain[level].colon_absorption = false;
@@ -16518,7 +16526,12 @@ fn collect_indented_block_mapped_with_columns(
                 let previous = cur.lines.at(at);
                 indent_columns(previous) < strip_cols && is_line_comment_any_column(previous)
             });
-            if after_comment && !interrupts_lazy_continuation_as_container(cur, line) {
+            let after_span = cur
+                .closed_comment_location
+                .is_some_and(|(at, _)| at + 1 == cur.pos);
+            if (after_comment || after_span)
+                && !interrupts_lazy_continuation_as_container(cur, line)
+            {
                 marker_colon_retained_para = true;
             }
         }

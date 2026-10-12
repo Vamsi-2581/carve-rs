@@ -2005,3 +2005,6 @@ mod held_container_tightness;
 
 #[path = "../item_hosted_named_colon.rs"]
 mod item_hosted_named_colon;
+
+#[path = "../retained_paragraphs.rs"]
+mod retained_paragraphs;
