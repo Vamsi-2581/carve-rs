@@ -640,6 +640,7 @@ fn parse_with_options_mode_and_index(
                     reached: Vec::new(),
                     authored_base_at_start: false,
                     item_marker_at_start: false,
+                    marker_colon_rebased: false,
                     marker_tail: None,
                     sublists_carry_authored_base: false,
                 },
@@ -2200,6 +2201,7 @@ fn extract_footnote_defs(
                     line_map: def_line_map,
                     authored_base_at_start: false,
                     item_marker_at_start: false,
+                    marker_colon_rebased: false,
                     marker_tail: None,
                     reached: vec![true; def_lines.len()],
                     // A FOOTNOTE BODY carries authored base for its sublists, so
@@ -2267,6 +2269,7 @@ fn extract_footnote_defs(
             source: joined_source(&body),
             authored_base_at_start: false,
             item_marker_at_start: false,
+            marker_colon_rebased: false,
             marker_tail: None,
             reached: Vec::new(),
             sublists_carry_authored_base: false,
@@ -6983,6 +6986,10 @@ fn rebased_colon_group_end(
                 } else {
                     stack.push(trimmed.len());
                 }
+            } else if let Some(open) = detect_container_open(trimmed) {
+                if stack.len() < MAX_NESTING_DEPTH {
+                    stack.push(open.fence_len);
+                }
             }
         }
     }
@@ -7184,6 +7191,132 @@ fn rebased_table_end(lines: &[Cow<'_, str>], start: usize, base: usize) -> usize
         end = j;
     }
     end
+}
+
+#[cfg(test)]
+thread_local! {
+    static NAMED_COLON_REBASE_LINES: Cell<usize> = const { Cell::new(0) };
+}
+
+fn rebase_named_colon_extent(
+    lines: &mut [Cow<'_, str>],
+    columns: &mut [Option<isize>],
+    start: usize,
+    end: usize,
+    base: usize,
+    width: usize,
+) {
+    // Each payload line is rewritten once, even when named children nest.
+    let mut frames = vec![(width, base, 0, false, false)];
+    let mut items: Vec<usize> = Vec::new();
+    let mut comment_retains_frame = false;
+    let mut code: Option<(FenceOpen, usize, bool)> = None;
+    let mut comment: Option<usize> = None;
+    for (at, line) in lines.iter_mut().enumerate().take(end + 1).skip(start) {
+        let column = indent_columns(line);
+        let local = trim_ascii_start(line);
+        let Some(&(frame_width, frame_base, parent_base, literal, paragraph)) = frames.last()
+        else {
+            break;
+        };
+        let mut strip = frame_base;
+        let mut opaque = false;
+        if let Some((open, opener_column, payload)) = code {
+            if !is_blank_line(line) && column < frame_base && !payload {
+                code = None;
+            } else {
+                if (payload || column == opener_column) && is_fence_close(local, open) {
+                    code = None;
+                }
+                opaque = true;
+            }
+        }
+        if let Some(width) = comment {
+            if is_comment_fence_close_any_column(line, width) {
+                comment = None;
+            }
+            opaque = true;
+        }
+        if at > start && !opaque {
+            if is_blank_line(line) {
+                comment_retains_frame = false;
+                if let Some(frame) = frames.last_mut() {
+                    frame.4 = false;
+                }
+            } else {
+                let comment_is_body_owned = items.is_empty();
+                let comment_line = is_line_comment_any_column(line);
+                if !comment_line && column <= frame_base {
+                    comment_retains_frame = false;
+                }
+                if comment_line {
+                    comment_retains_frame = true;
+                }
+                while !comment_retains_frame
+                    && items.last().is_some_and(|content| column < *content)
+                {
+                    items.pop();
+                }
+                let in_item = items.last().is_some_and(|content| column >= *content);
+                let held_by_item = in_item || comment_retains_frame;
+                if let Some(open) = detect_comment_fence_line_any_column(line) {
+                    if comment_is_body_owned && column > frame_base {
+                        comment_retains_frame = true;
+                    }
+                    comment = Some(open.fence_len);
+                } else if let Some(open) =
+                    detect_fence_open(local).filter(|_| literal || column == frame_base || in_item)
+                {
+                    code = Some((open, column, literal));
+                    if let Some(frame) = frames.last_mut() {
+                        frame.4 = false;
+                    }
+                } else if !held_by_item && !literal {
+                    if exact_colon_fence_len(local) == Some(frame_width)
+                        && (column == frame_base || column == parent_base)
+                    {
+                        strip = column;
+                        frames.pop();
+                    } else if column >= frame_base && (column == frame_base || !paragraph) {
+                        if let Some(next_width) = detect_container_open(local)
+                            .map(|open| open.fence_len)
+                            .or_else(|| detect_line_block_open(local))
+                            .or_else(|| detect_hardbreaks_block_open(local))
+                            .or_else(|| detect_quote_block_open(local))
+                        {
+                            if frames.len() < MAX_NESTING_DEPTH {
+                                let next_literal = detect_line_block_open(local).is_some()
+                                    || detect_quote_block_open(local).is_some();
+                                frames.push((next_width, column, frame_base, next_literal, false));
+                                strip = column;
+                            }
+                        } else if let Some(frame) = frames.last_mut() {
+                            frame.4 =
+                                detect_fence_open(local).is_some() || !item_block_opener(local);
+                        }
+                    }
+                } else if literal
+                    && exact_colon_fence_len(local) == Some(frame_width)
+                    && column == frame_base
+                {
+                    frames.pop();
+                }
+                if !literal && (!paragraph || in_item) {
+                    if let Some(content) = marker_content_col_at(line, column) {
+                        items.push(content);
+                    }
+                }
+            }
+        }
+        if !is_blank_line(line) && column >= strip {
+            #[cfg(test)]
+            NAMED_COLON_REBASE_LINES.with(|count| count.set(count.get() + 1));
+            *line = Cow::Owned(strip_leading_columns(line, strip));
+            if let Some(Some(column)) = columns.get_mut(at) {
+                *column += strip as isize;
+            }
+        }
+    }
 }
 
 /// Apply an authored block base after a container's minimum content column has
@@ -7478,12 +7611,118 @@ fn rebase_overindented_blocks(
                 .map(|open| open.fence_len)
                 .or_else(|| detect_quote_block_open(&lines[i]))
             {
+                let marker_body =
+                    source.item_marker_at_start && i == 0 && !source.marker_colon_rebased;
+                let mut body_paragraph = false;
+                let mut body_code: Option<(FenceOpen, usize)> = None;
+                let mut body_comment: Option<usize> = None;
+                let mut body_items: Vec<usize> = Vec::new();
+                let mut comment_retains_frame = false;
+                let mut rebased_until = 0;
                 let mut stack = vec![width];
                 i += 1;
                 while i < lines.len() {
+                    let base = indent_columns(&lines[i]);
+                    if let Some((open, column)) = body_code {
+                        if !is_blank_line(&lines[i]) && base < column {
+                            body_code = None;
+                        } else {
+                            if base == column && is_fence_close(trim_ascii_start(&lines[i]), open) {
+                                body_code = None;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    if let Some(width) = body_comment {
+                        if is_comment_fence_close_any_column(&lines[i], width) {
+                            body_comment = None;
+                        }
+                        i += 1;
+                        continue;
+                    }
+                    let comment_is_body_owned = body_items.is_empty();
+                    let comment_line = is_line_comment_any_column(&lines[i]);
+                    if is_blank_line(&lines[i]) || (!comment_line && base == 0) {
+                        comment_retains_frame = false;
+                    }
+                    if comment_line {
+                        comment_retains_frame = true;
+                    }
+                    while !comment_retains_frame
+                        && body_items.last().is_some_and(|column| base < *column)
+                        && !is_blank_line(&lines[i])
+                    {
+                        body_items.pop();
+                    }
+                    let owned_by_item = body_items.last().is_some_and(|column| base >= *column);
+                    if let Some(open) = detect_fence_open(trim_ascii_start(&lines[i]))
+                        .filter(|_| base == 0 || owned_by_item)
+                    {
+                        body_code = Some((open, base));
+                        i += 1;
+                        continue;
+                    }
+                    if let Some(open) = detect_comment_fence_line(trim_ascii_start(&lines[i]))
+                        .filter(|_| {
+                            entry_closers
+                                .get_or_init(|| comment_closers_by_run(&lines))
+                                .get(
+                                    &detect_comment_fence_line(trim_ascii_start(&lines[i]))
+                                        .unwrap()
+                                        .fence_len,
+                                )
+                                .is_some_and(|indices| indices.last().is_some_and(|last| *last > i))
+                        })
+                    {
+                        if comment_is_body_owned && base > 0 {
+                            comment_retains_frame = true;
+                        }
+                        body_comment = Some(open.fence_len);
+                        i += 1;
+                        continue;
+                    }
+                    if (!body_paragraph || !body_items.is_empty())
+                        && detect_list_marker_full_at(&lines[i], base).is_some()
+                    {
+                        if let Some(column) = marker_content_col_at(&lines[i], base) {
+                            body_items.push(column);
+                        }
+                    }
+                    if marker_body
+                        && !body_paragraph
+                        && !owned_by_item
+                        && !comment_retains_frame
+                        && i >= rebased_until
+                        && base > 0
+                    {
+                        if let Some(open) = detect_container_open(trim_ascii_start(&lines[i])) {
+                            if exact_colon_fence_len(trim_ascii_start(&lines[i])).is_none() {
+                                let end = rebased_colon_group_end(&lines, i, base, open.fence_len);
+                                rebased_until = end + 1;
+                                source.marker_colon_rebased = true;
+                                rebase_named_colon_extent(
+                                    &mut lines,
+                                    &mut source.col_map,
+                                    i,
+                                    end,
+                                    base,
+                                    open.fence_len,
+                                );
+                            }
+                        }
+                    }
                     let line = &lines[i];
+                    if is_blank_line(line) || is_line_comment_any_column(line) {
+                        body_paragraph = false;
+                    } else if detect_fence_open(trim_ascii_start(line)).is_some()
+                        || !item_block_opener(trim_ascii_start(line))
+                    {
+                        body_paragraph = true;
+                    }
                     i += 1;
                     if exact_colon_fence_len(line) == Some(*stack.last().unwrap()) {
+                        body_paragraph = false;
                         stack.pop();
                         if stack.is_empty() {
                             break;
@@ -16849,6 +17088,7 @@ fn collect_indented_block_mapped_with_columns(
         line_map,
         authored_base_at_start,
         item_marker_at_start: false,
+        marker_colon_rebased: false,
         marker_tail: None,
         reached,
         sublists_carry_authored_base: false,
@@ -17894,6 +18134,7 @@ fn body_as_read(source: String, reached: Vec<bool>, options: &Options<'_>) -> St
         // rebase reads the same document here as it does there.
         authored_base_at_start: false,
         item_marker_at_start: false,
+        marker_colon_rebased: false,
         marker_tail: None,
         reached,
         sublists_carry_authored_base: false,
@@ -18435,6 +18676,7 @@ fn collect_definition_body(
         line_map,
         authored_base_at_start: false,
         item_marker_at_start: false,
+        marker_colon_rebased: false,
         marker_tail: None,
         reached,
         sublists_carry_authored_base: false,
@@ -30840,5 +31082,27 @@ mod marker_note_comment_bounds {
             assert!(!index.closes_in_note(&lines, at, 0, 4, width));
         }
         assert_eq!(CONTAINER_DEDENT_STEPS.with(Cell::get), 0);
+    }
+}
+
+#[cfg(test)]
+mod named_colon_rebase_work {
+    use super::*;
+
+    #[test]
+    fn named_colon_payload_rebasing_is_bounded_by_the_line_count() {
+        for size in [64, 128, 256] {
+            let mut source = "- ::: d\n".to_string();
+            for column in 1..size {
+                source.push_str(&format!("  {}::: x\n", " ".repeat(column)));
+            }
+            NAMED_COLON_REBASE_LINES.with(|count| count.set(0));
+            let _doc = parse(&source);
+            let work = NAMED_COLON_REBASE_LINES.with(Cell::get);
+            assert!(
+                work <= size * 6,
+                "{size} lines required {work} payload rewrites"
+            );
+        }
     }
 }

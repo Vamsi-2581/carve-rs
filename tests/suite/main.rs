@@ -2002,3 +2002,6 @@ mod quoted_item_block_end;
 
 #[path = "../held_container_tightness.rs"]
 mod held_container_tightness;
+
+#[path = "../item_hosted_named_colon.rs"]
+mod item_hosted_named_colon;
