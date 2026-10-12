@@ -6309,11 +6309,11 @@ fn fold_djot_references(source: &str) -> String {
     let mut lines: Vec<String> = source.split('\n').map(str::to_owned).collect();
     let mask = mask_djot_inline(source, false);
     let mut rows = djot_table_rows(source, &mask);
-    let definition = cached_regex!(r"^\[([^\^\]\n][^\]\n]*|)\]:(?:[ \t]+(\S*)[ \t]*|)$").unwrap();
+    let definition = cached_regex!(r"^\[([^\^\]\n][^\]\n]*|)\]:[ \t]*([^ \t\r\n]*)\r?$").unwrap();
     let boundary = cached_regex!(r"^(?:#{1,6} |:{3,}|\[[^\]]*\]:|(?:[-*][ \t]*){3,}$)").unwrap();
     let fence_end = cached_regex!(r"^(?:`{3,}|~{3,})[ \t]*$").unwrap();
     let marker = cached_regex!(r"(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\)|:)[ \t]+").unwrap();
-    let token = cached_regex!(r"^\S+$").unwrap();
+    let token = cached_regex!(r"^[^ \t\r\n]+$").unwrap();
     let thematic = cached_regex!(r"^(?:[ \t]*>[ \t]*)*[ \t]*(?:[-*][ \t]*){3,}$").unwrap();
     let mut removed = HashSet::new();
     let (mut offset, mut previous_depth, mut n) = (0usize, 0, 0);
@@ -6436,7 +6436,7 @@ fn fold_djot_references(source: &str) -> String {
         }
         if let Some(caps) = definition.captures(content) {
             if mask.as_bytes().get(offset + at) == Some(&b'[') && !allowed {
-                lines[n] = line.replacen("]:", "]\\:", 1);
+                lines[n] = format!("{}{}", &line[..at], line[at..].replacen("]:", "]\\:", 1));
             }
             if mask.as_bytes().get(offset + at) == Some(&b'[') && allowed {
                 let mut target = caps.get(2).map_or("", |m| m.as_str()).to_owned();
@@ -6444,18 +6444,27 @@ fn fold_djot_references(source: &str) -> String {
                 while end + 1 < lines.len() {
                     let next = &lines[end + 1];
                     let next_at = djot_content_start(next);
+                    let next_token = next[next_at..]
+                        .strip_suffix('\r')
+                        .unwrap_or(&next[next_at..]);
                     if quoted(next).0 != depth
                         || next_at <= at
+                        || next[..next_at].contains("[^")
                         || marker.is_match(&next[..next_at])
-                        || !token.is_match(&next[next_at..])
+                        || !token.is_match(next_token)
                     {
                         break;
                     }
-                    target.push_str(&next[next_at..]);
+                    target.push_str(next_token);
                     end += 1;
                 }
+                let next_byte = content.as_bytes().get(caps[1].len() + 3);
+                if end > n || !target.is_empty() && !matches!(next_byte, Some(b' ')) {
+                    let padding = if target.is_empty() { "" } else { " " };
+                    lines[n] =
+                        format!("{separator}{}[{}]:{padding}{target}", &line[..at], &caps[1]);
+                }
                 if end > n {
-                    lines[n] = format!("{separator}{}[{}]: {target}", &line[..at], &caps[1]);
                     for (k, value) in lines.iter_mut().enumerate().take(end + 1).skip(n + 1) {
                         offset += value.len() + 1;
                         removed.insert(k);
@@ -6463,6 +6472,14 @@ fn fold_djot_references(source: &str) -> String {
                     n = end;
                 }
             }
+        }
+        if !definition.is_match(content)
+            && cached_regex!(r"^\[([^\^\]\n][^\]\n]*|)\]:")
+                .unwrap()
+                .is_match(content)
+            && mask.as_bytes().get(offset + at) == Some(&b'[')
+        {
+            lines[n] = format!("{}{}", &line[..at], line[at..].replacen("]:", "]\\:", 1));
         }
         previous_attribute_block = allowed
             && content.starts_with('{')
@@ -8464,7 +8481,8 @@ fn normalize_djot_table_pipes(source: &str, empty_note: &str) -> String {
         offsets.push(offset);
         offset += line.len() + 1;
     }
-    let definition_re = cached_regex!(r"^\[([^\[\]\n^][^\[\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
+    let definition_re =
+        cached_regex!(r"^\[([^\[\]\n^][^\[\]\n]*)\]:[ \t]*([^ \t\r\n]*)\r?$").unwrap();
     let spaces = cached_regex!(r"\s+").unwrap();
     let escapes = cached_regex!(r"\\([!-/:-@\[-`{-~])").unwrap();
     let item_re = cached_regex!(r"(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\)|:)[ \t]+").unwrap();

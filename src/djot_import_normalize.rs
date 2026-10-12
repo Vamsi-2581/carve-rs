@@ -2278,7 +2278,7 @@ fn reference_attribute_text(attrs: &[(String, Vec<String>)], table: bool) -> Str
 }
 
 pub(super) fn references(source: &str) -> String {
-    let definition = cached_regex!(r"(?m)^\[([^\]\n^][^\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
+    let definition = cached_regex!(r"(?m)^\[([^\]\n^][^\]\n]*)\]:[ \t]*([^ \t\r\n]*)\r?$").unwrap();
     let quote_prefix = cached_regex!(r"^(?:[ \t]*>[ \t]*)*[ \t]*").unwrap();
     let list_marker = cached_regex!(r"(?:[-*+] |[0-9A-Za-z]+[.)] |\([0-9A-Za-z]+\) )").unwrap();
     let block_end = cached_regex!(
@@ -2718,13 +2718,13 @@ pub(super) fn references(source: &str) -> String {
 }
 
 fn reference_definitions(source: &str, mask: &str) -> (HashMap<String, String>, HashSet<usize>) {
-    let definition = cached_regex!(r"^\[([^\]\n^][^\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
+    let definition = cached_regex!(r"^\[([^\]\n^][^\]\n]*)\]:[ \t]*([^ \t\r\n]*)\r?$").unwrap();
     let item = cached_regex!(r"(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\))[ \t]+").unwrap();
     let block =
         cached_regex!(r"^(?:#{1,6}(?: |$)|:{3,}|[`~]{3,}|\{|\[[^\]]+\]:|(?:[*-][ \t]*){3,}$)")
             .unwrap();
     let container = cached_regex!(r"(?:>|[-*+] |[0-9A-Za-z]+[.)] |\([0-9A-Za-z]+\) )").unwrap();
-    let destination_token = cached_regex!(r"^\S+$").unwrap();
+    let destination_token = cached_regex!(r"^[^ \t\r\n]+$").unwrap();
     let heading = cached_regex!(r"^(#{1,6})(?:[ \t]+|$)").unwrap();
     let heading_break = cached_regex!(r"^(?:[#>|{]|[-*+][ \t]|[0-9A-Za-z]+[.)][ \t]|:[ \t]|:{2,}|\([0-9a-zA-Z]+\)[ \t]|[`~]{3,}|\[[^\]\n]*\]:|(?:[*-][ \t]*){3,}$)").unwrap();
     let lines: Vec<_> = source.split('\n').collect();
@@ -2734,6 +2734,9 @@ fn reference_definitions(source: &str, mask: &str) -> (HashMap<String, String>, 
     let mut definition_lines = HashSet::new();
     let mut heading_lines = HashSet::new();
     for (n, line) in lines.iter().enumerate() {
+        if definition_lines.contains(&n) {
+            continue;
+        }
         let at = djot_content_start(line);
         let content = &line[at..];
         let visible = &masks[n][at..];
@@ -2753,10 +2756,20 @@ fn reference_definitions(source: &str, mask: &str) -> (HashMap<String, String>, 
             let mut destination = caps[2].to_owned();
             for (next, line) in lines.iter().enumerate().skip(n + 1) {
                 let next_at = djot_content_start(line);
-                if next_at <= at || !destination_token.is_match(&line[next_at..]) {
+                let prefix = &line[..next_at];
+                let token = line[next_at..]
+                    .strip_suffix('\r')
+                    .unwrap_or(&line[next_at..]);
+                if quoted(line).0 != quoted(lines[n]).0
+                    || next_at <= at
+                    || prefix.contains("[^")
+                    || item.is_match(prefix)
+                    || cached_regex!(r":[ \t]+").unwrap().is_match(prefix)
+                    || !destination_token.is_match(token)
+                {
                     break;
                 }
-                destination.push_str(&line[next_at..]);
+                destination.push_str(token);
                 definition_lines.insert(next);
             }
             definitions.insert(definition_label(&caps[1]), destination);
