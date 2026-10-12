@@ -6843,7 +6843,7 @@ fn escape_destination_escapes(text: &str) -> String {
     out
 }
 
-fn escape_destination(text: &str) -> String {
+pub(crate) fn escape_destination(text: &str) -> String {
     // Almost every destination holds neither a parenthesis nor a backslash, so
     // there is nothing for the scan to misread and nothing to mark. Skipping
     // the walk keeps that case free of the set entirely.

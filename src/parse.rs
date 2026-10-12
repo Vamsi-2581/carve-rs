@@ -18317,6 +18317,9 @@ fn collect_definition_body(
     // (markup-carve/carve#1911, corpus 444-7 against 430-3).
     let mut reached: Vec<bool> = Vec::new();
     while let Some(line) = cur.peek() {
+        if is_document_definition_placeholder(line) {
+            break;
+        }
         // Form B: `+` pull-left continuation.
         if is_plus_marker(line) {
             cur.consume();

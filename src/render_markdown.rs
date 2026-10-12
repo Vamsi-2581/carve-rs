@@ -184,7 +184,9 @@ fn render_markdown_once(
         walk_headings(body, 0, true, &mut heading_pass);
     }
 
+    let referenced_links = referenced_link_labels(doc);
     let mut ctx = MarkdownContext {
+        referenced_links,
         suppress_automatic_abbreviation: false,
         heading_slugs,
         list_depth: 0,
@@ -249,7 +251,39 @@ fn render_frontmatter(doc: &Document) -> Option<String> {
     Some(out)
 }
 
+fn referenced_link_labels(doc: &Document) -> HashSet<String> {
+    use crate::include_walk::{visit_block_children, visit_inline_children, SubtreeVisitor};
+    struct Labels(HashSet<String>);
+    impl SubtreeVisitor for Labels {
+        fn blocks(&mut self, blocks: &mut Vec<BlockNode>) {
+            for block in blocks { visit_block_children(block, self); }
+        }
+        fn inlines(&mut self, inlines: &mut Vec<InlineNode>) {
+            for inline in inlines {
+                if let InlineNode::Link(link) = inline {
+                    if !link.href.is_empty() {
+                        if let Some(label) = &link.ref_label { self.0.insert(crate::parse::label_key(label)); }
+                    }
+                }
+                visit_inline_children(inline, self);
+            }
+        }
+        fn image(&mut self, image: &mut Image) {
+            if !image.src.is_empty() {
+                if let Some(label) = &image.ref_label { self.0.insert(crate::parse::label_key(label)); }
+            }
+        }
+    }
+    if !doc.children.iter().any(|block| matches!(block, BlockNode::LinkReferenceDefinition(_))) { return HashSet::new(); }
+    let mut labels = Labels(HashSet::new());
+    let mut document = doc.clone();
+    labels.blocks(&mut document.children);
+    for body in document.footnote_defs.values_mut() { labels.blocks(body); }
+    labels.0
+}
+
 struct MarkdownContext {
+    referenced_links: HashSet<String>,
     /// Set while rendering a span that carries an authored `abbr`.
     ///
     /// PART 9 section 10 and carve#1127: the authored value OUTRANKS automatic
@@ -478,7 +512,17 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
     }
     match node {
         // Renders nothing, same as carve-js and carve-php on this target.
-        BlockNode::LinkReferenceDefinition(_) | BlockNode::CitationDefinition(_) => String::new(),
+        BlockNode::LinkReferenceDefinition(definition) => {
+            if ctx.referenced_links.contains(&crate::parse::label_key(&definition.label)) {
+                return String::new();
+            }
+            let destination = neutralize_char_refs(&strip_control_chars(&definition.href)
+                .replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)")
+                .replace('<', "\\<").replace('>', "\\>"));
+            let title = definition.title.as_ref().map(|title| format!(" \"{}\"", escape_md_title(title))).unwrap_or_default();
+            format!("[{}]: {destination}{title}\n\n", definition.label)
+        }
+        BlockNode::CitationDefinition(_) => String::new(),
         // No `{#id}` suffix: GFM has no heading-id syntax, and a link reaches
         // the heading through its slug instead (PART 11 §11).
         BlockNode::Heading(heading) => {
