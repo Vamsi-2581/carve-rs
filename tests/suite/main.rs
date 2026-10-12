@@ -1990,3 +1990,6 @@ mod term_intervening_block_payload;
 
 #[path = "../space_only_inline_slots.rs"]
 mod space_only_inline_slots;
+
+#[path = "../unfinished_nested_fences.rs"]
+mod unfinished_nested_fences;

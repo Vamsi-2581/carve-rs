@@ -1522,7 +1522,7 @@ fn extract_footnote_defs(
         if let Some(open) = in_fence {
             if inline_fence_paragraph_ends(lines[i], open, inline_marker_paragraph.as_ref())
                 || (description_fence
-                    && description_blank
+                    && (description_blank || !inline_marker_fence)
                     && description_fence_leaves_after_blank(lines[i], open, &term_fence_columns))
                 || !inline_fence_lazy_line(lines[i], inline_marker_paragraph.as_ref())
                     && ((inline_marker_fence
@@ -3350,7 +3350,9 @@ fn prepass_paragraph_open_above(
         && indent_columns(above) <= indent_columns(lines[index])
         && !is_definition_placeholder(above)
         && !is_line_comment_any_column(above)
-        && !prepass_definition_line(above)
+        && !prepass_definition_line(
+            strip_term_quote_prefixes(above, quote_columns).unwrap_or(above),
+        )
 }
 
 fn remember_prepass_paragraph_line(
@@ -3408,7 +3410,7 @@ fn remember_prepass_paragraph_line(
     if is_blank_line(raw)
         || (trim_ascii(raw) == "+" && attaches_flush_left(Some(0), Some(&raw)))
         || is_definition_placeholder(raw)
-        || prepass_definition_line(raw)
+        || prepass_definition_line(rest)
         || trim_ascii_start(rest).starts_with("%%")
     {
         paragraph = None;
@@ -3833,7 +3835,7 @@ fn extract_link_defs_with_guard_full(
         if let Some(open) = in_fence {
             if inline_fence_paragraph_ends(line, open, inline_marker_paragraph.as_ref())
                 || (description_fence
-                    && description_blank
+                    && (description_blank || !inline_marker_fence)
                     && description_fence_leaves_after_blank(line, open, &term_fence_columns))
                 || !inline_fence_lazy_line(line, inline_marker_paragraph.as_ref())
                     && ((inline_marker_fence && is_blank_line(without_blockquote_prefixes(line)))
@@ -17988,6 +17990,9 @@ fn collect_definition_body(
     options: &Options<'_>,
 ) -> MappedSource {
     let mut lines: Vec<String> = Vec::new();
+    let mut nested_definition_open = seed.lines().any(is_definition_list_start);
+    let mut descendant_marker_fence: Option<(FenceOpen, usize)> = None;
+    let mut descendant_block_ended = false;
     // A lazy fold leaves a paragraph open. Rechecking by parsing all collected
     // lines after each fold would make a long paragraph quadratic. Other ways
     // of extending the body clear this hint because they may open a block.
@@ -18108,10 +18113,19 @@ fn collect_definition_body(
                 // declined an opener the block parser accepts, so the body folded
                 // the run below its own column in as verbatim payload
                 // (carve-rs#2092).
-                let paragraph_open = match lines.last() {
-                    Some(last) => !is_blank_line(last),
-                    None => seed.lines().last().is_some_and(|line| !is_blank_line(line)),
-                };
+                if let Some((open, column)) = descendant_marker_fence {
+                    if indent < column
+                        || (indent == column && is_fence_close(trim_ascii_start(line), open))
+                    {
+                        descendant_marker_fence = None;
+                        descendant_block_ended = true;
+                    }
+                }
+                let paragraph_open = !descendant_block_ended
+                    && match lines.last() {
+                        Some(last) => !is_blank_line(last),
+                        None => seed.lines().last().is_some_and(|line| !is_blank_line(line)),
+                    };
                 let accept_fence_opener = fence.open.is_none()
                     && detect_fence_open(&sliced).is_some_and(|open| {
                         !paragraph_open
@@ -18166,7 +18180,41 @@ fn collect_definition_body(
                 // nested fence starts a new item instead of being absorbed
                 // (carve#1970). `sliced` is in the body's own coordinates, as
                 // the seed and `advance_nested_lead_fence` both are.
-                advance_nested_lead_fence(&mut nested_lead_fence, &sliced);
+                let prior = lines
+                    .last()
+                    .map(String::as_str)
+                    .or_else(|| seed.lines().last());
+                if nested_lead_fence.is_some() || prior.map_or(true, is_blank_line) {
+                    advance_nested_lead_fence(&mut nested_lead_fence, &sliced);
+                }
+                if fence.open.is_none() {
+                    let local = trim_ascii_start(&sliced);
+                    if is_definition_list_start(local) {
+                        nested_definition_open = true;
+                    }
+                    if nested_definition_open {
+                        if let Some(body) = strip_description_prefix(local) {
+                            let marker_column = innermost_marker_content_col(body);
+                            if marker_column > 0 {
+                                if let Some(open) = detect_fence_open(trim_ascii_start(
+                                    innermost_marker_content(body),
+                                )) {
+                                    descendant_marker_fence = Some((
+                                        open,
+                                        indent + local.len() - body.len() + marker_column,
+                                    ));
+                                    descendant_block_ended = false;
+                                }
+                            }
+                        }
+                    }
+                    if indent == content_column
+                        && detect_fence_open(local).is_none()
+                        && line_starts_paragraph(local)
+                    {
+                        descendant_block_ended = false;
+                    }
+                }
                 folded_a_lazy_line = false;
                 lines.push(sliced);
                 line_map.push(cur.source_line(cur.pos));
@@ -18174,25 +18222,9 @@ fn collect_definition_body(
                 cur.consume();
                 continue;
             }
-            // A fence opened on the body's LEAD owns the flush-left lines below it
-            // as verbatim body (markup-carve/carve#1958). Frame the line so the
-            // re-parse reads it at NO column and the fence takes it, matching the
-            // oracle (carve-rs#1547/#1559). A `:: ` inside the open fence is body
-            // text too; a blank line ends the fence via the branch below.
+            // An unfinished nested marker fence owns no below-column line.
             if nested_lead_fence.is_some() {
-                folded_a_lazy_line = false;
-                let framed = format!("{LAZY}{}", strip_lazy(trim_ascii_start(line)));
-                // `trim_ascii_start` drops the line's own indent, so the column
-                // is what was stripped and nothing more - the frame is not
-                // source text and no position reader counts it (carve-rs#1559,
-                // carve-rs#1832).
-                let stripped = line.chars().count() - trim_ascii_start(line).chars().count();
-                col_map.push(cur.source_col(cur.pos).map(|c| c + stripped as isize));
-                lines.push(framed);
-                line_map.push(cur.source_line(cur.pos));
-                reached.push(false);
-                cur.consume();
-                continue;
+                break;
             }
             // A new term/definition marker ends the definition (the outer loop
             // picks it up). An EMPTY term marker opens nothing, whatever
