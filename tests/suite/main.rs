@@ -1978,3 +1978,6 @@ mod djot_parenthesized_words;
 
 #[path = "../djot_verbatim_quote_payload.rs"]
 mod djot_verbatim_quote_payload;
+
+#[path = "../djot_quote_paragraph_continuations.rs"]
+mod djot_quote_paragraph_continuations;
