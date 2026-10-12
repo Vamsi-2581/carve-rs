@@ -1933,3 +1933,24 @@ mod continued_marker_note_code_floor;
 
 #[path = "../definition_term_floor_text.rs"]
 mod definition_term_floor_text;
+
+#[path = "../term_ended_block_wave.rs"]
+mod term_ended_block_wave;
+
+#[path = "../description_band_wave.rs"]
+mod description_band_wave;
+
+#[path = "../closed_container_plus_wave.rs"]
+mod closed_container_plus_wave;
+
+#[path = "../djot_literal_wave.rs"]
+mod djot_literal_wave;
+
+#[path = "../markdown_strike_wave.rs"]
+mod markdown_strike_wave;
+
+#[path = "../djot_empty_item_wave.rs"]
+mod djot_empty_item_wave;
+
+#[path = "../quoted_closed_leaf_wave.rs"]
+mod quoted_closed_leaf_wave;

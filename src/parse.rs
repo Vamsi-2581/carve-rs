@@ -5051,6 +5051,8 @@ struct LineCursor<'a> {
     sublists_carry_authored_base: bool,
     comment_closer_last_index: Option<HashMap<usize, usize>>,
     future_quoted_comments: RefCell<Option<FutureQuotedComments>>,
+    literal_comments: Option<ContainerCommentClosers>,
+    literal_code: LiteralCodeLookup,
     /// Last consumed comment closer and the column of its opener.
     closed_comment_location: Option<(usize, usize)>,
     /// The last collected item body closed its marker-line colon container.
@@ -5090,6 +5092,8 @@ impl<'a> LineCursor<'a> {
             sublists_carry_authored_base: false,
             comment_closer_last_index: None,
             future_quoted_comments: RefCell::new(None),
+            literal_comments: None,
+            literal_code: LiteralCodeLookup::default(),
             closed_comment_location: None,
             marker_colon_closed: false,
             code_closer_last_index: None,
@@ -7168,6 +7172,11 @@ fn rebase_overindented_blocks(
     let mut after_blank = false;
     let mut paragraph_open = false;
     let mut opaque_quote_tail = false;
+    // A code-shaped run outside the preceding verse's bases is inline text.
+    // Keep its authored column through repeated rebase passes.
+    let mut last_literal_base = None;
+    let mut term_boundary = false;
+    let mut description_tail = false;
     // Has a line AT the container's minimum column been read since the scan
     // last stood inside a descendant? It is ownership evidence exactly as an
     // open paragraph is: the scan is back in the parent's coordinate system,
@@ -7177,6 +7186,7 @@ fn rebase_overindented_blocks(
     let mut block_at_minimum = false;
     while i < lines.len() {
         if is_blank_line(&lines[i]) {
+            last_literal_base = None;
             opaque_quote_tail = false;
             after_blank = true;
             paragraph_open = false;
@@ -7185,6 +7195,18 @@ fn rebase_overindented_blocks(
         }
         let base = indent_columns(&lines[i]);
         let local_at_base = strip_leading_columns(&lines[i], base);
+        if base > 0
+            && last_literal_base.is_some_and(|column| base != column)
+            && detect_fence_open(&local_at_base).is_some()
+        {
+            let open = detect_fence_open(&local_at_base).unwrap();
+            i = rebased_code_fence_end(&lines, i, base, open) + 1;
+            paragraph_open = true;
+            continue;
+        }
+        if base == 0 {
+            last_literal_base = None;
+        }
         if i == 0 && base > 0 && !source.authored_base_at_start {
             // A residual first-line marker still opens a descendant. Register
             // its content column before preserving the residual line so a
@@ -7367,26 +7389,24 @@ fn rebase_overindented_blocks(
                 }
                 after_blank = false;
                 paragraph_open = false;
-                block_at_minimum = false;
+                block_at_minimum = term_boundary;
                 continue;
             }
             if let Some(open) = detect_comment_fence_line(&lines[i]) {
-                i += 1;
-                while i < lines.len() {
-                    let closes = is_comment_fence_close(&lines[i], open.fence_len);
-                    i += 1;
-                    if closes {
-                        break;
-                    }
-                }
+                let close = entry_closers
+                    .get_or_init(|| comment_closers_by_run(&lines))
+                    .get(&open.fence_len)
+                    .and_then(|at| at.get(at.partition_point(|&at| at <= i)).copied());
+                i = close.map_or(i + 1, |at| at + 1);
                 after_blank = false;
                 paragraph_open = false;
-                block_at_minimum = false;
+                block_at_minimum = term_boundary;
                 continue;
             }
             // Verse lines are inline content, including indented block markers.
             // Only the line block's own closer ends this opaque body.
             if let Some(width) = detect_line_block_open(&lines[i]) {
+                last_literal_base = Some(0);
                 i += 1;
                 while i < lines.len() {
                     let closes = exact_colon_fence_len(&lines[i]) == Some(width);
@@ -7451,13 +7471,19 @@ fn rebase_overindented_blocks(
             // as an authored base of the outer body; the first line outside the
             // extent is deliberately classified by that outer body.
             if is_definition_list_start(&lines[i]) {
-                i = definition_entry_end(&lines, i, 0, &entry_closers) + 1;
+                let (end, term) = definition_entry_extent(&lines, i, 0, &entry_closers);
+                term_boundary = term;
+                description_tail = !term;
+                i = end + 1;
                 after_blank = false;
                 paragraph_open = false;
                 block_at_minimum = true;
                 continue;
             }
             paragraph_open = line_starts_paragraph(&lines[i]);
+            if paragraph_open {
+                term_boundary = false;
+            }
             after_blank = false;
             // A comment reaching this frame closes its paragraph. A lower
             // comment preserves the owner established before it; the next
@@ -7471,6 +7497,13 @@ fn rebase_overindented_blocks(
         if (is_list_marker(&opener) && !include_sublists)
             || (!is_list_marker(&opener) && !item_block_opener(&opener))
         {
+            let paragraph = line_starts_paragraph(&opener);
+            if !description_tail && !include_sublists {
+                paragraph_open = paragraph;
+            }
+            if paragraph {
+                term_boundary = false;
+            }
             after_blank = false;
             i += 1;
             continue;
@@ -7511,6 +7544,7 @@ fn rebase_overindented_blocks(
         } else if let Some(ref open) = comment {
             end = rebased_comment_end(&lines, i, base, open.fence_len);
         } else if let Some(width) = line_block {
+            last_literal_base = Some(base);
             end = rebased_line_block_end(&lines, i, base, width);
         } else if let Some(width) = colon {
             end = rebased_colon_group_end(&lines, i, base, width);
@@ -7626,13 +7660,14 @@ fn comment_closers_by_run(lines: &[impl AsRef<str>]) -> HashMap<usize, Vec<usize
 }
 
 /// Last line owned by a definition entry authored at `base`.
-fn definition_entry_end(
+fn definition_entry_extent(
     lines: &[impl AsRef<str>],
     start: usize,
     base: usize,
     closers: &std::cell::OnceCell<HashMap<usize, Vec<usize>>>,
-) -> usize {
+) -> (usize, bool) {
     let mut end = start;
+    let mut last_half_is_term = true;
     let mut description_column = None;
     // A term has no content column, so a line past the list's base folds into
     // an open term (carve#2411). Only a list marker still interrupts it.
@@ -7676,6 +7711,7 @@ fn definition_entry_end(
         if column == base && (is_definition_list_start(&local) || description.is_some()) {
             end = j;
             term_open = description.is_none();
+            last_half_is_term = description.is_none();
             if let Some((_, width)) = description {
                 description_column = Some(base + width);
             }
@@ -7691,7 +7727,7 @@ fn definition_entry_end(
                 std::iter::once(local.as_str())
                     .chain(lines[j + 1..].iter().map(|line| line.as_ref())),
             ) {
-                return j + count - 1;
+                return (j + count - 1, last_half_is_term);
             }
         }
         if term_open && column > base {
@@ -7729,7 +7765,7 @@ fn definition_entry_end(
         }
         break;
     }
-    end
+    (end, last_half_is_term)
 }
 
 /// Follow the nested lead fence over ONE line, in the body's own coordinates
@@ -8795,6 +8831,36 @@ impl ContainerCommentClosers {
             return false;
         };
         closer <= self.first_dedent(lines, open_at, open_col)
+    }
+
+    fn closes_in_cursor(
+        &mut self,
+        lines: CursorLines<'_>,
+        from: usize,
+        floor: usize,
+        width: usize,
+    ) -> bool {
+        let Some(closer) = self.next_closer(from, width, 0) else {
+            return false;
+        };
+        let boundary = match self.dedents.get(&floor).copied() {
+            Some((start, end)) if start <= from && from < end => end,
+            _ => {
+                let end = (from + 1..lines.len())
+                    .find(|&at| {
+                        #[cfg(test)]
+                        CONTAINER_DEDENT_STEPS.with(|count| count.set(count.get() + 1));
+                        let line = lines.at(at);
+                        !is_blank_line(line)
+                            && !is_line_comment_any_column(line)
+                            && indent_columns(line) < floor
+                    })
+                    .unwrap_or(lines.len());
+                self.dedents.insert(floor, (from, end));
+                end
+            }
+        };
+        closer <= boundary
     }
 
     /// The quoted twin of `closes_in_column`. The blank line carries the bound:
@@ -9947,7 +10013,6 @@ struct NestedFenceReplay {
 #[derive(Default)]
 struct NestedLevel {
     hosts: Vec<(usize, usize, bool)>,
-    initial_marker_column: Option<usize>,
     /// The fence a quoted host holds open, as (opener, the host's content column,
     /// the opener's own column). The two columns differ when the opener is
     /// SHIFTED past its host, and a closer at either one ends it.
@@ -10001,8 +10066,9 @@ impl NestedFenceReplay {
         (deepest.fence.is_some()
             || deepest.host_fence.is_some()
             || deepest.by_fence
-            || deepest.by_colon)
-            .then_some(false)
+            || deepest.by_colon
+            || deepest.host_comment.is_some())
+        .then_some(false)
     }
 
     fn replay(&mut self, lines: &[SourceLine], at: usize, cur: &LineCursor<'_>) {
@@ -10015,7 +10081,6 @@ impl NestedFenceReplay {
         }
         let mut level = 0;
         loop {
-            let mut colon_opaque = false;
             if let Some((open, floor, opener)) = chain[level].host_fence {
                 if !is_blank_line(text) && indent_columns(text) < floor {
                     chain[level].host_fence = None;
@@ -10053,20 +10118,20 @@ impl NestedFenceReplay {
                 chain.truncate(level + 1);
                 return;
             }
-            // A future closer suppresses colon recognition without changing
-            // the existing code-fence verdict before a lazy line.
+            // A collected comment is opaque. A closer beyond the collected
+            // item leaves a line comment, so its following blocks stay visible.
             if let Some((width, column, provisional)) = chain[level].host_comment {
                 if !is_blank_line(text) && indent_columns(text) < column {
                     chain[level].host_comment = None;
                 } else {
                     if is_comment_fence_close(trim_ascii_start(text), width) {
                         chain[level].host_comment = None;
+                        chain[level].by_comment = false;
                     }
                     if !provisional {
                         chain.truncate(level + 1);
                         return;
                     }
-                    colon_opaque = true;
                 }
             }
             if let Some((width, floor, column)) = chain[level].host_verse {
@@ -10130,11 +10195,11 @@ impl NestedFenceReplay {
                 level += 1;
                 continue;
             }
-            if !colon_opaque
-                && level + 1 == chain.len()
+            if level + 1 == chain.len()
                 && (!chain[level].colons.is_empty() || chain[level].by_colon)
                 && is_line_comment_any_column(text)
             {
+                chain[level].by_comment = false;
                 chain[level].para = false;
                 chain[level].colon_absorption = false;
                 return;
@@ -10156,13 +10221,21 @@ impl NestedFenceReplay {
             here.by_fence = false;
             here.by_colon = false;
             let after_comment = std::mem::take(&mut here.by_comment);
+            if after_comment
+                && here.hosts.last().is_some_and(|&(marker, column, _)| {
+                    indent_columns(text) > marker && indent_columns(text) < column
+                })
+                && !is_blank_line(text)
+                && !interrupts_paragraph_with_rest(text, &[])
+            {
+                here.para = true;
+            }
             let starts_sibling = detect_list_marker_full(trim_ascii_start(text)).is_some()
                 && marker_ends_replayed_item(&here.hosts, indent_columns(text));
-            let hosted_colon_opener = !colon_opaque
-                && here
-                    .hosts
-                    .iter()
-                    .any(|&(_, column, _)| column <= indent_columns(text))
+            let hosted_colon_opener = here
+                .hosts
+                .iter()
+                .any(|&(_, column, _)| column <= indent_columns(text))
                 && (!here.colon_absorption
                     || exact_colon_fence_len(trim_ascii_start(text)).is_none())
                 && (detect_container_open(trim_ascii_start(text)).is_some()
@@ -10185,7 +10258,7 @@ impl NestedFenceReplay {
                     here.colons.pop();
                 }
             }
-            if !colon_opaque {
+            {
                 let column = indent_columns(text);
                 if let Some(width) = exact_colon_fence_len(trim_ascii_start(text)) {
                     if let Some(index) = here.colons.iter().rposition(|&(seen, floor, authored)| {
@@ -10222,7 +10295,6 @@ impl NestedFenceReplay {
                             break;
                         }
                         let next = col + marker_content_col(inner).expect("matched list marker");
-                        here.initial_marker_column.get_or_insert(col);
                         here.hosts.push((col, next, true));
                         col = next + indent_columns(marker.content);
                         inner = trim_ascii_start(marker.content);
@@ -10235,12 +10307,16 @@ impl NestedFenceReplay {
                     break;
                 }
                 absorption_text = inner;
+                if block_start && is_line_comment_any_column(inner) {
+                    here.para = false;
+                    here.colon_absorption = false;
+                    here.by_colon = true;
+                }
                 if block_start {
                     here.colon_absorption = false;
                 }
                 let floor = here.hosts.last().map_or(0, |&(_, col, _)| col);
-                if !colon_opaque
-                    && block_start
+                if block_start
                     && exact_colon_fence_len(inner).is_some()
                     && !quoted_colon_body_follows(
                         lines,
@@ -10253,17 +10329,11 @@ impl NestedFenceReplay {
                     here.para = true;
                     return;
                 }
-                if !colon_opaque
-                    && floor > 0
+                if floor > 0
                     && col >= floor
                     && (col == floor
                         || exact_colon_fence_len(inner).is_none()
-                        || (here.colons.is_empty()
-                            && here.initial_marker_column.map_or(true, |initial| {
-                                here.hosts
-                                    .last()
-                                    .is_some_and(|&(marker, _, _)| marker >= initial)
-                            })))
+                        || here.colons.is_empty())
                 {
                     if let Some(comment) = detect_comment_fence_line(inner) {
                         let len = comment.fence_len;
@@ -10272,10 +10342,8 @@ impl NestedFenceReplay {
                         });
                         if collected || future_quoted_comment_closes(cur, level + 1, col, len) {
                             here.host_comment = Some((len, col, !collected));
-                            if collected {
-                                here.para = false;
-                                here.colon_absorption = false;
-                            }
+                            here.para = false;
+                            here.colon_absorption = false;
                             return;
                         }
                     }
@@ -10311,6 +10379,38 @@ impl NestedFenceReplay {
                         return;
                     }
                 }
+                let mut leaf = inner;
+                if block_start {
+                    loop {
+                        if detect_thematic_break(leaf) {
+                            break;
+                        }
+                        if let Some(rest) = strip_blockquote_prefix(leaf) {
+                            leaf = trim_ascii_start(rest);
+                        } else if let Some(marker) = detect_list_marker_full(leaf) {
+                            leaf = trim_ascii_start(marker.content);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let row = is_table_start(leaf);
+                if floor > 0
+                    && col == floor
+                    && here.hosts.last().is_some_and(|&(_, _, item)| item)
+                    && (row
+                        || detect_heading(leaf).is_some()
+                        || detect_thematic_break(leaf)
+                        || (!block_start && detect_prepass_def_term(inner).is_some())
+                        || standalone_attrs_block_len(&[leaf]) == Some(1)
+                        || parse_link_def_line(leaf).is_some()
+                        || (block_start && is_line_comment_any_column(leaf)))
+                {
+                    here.para = false;
+                    here.colon_absorption = false;
+                    here.by_colon = true;
+                    return;
+                }
                 if let Some(open) = detect_fence_open(inner).filter(|_| floor > 0) {
                     // The host holds the fence whether the opener sits AT its
                     // content column or past it. A fence after an open paragraph
@@ -10337,6 +10437,12 @@ impl NestedFenceReplay {
                         return;
                     }
                     here.para = true;
+                    return;
+                }
+                if block_start && is_line_comment_any_column(inner) {
+                    here.para = false;
+                    here.colon_absorption = false;
+                    here.by_colon = true;
                     return;
                 }
             }
@@ -10371,16 +10477,12 @@ impl NestedFenceReplay {
                     here.comment = Some(len);
                 }
             }
-            if !colon_opaque
-                && exact_colon_fence_len(trim_ascii_start(text)).is_some()
-                && !here.colons.is_empty()
-            {
+            if exact_colon_fence_len(trim_ascii_start(text)).is_some() && !here.colons.is_empty() {
                 here.para = true;
                 here.colon_absorption = false;
                 return;
             }
-            if !colon_opaque
-                && after_comment
+            if after_comment
                 && !here.para
                 && !here.colon_absorption
                 && here.colons.is_empty()
@@ -10389,8 +10491,11 @@ impl NestedFenceReplay {
                 here.by_colon = true;
                 return;
             }
-            if is_blank_line(text) {
-                here.initial_marker_column = None;
+            if is_line_comment_any_column(text) {
+                here.by_comment = here
+                    .hosts
+                    .last()
+                    .is_some_and(|&(_, column, _)| indent_columns(text) < column);
             }
             let mut paragraph = ParaOpen::from_line(text, here.colon_absorption);
             here.para = paragraph.get();
@@ -10629,6 +10734,20 @@ struct LiteralCodeScope {
 
 impl LiteralCodeIndex {
     fn refresh(&mut self, lines: &[SourceLine], level: usize, from: usize) {
+        self.refresh_text(lines.len(), level, from, |at| lines[at].text.as_str());
+    }
+
+    fn refresh_cursor(&mut self, lines: CursorLines<'_>, from: usize) {
+        self.refresh_text(lines.len(), 0, from, |at| lines.at(at));
+    }
+
+    fn refresh_text<'a>(
+        &mut self,
+        length: usize,
+        level: usize,
+        from: usize,
+        line_at: impl Fn(usize) -> &'a str,
+    ) {
         if let Some(end) = self.scope_end {
             if from < end {
                 return;
@@ -10638,10 +10757,10 @@ impl LiteralCodeIndex {
             self.scope_end = None;
         }
         self.scanned = self.scanned.max(from + 1);
-        for (index, line) in lines.iter().enumerate().skip(self.scanned) {
+        for index in self.scanned..length {
+            let mut text = line_at(index);
             #[cfg(test)]
             LITERAL_CODE_LINES.with(|work| work.set(work.get() + 1));
-            let mut text = line.text.as_str();
             let mut boundary = text.starts_with(LAZY);
             for _ in 0..level {
                 let Some(rest) = strip_blockquote_prefix(text) else {
@@ -10673,7 +10792,7 @@ impl LiteralCodeIndex {
                 .or_default()
                 .push(index, width);
         }
-        self.scanned = lines.len();
+        self.scanned = length;
     }
 
     fn next(&self, from: usize, column: usize, open: FenceOpen) -> Option<usize> {
@@ -10705,6 +10824,58 @@ fn indexed_code_closes(
             .get(index.boundaries.partition_point(|&at| at <= from))
             .map_or(true, |&end| close < end)
     })
+}
+
+fn literal_code_closes_cursor(
+    cur: &mut LineCursor<'_>,
+    floor: usize,
+    column: usize,
+    open: FenceOpen,
+) -> bool {
+    let from = cur.pos;
+    let index = cur.literal_code.indices.entry(0).or_default();
+    index.refresh_cursor(cur.lines, from);
+    let closer = index
+        .next(from, floor, open)
+        .into_iter()
+        .chain(index.next(from, column, open))
+        .min();
+    let Some(closer) = closer else {
+        return false;
+    };
+    if index
+        .boundaries
+        .get(index.boundaries.partition_point(|&at| at <= from))
+        .is_some_and(|&at| at <= closer)
+    {
+        return false;
+    }
+    let key = (0, floor);
+    if let Some(scope) = cur
+        .literal_code
+        .scopes
+        .get(&key)
+        .filter(|scope| from >= scope.from && from < scope.end)
+    {
+        return closer < scope.end;
+    }
+    for at in from + 1..=closer {
+        #[cfg(test)]
+        LITERAL_CODE_LINES.with(|work| work.set(work.get() + 1));
+        let text = cur.lines.at(at);
+        if !is_blank_line(text) && indent_columns(text) < floor {
+            cur.literal_code.scopes.insert(
+                key,
+                LiteralCodeScope {
+                    from,
+                    length: cur.lines.len(),
+                    end: at,
+                },
+            );
+            return false;
+        }
+    }
+    true
 }
 
 fn literal_code_closes(
@@ -10961,7 +11132,11 @@ fn collect_blockquote_body(
             may_hold_fence = may_hold_fence
                 || stripped.contains("```")
                 || stripped.contains("~~~")
-                || stripped.contains(":::");
+                || stripped.contains(":::")
+                || stripped.contains("- ")
+                || stripped.contains("* ")
+                || stripped.contains(". ")
+                || stripped.contains(") ");
             // The quote marker (and its optional space) is a pure prefix, so the
             // quoted line's columns are knowable in the document.
             let stripped_at = stripped_col(cur.source_col(at), line, stripped);
@@ -12294,6 +12469,7 @@ fn parse_list(
     // blank in the item is interior to it and loosens nothing (§17; the
     // reference tracks the span apart from whether the fence opened).
     let mut item_unopened_fence_span = false;
+    let mut item_unclosed_fence_base = None;
     let mut item_rejected_fence_owner = false;
     // Did the item just built carry a BARE `+` lead - an empty first-block item
     // waiting for a document-column-0 block (§17 L3, markup-carve/carve#1436)?
@@ -12378,9 +12554,19 @@ fn parse_list(
         }
         let Some(marker) = detect_list_marker_full(line) else {
             let indent = indent_columns(line);
+            if !item_paragraph_open
+                && indent < content_col
+                && is_line_comment_any_column(line)
+                && !line.starts_with(LAZY)
+            {
+                break;
+            }
             if indent > base_indent {
-                let authored_overindented_opener =
-                    indent > content_col && item_block_opener(trim_ascii_start(line));
+                let foreign_fence_base = indent > content_col
+                    && item_unclosed_fence_base.is_some_and(|base| base != indent);
+                let authored_overindented_opener = indent > content_col
+                    && !foreign_fence_base
+                    && item_block_opener(trim_ascii_start(line));
                 // After a blank line, lazy continuation no longer applies: a line
                 // must reach the item's content column to keep belonging to it
                 // (PART 9 §24 C3). A line BELOW content_column ends the list and
@@ -12459,6 +12645,9 @@ fn parse_list(
                         &mut item_open_fence,
                     );
                     nested.authored_base_at_start |= authored_overindented_opener;
+                    if foreign_fence_base {
+                        nested.authored_base_at_start = false;
+                    }
                     let collected_tail_blank = item_open_fence.is_some()
                         && cur.pos > 0
                         && is_blank_line(cur.lines.at(cur.pos - 1));
@@ -12474,14 +12663,11 @@ fn parse_list(
                     if item_rejected_fence_owner {
                         let mut admitted = nested.clone();
                         rebase_overindented_blocks(&mut admitted, false, options);
-                        latest_owner.set(Some(
-                            body_ends_with_code_block(&admitted.source, options)
-                                || collected_body_takes_the_lazy_line(
-                                    &admitted.source,
-                                    last_consumed_line_below_column(cur, content_col),
-                                    options,
-                                ),
-                        ));
+                        latest_owner.set(Some(collected_body_takes_the_lazy_line(
+                            &admitted.source,
+                            last_consumed_line_below_column(cur, content_col),
+                            options,
+                        )));
                     }
                     if !collected_tail_blank
                         && (item_open_fence.is_none()
@@ -12516,14 +12702,7 @@ fn parse_list(
                                     if paragraph {
                                         item_open_fence = None;
                                     }
-                                    latest_owner.set(Some(
-                                        paragraph
-                                            || (item_open_fence.is_none()
-                                                && body_ends_with_code_block(
-                                                    &admitted.source,
-                                                    options,
-                                                )),
-                                    ));
+                                    latest_owner.set(Some(paragraph));
                                 }
                                 resumed
                             },
@@ -12535,7 +12714,7 @@ fn parse_list(
                     // can establish its authored block base (#1705). Without
                     // this, it is indistinguishable from a first-line residual
                     // indent produced by a tab straddling the content column.
-                    nested.authored_base_at_start |= pending_blank;
+                    nested.authored_base_at_start |= pending_blank && !foreign_fence_base;
                     let definition_ended_paragraph = nested
                         .source
                         .lines()
@@ -12555,9 +12734,7 @@ fn parse_list(
                         last_consumed_line_below_column(cur, content_col),
                         options,
                     );
-                    item_paragraph_open = nested_leaves_paragraph_open
-                        || (item_rejected_fence_owner
-                            && body_ends_with_code_block(&nested.source, options));
+                    item_paragraph_open = nested_leaves_paragraph_open;
                     let mut split_stack: Vec<(Attrs, Option<Pos>)> = Vec::new();
                     while let Some(split) = split_trailing_attrs(&mut nested) {
                         split_stack.push(split);
@@ -12803,6 +12980,17 @@ fn parse_list(
                 if held.is_some() {
                     pending_attrs_pos = None;
                 }
+                if cur
+                    .peek()
+                    .is_some_and(|line| !is_blank_line(line) && indent_columns(line) < content_col)
+                {
+                    item_paragraph_open = nested_ends_with_open_paragraph_rebased(
+                        &nested,
+                        last_consumed_line_below_column(cur, content_col),
+                        last_consumed_line_below_column(cur, content_col),
+                        options,
+                    );
+                }
                 let nested_children = item_body(deferred, last_item, nested, held, false, options);
                 // The blank BEFORE this sub-list is consumed by it and must not
                 // survive to loosen a later sibling marker (§17 L2: a blank
@@ -12905,6 +13093,7 @@ fn parse_list(
         // A new item carries none of the previous item's fence state.
         item_open_fence = None;
         item_unopened_fence_span = false;
+        item_unclosed_fence_base = None;
         item_rejected_fence_owner = false;
         let item_source_line = cur.source_line(cur.pos);
         let item_at = cur.pos;
@@ -13480,11 +13669,14 @@ fn parse_list(
                         if swallowed_blank_separator || literal_comment_handoff {
                             return false;
                         }
-                        let src = &src.source;
-                        if marker_line_was_the_whole_block {
-                            return body_ends_with_open_paragraph(src, options);
+                        if marker_line_was_the_whole_block
+                            || !is_definition_list_start(marker.content)
+                        {
+                            return body_ends_with_open_paragraph(&src.source, options);
                         }
-                        body_ends_with_open_paragraph(src, options)
+                        let mut rebased = src.clone();
+                        rebase_overindented_blocks(&mut rebased, false, options);
+                        body_ends_with_open_paragraph(&rebased.source, options)
                     },
                     |cur| collect_indented_block_mapped(cur, base_indent, content_col),
                 );
@@ -13499,8 +13691,14 @@ fn parse_list(
             }
             // A heading, a fence or a table on the marker line leaves the item
             // holding no paragraph - see `item_paragraph_open`.
-            item_paragraph_open =
-                !literal_comment_handoff && body_ends_with_open_paragraph(&stream.source, options);
+            item_paragraph_open = !literal_comment_handoff
+                && if is_definition_list_start(marker.content) {
+                    let mut rebased = stream.clone();
+                    rebase_overindented_blocks(&mut rebased, false, options);
+                    body_ends_with_open_paragraph(&rebased.source, options)
+                } else {
+                    body_ends_with_open_paragraph(&stream.source, options)
+                };
             let children = item_body(deferred, items.len(), stream, None, false, options);
             items.push(ListItem {
                 attrs: item_attrs,
@@ -13544,6 +13742,15 @@ fn parse_list(
                         && detect_list_marker_full(line).is_none()
                         && indent > base_indent
                         && indent < content_col
+                })
+            {
+                break;
+            }
+            if !item_paragraph_open
+                && cur.peek().is_some_and(|line| {
+                    trim_ascii(line) == "+"
+                        && indent_columns(line) > base_indent
+                        && indent_columns(line) < content_col
                 })
             {
                 break;
@@ -13641,6 +13848,7 @@ fn parse_list(
                 // still lazy paragraph text.
                 let over_indented = trim_ascii_start(next);
                 if item_block_opener(over_indented)
+                    && item_unclosed_fence_base.map_or(true, |base| base == indent)
                     && !detect_fence_open(over_indented).is_some_and(|open| {
                         !list_code_fence_closer_ahead(cur, open, content_col, base_indent)
                     })
@@ -13649,6 +13857,7 @@ fn parse_list(
                 }
                 if detect_fence_open(over_indented).is_some() {
                     item_unopened_fence_span = true;
+                    item_unclosed_fence_base.get_or_insert(indent);
                     item_rejected_fence_owner = true;
                 }
                 // Fully strip ordinary prose's indent and fold it into the lead
@@ -13722,6 +13931,7 @@ fn parse_list(
                 track_collected_fence(&mut item_open_fence, &dedented, true, indent);
             } else {
                 item_unopened_fence_span = true;
+                item_unclosed_fence_base.get_or_insert(indent);
                 item_rejected_fence_owner = true;
             }
             suppress_colon_interrupt |= is_invalid_colon_fence_opener_text(&dedented);
@@ -14451,16 +14661,6 @@ fn trailing_marker_line_content(body: &str) -> Option<String> {
     Some(marker.content.to_string())
 }
 
-fn body_ends_with_code_block(body: &str, options: &Options<'_>) -> bool {
-    if body.lines().any(is_collected_definition_placeholder) {
-        return false;
-    }
-    matches!(
-        probe_blocks(body, options).last(),
-        Some(BlockNode::CodeBlock(_) | BlockNode::RawBlock(_))
-    )
-}
-
 /// PART 1 S4's one question, asked of a container's WHOLE body: does the last
 /// block leave a paragraph open?
 ///
@@ -14473,6 +14673,15 @@ fn body_ends_with_code_block(body: &str, options: &Options<'_>) -> bool {
 /// and looking past it would find one that was never written
 /// (markup-carve/carve#1280).
 fn body_ends_with_open_paragraph(body: &str, options: &Options<'_>) -> bool {
+    if body_ends_with_an_attribute_line(body)
+        || body
+            .lines()
+            .rev()
+            .find(|line| !is_blank_line(line))
+            .is_some_and(|line| is_collected_definition_placeholder(trim_ascii_start(line)))
+    {
+        return false;
+    }
     let blocks = probe_blocks(body, options);
     block_ends_with_open_paragraph(blocks.last(), colon_fences_left_open(body), false)
 }
@@ -14583,13 +14792,13 @@ fn colon_fences_left_open(nested: &str) -> usize {
     let mut comment_closers = None;
     for (index, line) in lines.iter().copied().enumerate() {
         let trimmed = trim_ascii_start(line);
-        let (offset, content) = if index == 0 {
+        let (offset, content) = if index == 0 || (code.is_none() && index >= verse_end) {
             innermost_marker_tail(trimmed)
         } else {
             (0, trimmed)
         };
         let column = indent_columns(line) + offset;
-        if index == 0 && offset > 0 {
+        if offset > 0 {
             host_floor = column;
         }
         let trimmed = content;
@@ -14709,11 +14918,16 @@ fn block_ends_with_open_paragraph(
         // about: the fence closes the paragraph inside it, and a dedented line
         // after it ends the item (like code/table). One line of body decides it
         // two ways, which is why `colon_open` is read from the SOURCE.
-        Some(BlockNode::LineBlock(verse)) if colon_open > 0 => block_ends_with_open_paragraph(
-            last_open_child(&verse.children, skip_comments),
-            colon_open - 1,
-            skip_comments,
-        ),
+        Some(BlockNode::LineBlock(verse)) if colon_open > 0 => {
+            !matches!(
+                verse.children.last(), Some(BlockNode::Paragraph(p))
+                    if p.children.iter().all(|node| matches!(node, InlineNode::Comment(_)))
+            ) && block_ends_with_open_paragraph(
+                last_open_child(&verse.children, skip_comments),
+                colon_open - 1,
+                skip_comments,
+            )
+        }
         Some(BlockNode::Directive(d)) if colon_open > 0 => block_ends_with_open_paragraph(
             last_open_child(&d.children, skip_comments),
             colon_open - 1,
@@ -15331,7 +15545,7 @@ fn collect_trailing_lazy_through_framed(
         if is_blank_line(line)
             || indent_columns(line) > base_indent
             || (is_list_marker(line) && indent_columns(line) <= list_base)
-            || trim_ascii(line) == "+"
+            || (trim_ascii(line) == "+" && indent_columns(line) == list_base)
             || {
                 // AS A CONTAINER: this collector runs only for a line folding
                 // into a container's open paragraph, and §7 recognizes an
@@ -15674,6 +15888,9 @@ fn collect_indented_block_mapped_with_columns(
     let literal_marker_body = marker_content.is_some_and(|content| {
         trim_ascii_start(content).starts_with(':') && detect_line_block_open(content).is_some()
     });
+    let mut literal_colon = marker_content
+        .and_then(detect_line_block_open)
+        .map(|width| (width, strip_cols, strip_cols));
     let mut comment_fence = marker_comment.map(|open| (open.fence_len, strip_cols));
     let mut comment_fence_strip = comment_fence.map(|_| strip_cols);
     // A colon opener on this item's own marker line is a line the walk never
@@ -15682,13 +15899,14 @@ fn collect_indented_block_mapped_with_columns(
         .pos
         .checked_sub(1)
         .and_then(|at| detect_list_marker_full(cur.lines.at(at)))
-        .filter(|marker| marker.indent == parent_indent)
+        .filter(|marker| marker.indent <= parent_indent)
         .and_then(|marker| {
             let mut seed = Vec::new();
             track_collected_colon_fence(&mut seed, marker.content, true);
             seed.pop()
         });
     let mut marker_colon_closed = false;
+    let mut marker_colon_retained_para = false;
     let mut definition_ended_paragraph = false;
     let mut closed_code_leaf = false;
     // A COMMENT FENCE WITH NO CLOSER OPENS NO SPAN AND LEAVES NO PARAGRAPH.
@@ -15738,6 +15956,7 @@ fn collect_indented_block_mapped_with_columns(
     let mut nested_fence: Option<FenceOpen> = None;
     while let Some(line) = cur.peek() {
         if is_blank_line(line) {
+            marker_colon_retained_para = false;
             if comment_fence.is_none() && fence.is_none() {
                 marker_term_open = false;
             }
@@ -15842,6 +16061,12 @@ fn collect_indented_block_mapped_with_columns(
             continue;
         }
         let indent = indent_columns(line);
+        if literal_colon.is_some_and(|(_, _, floor)| indent < floor)
+            && !is_line_comment_any_column(line)
+            && detect_comment_fence_line_any_column(line).is_none()
+        {
+            literal_colon = None;
+        }
         if term_code_tail_can_resume {
             term_code_lazy_tail = indent >= strip_cols && fence.is_some();
             term_code_tail_can_resume = false;
@@ -15862,9 +16087,10 @@ fn collect_indented_block_mapped_with_columns(
                 term_code_closer_checked = true;
             }
         }
-        let fence_owns_flush_left = ((fence.is_some()
-            || (comment_fence.is_some() && !literal_marker_body))
-            && line.starts_with(LAZY))
+        let fence_owns_flush_left = (line.starts_with(LAZY)
+            && (marker_colon.is_some() || !colon_open.is_empty()))
+            || ((fence.is_some() || (comment_fence.is_some() && !literal_marker_body))
+                && line.starts_with(LAZY))
             || (indent < strip_cols
                 && term_code_lazy_tail
                 && fence.is_some()
@@ -15988,20 +16214,48 @@ fn collect_indented_block_mapped_with_columns(
         if degraded_descendant_fence && !cur.line_reached(cur.pos, indent, strip_cols) {
             break;
         }
-        if closed_comment_span_above && !cur.line_reached(cur.pos, indent, strip_cols) {
+        if closed_comment_span_above
+            && marker_colon.is_none()
+            && !cur.line_reached(cur.pos, indent, strip_cols)
+        {
             break;
         }
         if fence.is_some() && indent < strip_cols && !fence_owns_flush_left {
             break;
         }
-        if !colon_open.is_empty() && indent < strip_cols {
+        if !colon_open.is_empty() && indent < strip_cols && !fence_owns_flush_left {
             break;
+        }
+        if marker_colon_retained_para
+            && indent >= strip_cols
+            && item_block_opener(trim_ascii_start(line))
+            && strip_blockquote_prefix(trim_ascii_start(line)).is_none()
+            && !is_line_comment_any_column(line)
+            && comment_fence.is_none()
+            && fence.is_none()
+        {
+            marker_colon_retained_para = false;
         }
         if marker_colon.is_some()
             && !literal_marker_body
+            && indent < strip_cols
+            && indent > parent_indent
+            && !marker_colon_retained_para
+        {
+            let after_comment = cur.pos.checked_sub(1).is_some_and(|at| {
+                let previous = cur.lines.at(at);
+                indent_columns(previous) < strip_cols && is_line_comment_any_column(previous)
+            });
+            if after_comment && !interrupts_lazy_continuation_as_container(cur, line) {
+                marker_colon_retained_para = true;
+            }
+        }
+        if marker_colon.is_some()
+            && !literal_marker_body
+            && !marker_colon_retained_para
+            && !fence_owns_flush_left
             && fence.is_none()
             && indent < strip_cols
-            && trim_ascii(line) != "+"
             && !is_line_comment_any_column(line)
             && detect_comment_fence_line_any_column(line).is_none()
         {
@@ -16107,7 +16361,21 @@ fn collect_indented_block_mapped_with_columns(
         } else if let Some(open) =
             detect_comment_fence_line_any_column(line).filter(|_| fence.is_none())
         {
-            if cur.has_comment_closer_after(cur.pos + 1, open.fence_len) {
+            let closes = if let Some((_, _, floor)) = literal_colon {
+                if cur.literal_comments.is_none() {
+                    let source: Vec<_> = cur.lines.range(0..cur.lines.len()).collect();
+                    cur.literal_comments = Some(ContainerCommentClosers::build(&source));
+                }
+                cur.literal_comments.as_mut().unwrap().closes_in_cursor(
+                    cur.lines,
+                    cur.pos,
+                    floor,
+                    open.fence_len,
+                )
+            } else {
+                cur.has_comment_closer_after(cur.pos + 1, open.fence_len)
+            };
+            if closes {
                 comment_fence = Some((open.fence_len, indent));
                 comment_fence_strip = Some(if indent < strip_cols { 0 } else { strip_cols });
                 span_reached_this_frame = cur.in_item_body && indent >= strip_cols;
@@ -16298,7 +16566,13 @@ fn collect_indented_block_mapped_with_columns(
             comment_fence_strip = None;
         }
         let (mut sliced, consumed, synthetic) = slice_columns_mapped(payload_line, stripped, true);
-        if (lazy_code_line || framed_comment_payload || lazy_list_marker)
+        if marker_colon_retained_para && indent < strip_cols {
+            sliced = trim_ascii_start(&sliced).to_string();
+        }
+        if (lazy_code_line
+            || framed_comment_payload
+            || lazy_list_marker
+            || (marker_colon_retained_para && indent < strip_cols))
             && !sliced.starts_with(LAZY)
         {
             sliced.insert_str(0, LAZY);
@@ -16378,7 +16652,21 @@ fn collect_indented_block_mapped_with_columns(
                     || detect_fence_open(paragraph_line).is_some();
             }
             let was_in_code = fence.is_some();
-            track_collected_fence(fence, fence_line, indent >= strip_cols, indent);
+            let may_track_code = literal_colon.map_or(true, |(_, column, floor)| {
+                (indent == floor || indent == column)
+                    && (fence.is_some()
+                        || detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
+                            literal_code_closes_cursor(cur, floor, column, open)
+                        }))
+            });
+            if may_track_code {
+                let tracked = if literal_colon.is_some() {
+                    trim_ascii_start(fence_line)
+                } else {
+                    fence_line
+                };
+                track_collected_fence(fence, tracked, indent >= strip_cols, indent);
+            }
             if marker_is_definition_term && !was_in_code && fence.is_some() {
                 term_code_lazy_tail = marker_term_paragraph_open
                     && !marker_definition_has_description
@@ -16398,11 +16686,30 @@ fn collect_indented_block_mapped_with_columns(
                 && !is_line_comment_any_column(line)
                 && !is_collected_definition_placeholder(&sliced)
             {
-                closed_code_leaf = false;
+                closed_code_leaf = indent >= strip_cols
+                    && (parse_standalone_attrs(trim_ascii_start(line)).is_some()
+                        || parse_footnote_def_line(trim_ascii_start(line)).is_some()
+                        || parse_link_def_line(trim_ascii_start(line)).is_some());
             }
             if fence.is_none() {
                 folded_code_span = false;
                 authored_code_base = None;
+            }
+        }
+        if !opaque_here {
+            if let Some((width, column, floor)) = literal_colon {
+                if (indent == floor || indent == column)
+                    && exact_colon_fence_len(trim_ascii_start(line)) == Some(width)
+                {
+                    literal_colon = None;
+                }
+            } else if let Some(width) = detect_line_block_open(trim_ascii_start(line)) {
+                if indent >= strip_cols {
+                    let floor = nested_item_columns
+                        .last()
+                        .map_or(strip_cols, |&(_, col)| col);
+                    literal_colon = Some((width, indent, floor));
+                }
             }
         }
         if indent == strip_cols
@@ -17520,6 +17827,9 @@ fn body_ends_with_an_attribute_line(source: &str) -> bool {
     let Some(end) = lines.iter().rposition(|line| !is_blank_line(line)) else {
         return false;
     };
+    if !trim_ascii_end(lines[end]).ends_with('}') {
+        return false;
+    }
     // The WRAPPED spelling (`{.k` / `#x}`) counts too. This used to test the
     // last line alone, so a block that closed on it but OPENED on an earlier one
     // was invisible here and the body was read as ending in a paragraph
@@ -29173,29 +29483,38 @@ mod shared_colon_work_tests {
     #[test]
     fn rejected_fence_carry_scans_only_new_chunks() {
         for positions in [false, true] {
-            for count in [64, 256, 1024] {
-                let source = format!(
-                    "- a\n    ~~~\n{}",
-                    "  ````\n  code\n  ````\nafter\n".repeat(count)
-                );
-                source_map::MAPPED_SOURCE_SCAN_BYTES.with(|work| work.set(0));
-                CODE_INDEX_LINES.with(|work| work.set(0));
-                let html = crate::to_html_with_options(
-                    &source,
-                    &Options {
-                        positions,
-                        ..Options::default()
-                    },
-                );
-                assert_eq!(html.matches("<pre>").count(), count);
-                assert_eq!(html.matches("after").count(), count);
-                assert!(
-                    source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get) <= source.len() * 64,
-                    "count={count}, positions={positions}, scan={}, bytes={}",
-                    source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get),
-                    source.len()
-                );
-                assert!(CODE_INDEX_LINES.with(Cell::get) <= source.lines().count() * 64);
+            for retained in [false, true] {
+                for count in [64, 256, 1024] {
+                    let source = format!(
+                        "- a\n    ~~~\n{}",
+                        format!(
+                            "  ````\n  code\n  ````\n{}after\n",
+                            if retained { "  " } else { "" }
+                        )
+                        .repeat(count)
+                    );
+                    source_map::MAPPED_SOURCE_SCAN_BYTES.with(|work| work.set(0));
+                    CODE_INDEX_LINES.with(|work| work.set(0));
+                    let html = crate::to_html_with_options(
+                        &source,
+                        &Options {
+                            positions,
+                            ..Options::default()
+                        },
+                    );
+                    assert_eq!(
+                        html.matches("<pre>").count(),
+                        if retained { count } else { 1 }
+                    );
+                    assert_eq!(html.matches("after").count(), count);
+                    assert!(
+                        source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get) <= source.len() * 64,
+                        "count={count}, positions={positions}, scan={}, bytes={}",
+                        source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get),
+                        source.len()
+                    );
+                    assert!(CODE_INDEX_LINES.with(Cell::get) <= source.lines().count() * 64);
+                }
             }
         }
     }
