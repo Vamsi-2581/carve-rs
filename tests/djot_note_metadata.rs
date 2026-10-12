@@ -11,7 +11,10 @@ struct Case {
 
 fn normalized_html(html: &str) -> String {
     let labels = regex::Regex::new(r#" aria-label="[^"]*""#).unwrap();
-    let html = labels.replace_all(html.trim(), "").replace("↩︎", "↩");
+    let html = labels
+        .replace_all(html.trim(), "")
+        .replace("↩︎", "↩")
+        .replace("&#10;", "\n");
     let html = regex::Regex::new(r"(<li>)\n")
         .unwrap()
         .replace_all(&html, "$1")
@@ -24,6 +27,10 @@ fn normalized_html(html: &str) -> String {
     let html = regex::Regex::new(r#"<ol type="([^"]+)" start="([^"]+)">"#)
         .unwrap()
         .replace_all(&html, "<ol start=\"$2\" type=\"$1\">")
+        .into_owned();
+    let html = regex::Regex::new(r"\n[ \t]+(<(?:ul|ol|dl)>)")
+        .unwrap()
+        .replace_all(&html, "\n$1")
         .into_owned();
     regex::Regex::new(r">\s+<")
         .unwrap()

@@ -358,6 +358,16 @@ fn quoted_list_boundaries<'a>(
             }
             paragraph = false;
         }
+        let literal_item = paragraph
+            && !previous_blank
+            && quote_depth == depth
+            && !thematic(visible)
+            && marker.is_match(visible)
+            && !lists
+                .last()
+                .is_some_and(|&(owner_depth, column, _, _, _, _)| {
+                    owner_depth == quote_depth && indent <= column
+                });
         previous_blank =
             line.trim_matches([' ', '\t']).is_empty() || quote_depth > 0 && text.is_empty();
         if line.trim_matches([' ', '\t']).is_empty() {
@@ -583,6 +593,18 @@ fn quoted_list_boundaries<'a>(
                 String::new(),
             ));
         }
+        if literal_item {
+            let at = if matches!(text.as_bytes().first(), Some(b'-' | b'*' | b'+')) {
+                0
+            } else {
+                text.find(['.', ')']).unwrap()
+            };
+            insertions.push((
+                line_offset + prefix.len() + raw_indent + at,
+                line_offset + prefix.len() + raw_indent + at,
+                "\\".to_owned(),
+            ));
+        }
         if let Some(edit) = item_edit {
             insertions.push(edit);
         }
@@ -802,6 +824,9 @@ pub(super) fn note_blocks(
                 }
                 if notes.is_empty()
                     && (code.is_match(text)
+                        || cached_regex!(r"^\[[^\]\n^][^\]\n]*\]:")
+                            .unwrap()
+                            .is_match(text)
                         || (text.starts_with('{')
                             && read_djot_word_attributes(text, 0)
                                 .is_some_and(|(end, _)| end == text.len())))
