@@ -7176,6 +7176,7 @@ fn rebase_overindented_blocks(
     // Keep its authored column through repeated rebase passes.
     let mut last_literal_base = None;
     let mut term_boundary = false;
+    let mut description_tail = false;
     // Has a line AT the container's minimum column been read since the scan
     // last stood inside a descendant? It is ownership evidence exactly as an
     // open paragraph is: the scan is back in the parent's coordinate system,
@@ -7470,8 +7471,10 @@ fn rebase_overindented_blocks(
             // as an authored base of the outer body; the first line outside the
             // extent is deliberately classified by that outer body.
             if is_definition_list_start(&lines[i]) {
-                term_boundary = true;
-                i = definition_entry_end(&lines, i, 0, &entry_closers) + 1;
+                let (end, term) = definition_entry_extent(&lines, i, 0, &entry_closers);
+                term_boundary = term;
+                description_tail = !term;
+                i = end + 1;
                 after_blank = false;
                 paragraph_open = false;
                 block_at_minimum = true;
@@ -7494,8 +7497,11 @@ fn rebase_overindented_blocks(
         if (is_list_marker(&opener) && !include_sublists)
             || (!is_list_marker(&opener) && !item_block_opener(&opener))
         {
-            paragraph_open = line_starts_paragraph(&opener);
-            if paragraph_open {
+            let paragraph = line_starts_paragraph(&opener);
+            if !description_tail && !include_sublists {
+                paragraph_open = paragraph;
+            }
+            if paragraph {
                 term_boundary = false;
             }
             after_blank = false;
@@ -7654,13 +7660,14 @@ fn comment_closers_by_run(lines: &[impl AsRef<str>]) -> HashMap<usize, Vec<usize
 }
 
 /// Last line owned by a definition entry authored at `base`.
-fn definition_entry_end(
+fn definition_entry_extent(
     lines: &[impl AsRef<str>],
     start: usize,
     base: usize,
     closers: &std::cell::OnceCell<HashMap<usize, Vec<usize>>>,
-) -> usize {
+) -> (usize, bool) {
     let mut end = start;
+    let mut last_half_is_term = true;
     let mut description_column = None;
     // A term has no content column, so a line past the list's base folds into
     // an open term (carve#2411). Only a list marker still interrupts it.
@@ -7704,6 +7711,7 @@ fn definition_entry_end(
         if column == base && (is_definition_list_start(&local) || description.is_some()) {
             end = j;
             term_open = description.is_none();
+            last_half_is_term = description.is_none();
             if let Some((_, width)) = description {
                 description_column = Some(base + width);
             }
@@ -7745,7 +7753,7 @@ fn definition_entry_end(
         }
         break;
     }
-    end
+    (end, last_half_is_term)
 }
 
 /// Follow the nested lead fence over ONE line, in the body's own coordinates
@@ -10363,6 +10371,23 @@ impl NestedFenceReplay {
                         return;
                     }
                 }
+                let row = is_table_start(inner);
+                if floor > 0
+                    && col == floor
+                    && !block_start
+                    && here.hosts.last().is_some_and(|&(_, _, item)| item)
+                    && (row
+                        || detect_heading(inner).is_some()
+                        || detect_thematic_break(inner)
+                        || detect_prepass_def_term(inner).is_some()
+                        || standalone_attrs_block_len(&[inner]) == Some(1)
+                        || parse_link_def_line(inner).is_some())
+                {
+                    here.para = false;
+                    here.colon_absorption = false;
+                    here.by_colon = true;
+                    return;
+                }
                 if let Some(open) = detect_fence_open(inner).filter(|_| floor > 0) {
                     // The host holds the fence whether the opener sits AT its
                     // content column or past it. A fence after an open paragraph
@@ -11079,7 +11104,11 @@ fn collect_blockquote_body(
             may_hold_fence = may_hold_fence
                 || stripped.contains("```")
                 || stripped.contains("~~~")
-                || stripped.contains(":::");
+                || stripped.contains(":::")
+                || stripped.contains("- ")
+                || stripped.contains("* ")
+                || stripped.contains(". ")
+                || stripped.contains(") ");
             // The quote marker (and its optional space) is a pure prefix, so the
             // quoted line's columns are knowable in the document.
             let stripped_at = stripped_col(cur.source_col(at), line, stripped);
@@ -16298,8 +16327,7 @@ fn collect_indented_block_mapped_with_columns(
         } else if let Some(open) =
             detect_comment_fence_line_any_column(line).filter(|_| fence.is_none())
         {
-            let closes = if literal_colon.is_some() {
-                let floor = literal_colon.unwrap().2;
+            let closes = if let Some((_, _, floor)) = literal_colon {
                 if cur.literal_comments.is_none() {
                     let source: Vec<_> = cur.lines.range(0..cur.lines.len()).collect();
                     cur.literal_comments = Some(ContainerCommentClosers::build(&source));

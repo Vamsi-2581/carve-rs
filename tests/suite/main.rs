@@ -1951,3 +1951,6 @@ mod markdown_strike_wave;
 
 #[path = "../djot_empty_item_wave.rs"]
 mod djot_empty_item_wave;
+
+#[path = "../quoted_closed_leaf_wave.rs"]
+mod quoted_closed_leaf_wave;
