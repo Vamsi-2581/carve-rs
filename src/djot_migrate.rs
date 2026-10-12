@@ -324,6 +324,7 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
             strip_image_alt_attributes(&protected_label)
         ))
         .replace("\0U\0", "\0");
+        let native = remove_inherited_attribute_markers(&native, &inherited);
         let mut document = crate::parse_with_options(&native, &options);
         if label.contains('\n') {
             use crate::include_walk::SubtreeVisitor;
@@ -733,13 +734,85 @@ fn protect_image_alt_scalars(label: &str) -> (String, Vec<String>, String) {
         serial += 1;
     }
     let prefix = format!("DJOTALTSCALAR{serial}Z");
+    let code_mask = mask_djot_opaque(
+        label,
+        OpaqueOptions {
+            code: false,
+            raw_code: false,
+            unclosed_code: false,
+            ..OpaqueOptions::default()
+        },
+    );
+    let mut runs = Vec::new();
+    let mut at = 0;
+    while at < code_mask.len() {
+        if code_mask[at] != b'`' {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < code_mask.len() && code_mask[at] == b'`' {
+            at += 1;
+        }
+        runs.push((start, at - start));
+    }
+    let mut next = HashMap::new();
+    let mut ends = HashMap::new();
+    for &(at, width) in runs.iter().rev() {
+        for offset in 0..width {
+            if let Some(&end) = next.get(&(width - offset)) {
+                ends.insert(at + offset, end);
+            }
+        }
+        next.insert(width, at + width);
+    }
+    let raw_formats: HashMap<usize, usize> = cached_regex!(r"\{=[^\x09-\x0d\x20\x{00a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}{}`]+\}")
+        .unwrap()
+        .find_iter(label)
+        .map(|raw| (raw.start(), raw.end()))
+        .collect();
+    let mut values = Vec::new();
+    let mut code_protected = String::new();
+    let mut copied = 0;
+    for (mut at, mut width) in runs {
+        if is_escaped(label.as_bytes(), at) {
+            at += 1;
+            width -= 1;
+        }
+        if width == 0 || at < copied {
+            continue;
+        }
+        let Some(&end) = ends.get(&at) else {
+            continue;
+        };
+        let mut value = &label[at + width..end - width];
+        let raw = raw_formats.get(&end).copied();
+        if raw.is_some() {
+            if value.starts_with(" `") {
+                value = &value[1..];
+            }
+            if value.ends_with("` ") {
+                value = &value[..value.len() - 1];
+            }
+        } else if value.starts_with(' ')
+            && value.ends_with(' ')
+            && !value.trim_matches([' ', '\t', '\n', '\r']).is_empty()
+        {
+            value = &value[1..value.len() - 1];
+        }
+        code_protected.push_str(&label[copied..at]);
+        code_protected.push_str(&format!("{prefix}{}Z", values.len()));
+        values.push(value.to_string());
+        copied = raw.unwrap_or(end);
+    }
+    code_protected.push_str(&label[copied..]);
+    let label = code_protected.as_str();
     let mask = mask_code_and_destinations(label);
     let marker = cached_regex!(
         r"^(#{1,6}|>|[-*+]|:+|\^|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-z]|[A-Z])[.)])(?:[ \t]|$)"
     )
     .unwrap();
     let thematic = cached_regex!(r"^(?:[-*][ \t]*){3,}$").unwrap();
-    let mut values = Vec::new();
     let mut output = String::new();
     let mut offset = 0;
     for (index, line) in label.split('\n').enumerate() {
@@ -2725,6 +2798,11 @@ fn convert_djot_block_markers(source: &str) -> String {
     let parenthesized_marker =
         cached_regex!(r"^(?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})$").unwrap();
     for index in 0..lines.len() {
+        let (_, content_at) = leading_indent(&lines[index]);
+        if masked[index].as_bytes().get(content_at) != lines[index].as_bytes().get(content_at) {
+            continue;
+        }
+
         let prefix = quote_prefix_len(masked[index]);
         let quote = &masked[index][..prefix];
         let rest = &masked[index][prefix..];
@@ -2800,7 +2878,12 @@ fn convert_djot_block_markers(source: &str) -> String {
             marker = Some(byte);
             count += 1;
         }
-        if valid && count >= 3 {
+        let authored_rule = cached_regex!(
+            r"^((?:(?:[ \t]*>)+[ \t]*)?)([ \t]*)(?:\*(?:[ \t]*\*){2,}|-(?:[ \t]*-){2,})[ \t]*$"
+        )
+        .unwrap()
+        .is_match(&lines[index]);
+        if valid && count >= 3 && authored_rule {
             let nested = quote.is_empty() && nested_lines[index];
             lines[index] = format!(
                 "{}{}***",
@@ -4091,6 +4174,7 @@ fn mask_djot_forms_with_options(
 #[derive(Clone, Copy)]
 struct OpaqueOptions {
     code: bool,
+    raw_code: bool,
     unclosed_code: bool,
     autolinks: bool,
     destinations: bool,
@@ -4101,6 +4185,7 @@ impl Default for OpaqueOptions {
     fn default() -> Self {
         Self {
             code: true,
+            raw_code: true,
             unclosed_code: true,
             autolinks: true,
             destinations: true,
@@ -4171,23 +4256,11 @@ fn mask_djot_opaque_with_comments(
             previous_line = line;
         }
     }
-    let mut raw_formats = HashMap::new();
-    if source.contains("{=") {
-        let bytes = source.as_bytes();
-        let mut raw_end = None;
-        for at in (0..bytes.len()).rev() {
-            if bytes[at] == b'}' {
-                raw_end = Some(at + 1);
-            } else if bytes[at] == b'\n' {
-                raw_end = None;
-            }
-            if bytes[at] == b'{' && bytes.get(at + 1) == Some(&b'=') {
-                if let Some(end) = raw_end {
-                    raw_formats.insert(at, end);
-                }
-            }
-        }
-    }
+    let raw_formats: HashMap<usize, usize> = cached_regex!(r"\{=[^\x09-\x0d\x20\x{00a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}{}`]+\}")
+        .unwrap()
+        .find_iter(source)
+        .map(|raw| (raw.start(), raw.end()))
+        .collect();
     let last_brace = source.rfind('}');
     let mut comments = Vec::new();
     let bytes = source.as_bytes();
@@ -4304,7 +4377,7 @@ fn mask_djot_opaque_with_comments(
             let end = close + width;
             let raw_end = raw_formats.get(&end).copied();
             let math = at > 0 && at < bytes.len() && bytes[at - 1] == b'$';
-            if options.code || raw_end.is_some() || math {
+            if options.code || raw_end.is_some() && options.raw_code || math {
                 blank_out(&mut mask, at - usize::from(math), end);
             }
             at = raw_end.unwrap_or(end);

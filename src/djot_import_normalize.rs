@@ -213,6 +213,7 @@ fn quoted_list_boundaries<'a>(
         };
         let text = &remainder[raw_indent..];
         let visible = masked.get(prefix.len() + raw_indent..).unwrap_or("");
+
         if previous_blank && !line.trim_matches([' ', '\t']).is_empty() {
             if depth > quote_depth
                 && !paragraph
@@ -290,6 +291,15 @@ fn quoted_list_boundaries<'a>(
                 .is_some_and(|&(owner_depth, column, _width, _source_prefix, _, _)| {
                     quote_depth > owner_depth && column_at(owner_depth, _source_prefix) < column + 1
                 });
+        if quote_depth < depth
+            && visible.starts_with('{')
+            && read_djot_word_attributes(visible, 0)
+                .is_some_and(|(end, _)| end == visible.trim_end_matches([' ', '\t', '\r']).len())
+        {
+            depth = quote_depth;
+            boundary = prefix.trim_end().to_owned();
+            paragraph = false;
+        }
         if quote_depth > depth && paragraph && !outside_item {
             let mut owned = vec![None; depth];
             for &(owner_depth, column, width, _source_prefix, target, _) in lists
@@ -511,8 +521,9 @@ fn quoted_list_boundaries<'a>(
                 || reference.is_match(text)
                 || (!paragraph
                     && visible.starts_with('{')
-                    && read_djot_word_attributes(visible, 0)
-                        .is_some_and(|(end, _)| end == visible.len()))
+                    && read_djot_word_attributes(visible, 0).is_some_and(|(end, _)| {
+                        end == visible.trim_end_matches([' ', '\t', '\r']).len()
+                    }))
                 || thematic(visible)
                 || visible.starts_with(":::")
                 || heading.is_match(visible));
@@ -1330,7 +1341,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
             || starts_quote(visible)
             || visible.starts_with(":::")
             || visible.starts_with('|')
-            || thematic(visible);
+            || (thematic(visible) && thematic(text));
         if !raw.trim_matches([' ', '\t']).is_empty() {
             while divs.last().is_some_and(|(_, _, _, owner, _)| {
                 owner.is_some_and(|column| {
@@ -1432,6 +1443,11 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
         if continuation_lines.contains(&(n + 1)) {
             result.push(display.clone());
             paragraph = false;
+            previous_blank = false;
+            continue;
+        }
+        if quoted(raw).0 > 0 && masks[n].as_bytes().get(indent_bytes) != Some(&b'>') {
+            result.push(display.clone());
             previous_blank = false;
             continue;
         }
@@ -1777,7 +1793,8 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
             && (heading.is_match(visible)
                 || starts_quote(visible)
                 || visible.starts_with('|') && !pipe_pass
-                || thematic(visible) && !(visible.contains('*') && visible.contains('-')))
+                || (thematic(visible) && thematic(text))
+                    && !(visible.contains('*') && visible.contains('-')))
         {
             result.push(format!("{}\\{text}", &raw[..indent_bytes]));
         } else if heading.is_match(visible) {
@@ -1798,7 +1815,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
                 }
             ));
             paragraph = false;
-        } else if thematic(visible) {
+        } else if (thematic(visible) && thematic(text)) {
             result.push(
                 if !paragraph && lists.is_empty() && definition_columns.is_empty() {
                     "***".to_owned()
