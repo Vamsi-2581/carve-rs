@@ -1942,3 +1942,6 @@ mod description_band_wave;
 
 #[path = "../closed_container_plus_wave.rs"]
 mod closed_container_plus_wave;
+
+#[path = "../djot_literal_wave.rs"]
+mod djot_literal_wave;

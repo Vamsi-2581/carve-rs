@@ -1844,6 +1844,21 @@ fn convert_djot_block_markers(source: &str) -> String {
     let mut containers: Vec<(usize, bool)> = Vec::new();
     let host_prefix = cached_regex!(r"^(?:[ \t]*> ?|[ \t]*(?:(?:[-*+]|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-zA-Z])[.)]|\([0-9A-Za-z]+\)) +(?:\[[ xX]\] +)?|: |\[\^[^\]\r\n]+\]: +))").unwrap();
     for index in 0..lines.len() {
+        let mut view = masked[index];
+        while let Some(prefix) = host_prefix.find(view) {
+            view = &view[prefix.end()..];
+        }
+        view = view.trim_start_matches([' ', '\t']);
+        if view.starts_with('.')
+            && view
+                .as_bytes()
+                .get(1)
+                .map_or(true, |byte| matches!(byte, b' ' | b'\t' | b'{'))
+        {
+            let offset = masked[index].len() - view.len();
+            lines[index].insert(offset, '\\');
+            continue;
+        }
         let prefix = quote_prefix_len(masked[index]);
         let quote = &masked[index][..prefix];
         let rest = &masked[index][prefix..];
@@ -3676,38 +3691,39 @@ fn escape_plain_carve_syntax_masked(
         if handled.owns_bare(delim) {
             continue;
         }
-        let mut i = 0;
-        while i < mask.len() {
-            if mask[i] != delim || is_escaped(mask, i) {
-                i += 1;
-                continue;
-            }
-            // A leading `{` excludes the run for a delimiter the caller's
-            // language spells in BRACED form, and not otherwise; the asymmetry
-            // is the point rather than an oversight. Under Djot, `{=x=}` is a
-            // highlight in both languages, so the inner `=` is markup that must
-            // survive; there is no `{/x/}` that means the same in both, so the
-            // `/` inside an escaped brace is literal text and still needs
-            // escaping - escaping the brace alone leaves it free to open Carve
-            // emphasis and renders `{<em>x</em>}`. Under a profile that owns
-            // neither, both get escaped, which is what makes the whole run
-            // literal.
-            let brace_protects = handled.owns_braced(delim);
-            let before_ok = i == 0
-                || !(mask[i - 1].is_ascii_alphanumeric()
-                    || mask[i - 1] == delim
-                    || (brace_protects && mask[i - 1] == b'{' && !is_escaped(mask, i - 1)));
-            let after = mask.get(i + 1).copied().unwrap_or(b' ');
-            if !before_ok || after.is_ascii_whitespace() || after == delim {
-                i += 1;
-                continue;
-            }
-            match find_bare_close(mask, i + 1, delim) {
-                Some(end) => {
-                    at.push(i);
-                    i = end + 1;
+        let mut closer = None;
+        let mut line_is_blank = false;
+        for i in (0..mask.len()).rev() {
+            let byte = mask[i];
+            if byte == b'\n' {
+                if line_is_blank {
+                    closer = None;
                 }
-                None => i += 1,
+                line_is_blank = true;
+                continue;
+            }
+            if !matches!(byte, b' ' | b'\t' | b'\r') {
+                line_is_blank = false;
+            }
+            if byte != delim || is_escaped(mask, i) {
+                continue;
+            }
+            let before = i.checked_sub(1).map(|at| mask[at]);
+            let after = mask.get(i + 1).copied();
+            let whitespace = |byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n');
+            let brace_protects =
+                handled.owns_braced(delim) && before == Some(b'{') && !is_escaped(mask, i - 1);
+            let opens = before != Some(delim)
+                && !before.is_some_and(|byte| byte.is_ascii_alphanumeric())
+                && !brace_protects
+                && after.is_some_and(|byte| byte != delim && !whitespace(byte));
+            if opens && closer.is_some_and(|at| at > i + 1) {
+                at.push(i);
+            }
+            if before.is_some_and(|byte| !whitespace(byte))
+                && !after.is_some_and(|byte| byte.is_ascii_alphanumeric())
+            {
+                closer = Some(i);
             }
         }
     }
@@ -3830,27 +3846,6 @@ fn find_braced_close(mask: &[u8], from: usize, delim: u8) -> Option<usize> {
         if mask[j] == delim && mask[j + 1] == b'}' && j > from && !mask[j - 1].is_ascii_whitespace()
         {
             return Some(j);
-        }
-        j += 1;
-    }
-    None
-}
-
-/// The offset of the delimiter closing a bare pair opened before `from`, using
-/// the same word boundaries the Carve parser opens on.
-fn find_bare_close(mask: &[u8], from: usize, delim: u8) -> Option<usize> {
-    let mut j = from;
-    while j < mask.len() {
-        if mask[j] == b'\n' {
-            return None;
-        }
-        if mask[j] == delim {
-            let preceded_by_space = mask[j - 1].is_ascii_whitespace();
-            let after = mask.get(j + 1).copied().unwrap_or(b' ');
-            if j > from && !preceded_by_space && !after.is_ascii_alphanumeric() && after != delim {
-                return Some(j);
-            }
-            return None;
         }
         j += 1;
     }
