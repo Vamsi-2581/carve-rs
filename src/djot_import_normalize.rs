@@ -141,11 +141,19 @@ pub(super) fn blocks_with_list_attributes(
         }
         let (indent, indent_bytes) = leading_indent(raw);
         let text = &raw[indent_bytes..];
-        let visible = masks[n].get(indent_bytes..).unwrap_or("");
+        let masked_visible = masks[n].get(indent_bytes..).unwrap_or("");
+        let carried_fence = !pending_item_attributes.is_empty()
+            && marker
+                .captures(text)
+                .is_some_and(|item| code_opener.is_match(&text[item.get(0).unwrap().end()..]));
+        let visible = if carried_fence { text } else { masked_visible };
         let attribute_only = visible.starts_with('{')
             && read_djot_word_attributes(text, 0)
                 .is_some_and(|(end, _)| end == text.trim_end().len());
-        if !raw.trim().is_empty() && !attribute_only && !marker.is_match(visible) {
+        if !raw.trim().is_empty()
+            && !attribute_only
+            && (!marker.is_match(visible) || thematic(text))
+        {
             pending_item_attributes.clear();
         }
         if rejected_comment_starts_block(visible) {
@@ -177,7 +185,7 @@ pub(super) fn blocks_with_list_attributes(
             in_heading = false;
         }
         let block = rows[n]
-            || fence_masks[n] != *raw
+            || fence_masks[n] != *raw && !carried_fence
             || heading.is_match(visible)
             || visible.starts_with('>')
             || visible.starts_with(":::")
@@ -540,7 +548,10 @@ pub(super) fn blocks_with_list_attributes(
                         .collect::<Vec<_>>()
                         .join(" ");
                     let token = format!("{attribute_prefix}{}\0", item_attributes.len());
-                    item_attributes.push(format!("{{{merged}}}"));
+                    item_attributes.push(
+                        read_djot_attributes(&format!("{{{merged}}}"), 0, true, false)
+                            .map_or_else(|| format!("{{{merged}}}"), |(_, wire)| wire),
+                    );
                     token
                 })
             } else {

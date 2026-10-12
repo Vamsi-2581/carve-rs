@@ -7,6 +7,7 @@ fn user_placeholders_survive_namespace_selection() {
         "\0DJOTEMPTYTERM\0",
         "\0DJOTALT\0",
         "\0DJOTLITERAL\0",
+        "\0DJOTITEMATTR\0",
     ] {
         let tokens = [
             format!("{base}0\0{}1\0", &base[1..]),

@@ -270,19 +270,19 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         converted
     } else {
         let pattern = regex::Regex::new(&format!(
-            r"([ \t]){}([0-9]+)\x00",
+            r"([ \t]+)((?:\[[ xX]\][ \t]+)?){}([0-9]+)\x00",
             regex::escape(&item_attribute_prefix)
         ))
         .unwrap();
         pattern
             .replace_all(&converted, |caps: &regex::Captures<'_>| {
-                caps[2]
+                caps[3]
                     .parse::<usize>()
                     .ok()
                     .and_then(|index| item_attributes.get(index))
                     .map_or_else(
                         || caps[0].to_string(),
-                        |attrs| format!("{attrs}{}", &caps[1]),
+                        |attrs| format!("{attrs}{}{}", &caps[1], &caps[2]),
                     )
             })
             .into_owned()
@@ -2170,11 +2170,12 @@ fn consume_orphan_djot_attributes(source: &str) -> (String, OrphanAttributeSpans
                 .unwrap_or("");
             let previous = quote_prefix.replace(previous, "");
             let previous = previous.trim();
-            let block = !comment_continues_paragraph(source, line_offset + at)
-                || index == 0
-                || previous.is_empty()
-                || (previous.starts_with('{') && previous.ends_with('}'))
-                || block_end.is_match(previous);
+            let block = alone
+                && (index == 0
+                    || previous.is_empty()
+                    || (previous.starts_with('{') && previous.ends_with('}'))
+                    || block_end.is_match(previous)
+                    || !comment_continues_paragraph(source, line_offset + at));
             if alone && block {
                 if !dangling[index] {
                     continue;

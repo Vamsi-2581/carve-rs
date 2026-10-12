@@ -77,6 +77,32 @@ fn root_attribute_boundaries_match_native_djot() {
         let expected = case["html"].as_str().unwrap();
         let converted = carve::djot_to_carve(source);
         let html = carve::to_html(&converted);
+        if let Some(native) = case.get("nativeAst") {
+            let document = carve::parse(&converted);
+            let carve::ast::BlockNode::List(list) = &document.children[0] else {
+                panic!("{source}: expected task list")
+            };
+            let items = native["children"][0]["children"].as_array().unwrap();
+            assert_eq!(list.items.len(), items.len());
+            for (item, original) in list.items.iter().zip(items) {
+                assert_eq!(item.checked, Some(original["checkbox"] == "checked"));
+                let classes = original["attributes"]["class"].as_str().unwrap_or("");
+                assert_eq!(
+                    item.attrs
+                        .as_ref()
+                        .map(|attrs| attrs.classes.join(" "))
+                        .unwrap_or_default(),
+                    classes
+                );
+            }
+            assert_eq!(html.matches("type=\"checkbox\"").count(), items.len());
+            assert!(html.contains("class=\"a\""));
+            assert_eq!(
+                carve::to_html(&carve::render_carve(&document).unwrap()),
+                html
+            );
+            continue;
+        }
         if normalize(&html) != normalize(expected) {
             failures.push(format!(
                 "{source:?}: {converted:?}\nactual: {}\nexpected: {}",

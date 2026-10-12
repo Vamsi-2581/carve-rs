@@ -138,5 +138,96 @@
   {
     "source": "- x\n\n{.a}\n\n- y",
     "html": "<ul>\n<li>\nx\n</li>\n</ul>\n<ul class=\"a\">\n<li>\ny\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- [ ] x\n\n  {.a}\n\n- [x] y",
+    "html": "<ul class=\"task-list\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\n<p>x</p>\n</li>\n<li>\n<input disabled=\"\" type=\"checkbox\" checked=\"\"/>\n<p>y</p>\n</li>\n</ul>\n",
+    "nativeAst": {
+      "tag": "doc",
+      "references": {},
+      "autoReferences": {},
+      "footnotes": {},
+      "children": [
+        {
+          "tag": "task_list",
+          "tight": false,
+          "children": [
+            {
+              "tag": "task_list_item",
+              "children": [
+                {
+                  "tag": "para",
+                  "children": [
+                    {
+                      "tag": "str",
+                      "text": "x"
+                    }
+                  ]
+                }
+              ],
+              "checkbox": "unchecked"
+            },
+            {
+              "tag": "task_list_item",
+              "children": [
+                {
+                  "tag": "para",
+                  "children": [
+                    {
+                      "tag": "str",
+                      "text": "y"
+                    }
+                  ]
+                }
+              ],
+              "attributes": {
+                "class": "a"
+              },
+              "checkbox": "checked"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n-   y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "1. x\n\n   {.a}\n\n2.  y",
+    "html": "<ol>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<p>y</p>\n</li>\n</ol>\n"
+  },
+  {
+    "source": "* x\n\n  {.a}\n\n  * * *\n\n* y",
+    "html": "<ul>\n<li>\n<p>x</p>\n<hr class=\"a\">\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "# h\n{.a}\n\np",
+    "html": "<section id=\"h\">\n<h1>h</h1>\n<p class=\"a\">p</p>\n</section>\n"
+  },
+  {
+    "source": "# h\n{.a}\n\n[r]: /u\n\n[x][r]",
+    "html": "<section id=\"h\">\n<h1>h</h1>\n<p><a href=\"/u\" class=\"a\">x</a></p>\n</section>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- # h",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<h1 id=\"h\">h</h1>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- > q",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<blockquote>\n<p>q</p>\n</blockquote>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- ```\n  code\n  ```",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<pre><code>code\n</code></pre>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {title=\"a \\\"b\\\" 50%\"}\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li title=\"a &quot;b&quot; 50%\">\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {% c %}\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
   }
 ]
