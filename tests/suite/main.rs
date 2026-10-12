@@ -1984,3 +1984,6 @@ mod djot_quote_paragraph_continuations;
 
 #[path = "../djot_quoted_thematic_text.rs"]
 mod djot_quoted_thematic_text;
+
+#[path = "../term_intervening_block_payload.rs"]
+mod term_intervening_block_payload;
