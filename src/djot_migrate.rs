@@ -204,7 +204,6 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     let image_paragraph = djot_placeholder_prefix(&folded, "\0DJOTIMAGEPARAGRAPH\0");
     let mut alts = Vec::new();
     let mut alt_cache = std::collections::HashMap::<(String, usize, bool), String>::new();
-    let image = cached_regex!(r"!\[([^\[\]]*)\]([\[(])").unwrap();
     let mut image_starts = HashSet::new();
     let mut image_lines = Vec::new();
     let mut image_line = 0;
@@ -272,116 +271,108 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         ));
         image_offset += line.len() + 1;
     }
-    let folded = image
-        .replace_all(&folded, |caps: &regex::Captures<'_>| {
-            let at = caps.get(0).unwrap().start();
-            if mask.as_bytes()[at] != b'!'
-                || mask.as_bytes()[at + caps[0].len() - 2] != b']'
-                || cached_regex!(r"\n[ \t]*\n").unwrap().is_match(&caps[1])
-                || is_escaped(folded.as_bytes(), at)
-            {
-                return caps[0].to_string();
-            }
-            let paragraph = if image_starts.contains(&at) {
-                image_paragraph.as_str()
-            } else {
-                ""
-            };
-            if is_escaped(folded.as_bytes(), at + caps[0].len() - 2) {
-                return format!("{paragraph}{}", &caps[0]);
-            }
-            if caps[1].starts_with('^') {
-                return caps[0].to_string();
-            }
-            if !caps[1].contains('\n')
-                && !caps[1].bytes().any(|byte| b"_*`{^~".contains(&byte))
-                && !caps[1].as_bytes().windows(2).enumerate().any(|(at, pair)| {
-                    pair[0] == b'\\'
-                        && matches!(pair[1], b' ' | b'\t')
-                        && !is_escaped(caps[1].as_bytes(), at)
+    let folded = replace_image_labels(&folded, &mask, |image, label, at| {
+        if mask.as_bytes()[at] != b'!'
+            || mask.as_bytes()[at + image.len() - 1] != b']'
+            || cached_regex!(r"\n[ \t]*\n").unwrap().is_match(label)
+            || is_escaped(folded.as_bytes(), at)
+        {
+            return image.to_string();
+        }
+        let paragraph = if image_starts.contains(&at) {
+            image_paragraph.as_str()
+        } else {
+            ""
+        };
+        if label.starts_with('^') {
+            return image.to_string();
+        }
+        if !label.contains('\n')
+            && !label.bytes().any(|byte| b"_*`{^~[]".contains(&byte))
+            && !label.as_bytes().windows(2).enumerate().any(|(at, pair)| {
+                pair[0] == b'\\'
+                    && matches!(pair[1], b' ' | b'\t')
+                    && !is_escaped(label.as_bytes(), at)
+            })
+        {
+            alts.push(label.to_string());
+            return format!("{paragraph}![{alt_prefix}{}\0]", alts.len() - 1);
+        }
+        while image_lines[image_line].0 <= at {
+            image_line += 1;
+        }
+        let quotes = image_lines[image_line].1;
+        let (_, _, item_column, item_quote, div, in_table) = image_lines[image_line];
+        let (normalized_label, continuations, valid) =
+            image_alt_layout(label, quotes, item_column, item_quote, div);
+        if !valid {
+            return image.to_string();
+        }
+        let cache_key = (label.to_string(), quotes, in_table);
+        if let Some(alt) = alt_cache.get(&cache_key) {
+            alts.push(alt.clone());
+            return format!("{paragraph}![{alt_prefix}{}\0]", alts.len() - 1);
+        }
+        let options = crate::Options {
+            smart_typography: crate::SmartTypographyMode::Source,
+            ..crate::Options::default()
+        };
+        let (protected_label, scalars, scalar_prefix) =
+            protect_image_alt_scalars(&normalized_label);
+        let native = djot_to_carve(&format!(
+            "DJOTALT {} DJOTEND",
+            strip_image_alt_attributes(&protected_label)
+        ))
+        .replace("\0U\0", "\0");
+        let mut document = crate::parse_with_options(&native, &options);
+        if label.contains('\n') {
+            use crate::include_walk::SubtreeVisitor;
+            ImageAltBreaks.blocks(&mut document.children);
+        }
+        let plain = crate::render_plain_text_with_options(&document, &options).unwrap_or_default();
+        let plain = plain
+            .trim_end_matches('\n')
+            .strip_prefix("DJOTALT")
+            .unwrap_or("");
+        let plain = plain.strip_prefix(' ').unwrap_or(plain);
+        let plain = plain.strip_suffix("DJOTEND").unwrap_or("");
+        let plain = plain.strip_suffix(' ').unwrap_or(plain);
+        let plain = if scalars.is_empty() {
+            std::borrow::Cow::Borrowed(plain)
+        } else {
+            cached_regex!(r"DJOTALTSCALAR([0-9]+)Z([0-9]+)Z")
+                .unwrap()
+                .replace_all(plain, |caps: &regex::Captures<'_>| {
+                    if caps[0].starts_with(&scalar_prefix) {
+                        caps[2]
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|at| scalars.get(at))
+                            .cloned()
+                            .unwrap_or_else(|| caps[0].to_string())
+                    } else {
+                        caps[0].to_string()
+                    }
                 })
-            {
-                alts.push(caps[1].to_string());
-                return format!("{paragraph}![{alt_prefix}{}\0]{}", alts.len() - 1, &caps[2]);
+        };
+        let plain = crate::render_carve::escape_image_alt(&plain, in_table);
+        let mut alt = String::new();
+        for (index, line) in plain.split('\n').enumerate() {
+            if index > 0 {
+                alt.push('\n');
+                alt.push_str(
+                    continuations
+                        .get(index - 1)
+                        .map(String::as_str)
+                        .unwrap_or(""),
+                );
             }
-            let label = &caps[1];
-            while image_lines[image_line].0 <= at {
-                image_line += 1;
-            }
-            let quotes = image_lines[image_line].1;
-            let (_, _, item_column, item_quote, div, in_table) = image_lines[image_line];
-            let (normalized_label, continuations, valid) =
-                image_alt_layout(label, quotes, item_column, item_quote, div);
-            if !valid {
-                return caps[0].to_string();
-            }
-            let cache_key = (label.to_string(), quotes, in_table);
-            if let Some(alt) = alt_cache.get(&cache_key) {
-                alts.push(alt.clone());
-                return format!("{paragraph}![{alt_prefix}{}\0]{}", alts.len() - 1, &caps[2]);
-            }
-            let options = crate::Options {
-                smart_typography: crate::SmartTypographyMode::Source,
-                ..crate::Options::default()
-            };
-            let (protected_label, scalars, scalar_prefix) =
-                protect_image_alt_scalars(&normalized_label);
-            let native = djot_to_carve(&format!(
-                "DJOTALT {} DJOTEND",
-                strip_image_alt_attributes(&protected_label)
-            ))
-            .replace("\0U\0", "\0");
-            let mut document = crate::parse_with_options(&native, &options);
-            if label.contains('\n') {
-                use crate::include_walk::SubtreeVisitor;
-                ImageAltBreaks.blocks(&mut document.children);
-            }
-            let plain =
-                crate::render_plain_text_with_options(&document, &options).unwrap_or_default();
-            let plain = plain
-                .trim_end_matches('\n')
-                .strip_prefix("DJOTALT")
-                .unwrap_or("");
-            let plain = plain.strip_prefix(' ').unwrap_or(plain);
-            let plain = plain.strip_suffix("DJOTEND").unwrap_or("");
-            let plain = plain.strip_suffix(' ').unwrap_or(plain);
-            let plain = if scalars.is_empty() {
-                std::borrow::Cow::Borrowed(plain)
-            } else {
-                cached_regex!(r"DJOTALTSCALAR([0-9]+)Z([0-9]+)Z")
-                    .unwrap()
-                    .replace_all(plain, |caps: &regex::Captures<'_>| {
-                        if caps[0].starts_with(&scalar_prefix) {
-                            caps[2]
-                                .parse::<usize>()
-                                .ok()
-                                .and_then(|at| scalars.get(at))
-                                .cloned()
-                                .unwrap_or_else(|| caps[0].to_string())
-                        } else {
-                            caps[0].to_string()
-                        }
-                    })
-            };
-            let plain = crate::render_carve::escape_image_alt(&plain, in_table);
-            let mut alt = String::new();
-            for (index, line) in plain.split('\n').enumerate() {
-                if index > 0 {
-                    alt.push('\n');
-                    alt.push_str(
-                        continuations
-                            .get(index - 1)
-                            .map(String::as_str)
-                            .unwrap_or(""),
-                    );
-                }
-                alt.push_str(line);
-            }
-            alt_cache.insert(cache_key, alt.clone());
-            alts.push(alt);
-            format!("{paragraph}![{alt_prefix}{}\0]{}", alts.len() - 1, &caps[2])
-        })
-        .into_owned();
+            alt.push_str(line);
+        }
+        alt_cache.insert(cache_key, alt.clone());
+        alts.push(alt);
+        format!("{paragraph}![{alt_prefix}{}\0]", alts.len() - 1)
+    });
     let prefix = djot_placeholder_prefix(&folded, "\0DJOTSTRONG");
     let mut spans = Vec::new();
     let words = protect_attributed_words(&folded, &prefix, &mut spans, &inherited);
@@ -584,6 +575,64 @@ impl ImageBoundaryIndex {
         }
         true
     }
+}
+
+fn replace_image_labels(
+    source: &str,
+    mask: &str,
+    mut replace: impl FnMut(&str, &str, usize) -> String,
+) -> String {
+    if !source.contains("![") {
+        return source.to_owned();
+    }
+    let bytes = source.as_bytes();
+    let visible = mask.as_bytes();
+    let mut opens: Vec<(usize, bool)> = Vec::new();
+    let mut closes = HashMap::new();
+    let mut boundaries: HashSet<_> = djot_inline_boundaries(source, mask).into_iter().collect();
+    for blank in cached_regex!(r"\n[ \t]*\n").unwrap().find_iter(source) {
+        boundaries.insert(blank.start());
+    }
+    for at in 0..bytes.len() {
+        if boundaries.contains(&at) {
+            opens.clear();
+        }
+        if visible[at] == b'[' && !is_escaped(bytes, at) {
+            if let Some(parent) = opens.last_mut() {
+                parent.1 = true;
+            }
+            opens.push((at, false));
+        } else if visible[at] == b']' && !is_escaped(bytes, at) {
+            if let Some((open, nested)) = opens.pop() {
+                if !nested
+                    && open > 0
+                    && bytes[open - 1] == b'!'
+                    && visible[open - 1] == b'!'
+                    && !is_escaped(bytes, open - 1)
+                    && matches!(bytes.get(at + 1), Some(b'(' | b'['))
+                {
+                    closes.insert(open - 1, at);
+                }
+            }
+        }
+    }
+    if closes.is_empty() {
+        return source.to_owned();
+    }
+    let mut output = String::with_capacity(source.len());
+    let mut cursor = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        if let Some(&end) = closes.get(&at) {
+            output.push_str(&source[cursor..at]);
+            output.push_str(&replace(&source[at..end + 1], &source[at + 2..end], at));
+            cursor = end + 1;
+            at = end;
+        }
+        at += 1;
+    }
+    output.push_str(&source[cursor..]);
+    output
 }
 
 fn image_alt_layout(
