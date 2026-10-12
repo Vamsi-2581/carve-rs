@@ -4,7 +4,10 @@ fn djot_attribute_ownership_survives_import() {
         ("{#id} at beginning\n", "<p> at beginning</p>"),
         ("After {#id} space\n{.class}\n", "<p>After  space\n</p>"),
         ("not a [span] {#id}.\n", "<p>not a [span] .</p>"),
-        ("{#id .class}\n\nA paragraph\n", "<p>A paragraph</p>"),
+        (
+            "{#id .class}\n\nA paragraph\n",
+            "<p id=\"id\" class=\"class\">A paragraph</p>",
+        ),
         ("[span]{#id}", "<p><span id=\"id\">span</span></p>"),
         ("`x`{.c}", "<p><code class=\"c\">x</code></p>"),
         (
@@ -27,16 +30,16 @@ fn pending_attribute_runs_keep_their_containers() {
     for (source, expected) in [
         (
             "> {.a}\n> {.b}\n>\n> para",
-            "<blockquote><p>para</p></blockquote>",
+            "<blockquote><p class=\"a b\">para</p></blockquote>",
         ),
         (
             "> {.a}\n> {.b}\n\npara",
-            "<blockquote></blockquote><p>para</p>",
+            "<blockquote></blockquote><p class=\"a b\">para</p>",
         ),
         ("{.a}\n> {.b}\n\n", "<blockquote class=\"a\"></blockquote>"),
         (
             "{.a}\n> {.b}\n>\n> para",
-            "<blockquote class=\"a\"><p>para</p></blockquote>",
+            "<blockquote class=\"a\"><p class=\"b\">para</p></blockquote>",
         ),
         (
             "```\n{.a}\n{.b}\n\npara\n```",

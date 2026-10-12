@@ -204,3 +204,42 @@ fn nonbreaking_label_whitespace_does_not_resolve_space_definition() {
         );
     }
 }
+
+#[test]
+fn pending_block_attributes_match_djot() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/djot-pending-attributes.json")).unwrap();
+    let normalize = |html: &str| {
+        let html = html.replace("<tbody>", "").replace("</tbody>", "");
+        let html = html.split_whitespace().collect::<Vec<_>>().join(" ");
+        html.replace("> ", ">").replace(" <", "<")
+    };
+    for row in rows.as_array().unwrap() {
+        let source = row["source"].as_str().unwrap();
+        let expected = row["html"].as_str().unwrap();
+        let imported = carve::djot_to_carve(source);
+        assert_eq!(
+            normalize(&carve::to_html(&imported)),
+            normalize(expected),
+            "{source:?}\n{imported}"
+        );
+    }
+}
+
+#[test]
+fn long_pending_values_survive_chained_quote_exits() {
+    let value = "v".repeat(32768);
+    let classes: Vec<String> = (0..63).map(|index| format!("c{index}")).collect();
+    let mut source = format!("{}{{title=\"{value}\"}}\n", "> ".repeat(64));
+    for (index, name) in classes.iter().enumerate() {
+        source.push_str(&format!("{}{{.{name}}}\n", "> ".repeat(63 - index)));
+    }
+    source.push_str("\nword");
+    let imported = carve::djot_to_carve(&source);
+    assert_eq!(imported.matches(&value).count(), 1);
+    assert!(imported.len() < source.len() * 2);
+    assert!(carve::to_html(&imported).contains(&format!(
+        "<p title=\"{value}\" class=\"{}\">word</p>",
+        classes.join(" ")
+    )));
+}

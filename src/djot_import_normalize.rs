@@ -780,6 +780,9 @@ pub(super) fn note_blocks(
                 || depth > note.depth
                 || depth < note.depth && text.is_empty()
                 || block.is_match(visible)
+                || (text.starts_with('{')
+                    && read_djot_word_attributes(text, 0)
+                        .is_some_and(|(end, _)| end == text.len()))
                 || metadata.is_boundary(line);
             if outside
                 && !(note.paragraph && !note.blank && !starts_block && depth <= note.depth)
@@ -796,6 +799,15 @@ pub(super) fn note_blocks(
                         parent.blank = true;
                     }
                     parent.paragraph = false;
+                }
+                if notes.is_empty()
+                    && (code.is_match(text)
+                        || (text.starts_with('{')
+                            && read_djot_word_attributes(text, 0)
+                                .is_some_and(|(end, _)| end == text.len())))
+                    && main.last().is_some_and(|line| line.contains(empty_note))
+                {
+                    main.push(line[..djot_content_start(line)].to_owned());
                 }
                 completed.push(closed);
             } else {
@@ -2242,6 +2254,27 @@ fn reference_attribute_text(attrs: &[(String, Vec<String>)], table: bool) -> Str
 
 pub(super) fn references(source: &str) -> String {
     let definition = cached_regex!(r"(?m)^\[([^\]\n^][^\]\n]*)\]:[ \t]*(\S*)[ \t]*$").unwrap();
+    let quote_prefix = cached_regex!(r"^(?:[ \t]*>[ \t]*)*[ \t]*").unwrap();
+    let list_marker = cached_regex!(r"(?:[-*+] |[0-9A-Za-z]+[.)] |\([0-9A-Za-z]+\) )").unwrap();
+    let block_end = cached_regex!(
+        r"^(?:#{1,6}(?: |$)|:{3,}|[`~]{3,}|\||\[[^\]^][^\]]*\]:|(?:[-*][ \t]*){3,}$)"
+    )
+    .unwrap();
+    let mut quote_openings = HashSet::new();
+    let mut previous_quote_depth = 0;
+    let mut quote_offset = 0;
+    for line in source.split_inclusive('\n') {
+        let content = line.trim_end_matches('\n');
+        let depth = content[..djot_content_start(content)]
+            .bytes()
+            .filter(|&byte| byte == b'>')
+            .count();
+        if depth > previous_quote_depth {
+            quote_openings.insert(quote_offset);
+        }
+        previous_quote_depth = depth;
+        quote_offset += line.len();
+    }
     let mask = reference_mask(source);
     let mut definitions = HashMap::new();
     let mut removed = Vec::new();
@@ -2277,6 +2310,10 @@ pub(super) fn references(source: &str) -> String {
         }
         let mut previous_end = line_start;
         let mut attr_parts = Vec::new();
+        let removed_start = removed.len();
+        let mut first_attribute = line_start;
+        let mut attribute_starts = Vec::new();
+        let mut attribute_depth: Option<usize> = None;
         while let Some(previous) = source[..previous_end].strip_suffix('\n') {
             let previous_start = previous.rfind('\n').map_or(0, |at| at + 1);
             let previous_line = &previous[previous_start..];
@@ -2290,14 +2327,36 @@ pub(super) fn references(source: &str) -> String {
                         .bytes()
                         .filter(|&byte| byte == b'>')
                         .count();
-            if opens_container
-                || !attribute_content.starts_with('{')
+            if opens_container {
+                break;
+            }
+            let depth = attribute_prefix
+                .bytes()
+                .filter(|&byte| byte == b'>')
+                .count();
+            if attribute_content.trim().is_empty() {
+                if quote_openings.contains(&previous_start) {
+                    break;
+                }
+                if attribute_depth.is_some_and(|previous| depth < previous) {
+                    break;
+                }
+                previous_end = previous_start;
+                continue;
+            }
+            if attribute_depth.is_some_and(|previous| depth < previous) {
+                break;
+            }
+            if !attribute_content.starts_with('{')
                 || read_djot_word_attributes(attribute_content, 0)
                     .map_or(true, |(end, _)| end != attribute_content.len())
             {
                 break;
             }
+            attribute_depth = Some(depth);
             attr_parts.push(attribute_content);
+            first_attribute = previous_start;
+            attribute_starts.push(previous_start);
             removed.push((
                 previous_start + attribute_start,
                 previous_start + previous_line.len() + usize::from(attribute_start == 0),
@@ -2308,6 +2367,45 @@ pub(super) fn references(source: &str) -> String {
                 },
             ));
             previous_end = previous_start;
+            if quote_openings.contains(&previous_start) {
+                break;
+            }
+        }
+        if !attr_parts.is_empty() && first_attribute > 0 {
+            let before = source[..first_attribute].strip_suffix('\n').unwrap_or("");
+            let before = before.rsplit('\n').next().unwrap_or("");
+            let before_start = djot_content_start(before);
+            let first_line = source[first_attribute..].split('\n').next().unwrap_or("");
+            let note_at = before[..before_start].find("[^");
+            let owner_start = note_at.map_or(before_start, |at| at + 1);
+            let quote_depth = |line: &str| {
+                quote_prefix
+                    .find(line)
+                    .unwrap()
+                    .as_str()
+                    .bytes()
+                    .filter(|&byte| byte == b'>')
+                    .count()
+            };
+            let outdented = quote_depth(first_line) < quote_depth(before)
+                || djot_content_start(first_line) < owner_start
+                    && (note_at.is_some() || list_marker.is_match(&before[..before_start]));
+            let before = before[before_start..].trim();
+            let before_attribute = before.starts_with('{')
+                && read_djot_word_attributes(before, 0).is_some_and(|(end, _)| end == before.len());
+            if !before.is_empty() && !outdented && !before_attribute && !block_end.is_match(before)
+            {
+                let tail = attribute_starts.iter().rposition(|&at| {
+                    let previous = source[..at].strip_suffix('\n').unwrap_or("");
+                    let previous = previous.rsplit('\n').next().unwrap_or("");
+                    previous[djot_content_start(previous)..].trim().is_empty()
+                });
+                let count = tail.map_or(0, |index| index + 1);
+                attr_parts.truncate(count);
+                removed.truncate(removed_start + count);
+            } else if !before.is_empty() && content_start == 0 {
+                removed.push((start, start, "\n".to_owned()));
+            }
         }
         attr_parts.reverse();
         let attr_text = attr_parts.join("");
@@ -3398,22 +3496,24 @@ mod tests {
     }
 
     #[test]
-    fn djot_reference_attribute_runs_stop_at_blank_lines() {
-        for source in [
-            "{.a}\n\n[r]: u\n\n[x][r]\n",
-            "{.a}\n{.b}\n\n[r]: u\n\n[x][r]\n",
+    fn djot_reference_attributes_remain_pending_across_blank_lines() {
+        for (source, expected) in [
+            (
+                "{.a}\n\n[r]: u\n\n[x][r]\n",
+                "<p><a href=\"u\" class=\"a\">x</a></p>",
+            ),
+            (
+                "{.a}\n{.b}\n\n[r]: u\n\n[x][r]\n",
+                "<p><a href=\"u\" class=\"a b\">x</a></p>",
+            ),
+            (
+                "{.a}\n\n{.b}\n[r]: u\n\n[x][r]\n",
+                "<p><a href=\"u\" class=\"a b\">x</a></p>",
+            ),
         ] {
             let converted = migrate_djot(source).value;
-            assert_eq!(
-                crate::to_html(&converted),
-                "<p><a href=\"u\">x</a></p>",
-                "{converted:?}"
-            );
+            assert_eq!(crate::to_html(&converted), expected, "{converted:?}");
         }
-        assert_eq!(
-            crate::to_html(&migrate_djot("{.a}\n\n{.b}\n[r]: u\n\n[x][r]\n").value),
-            "<p><a href=\"u\" class=\"b\">x</a></p>"
-        );
     }
 
     #[test]
