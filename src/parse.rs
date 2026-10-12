@@ -414,10 +414,37 @@ fn probe_blocks(source: &str, options: &Options<'_>) -> Vec<BlockNode> {
 /// as an ordinary paragraph and answers every question about the line after it
 /// the wrong way.
 fn probe_blocks_at_document_level(source: &str, options: &Options<'_>) -> Vec<BlockNode> {
+    probe_blocks_at_document_level_with_start(source, options).0
+}
+
+#[derive(Default)]
+struct ProbeRootBoundary {
+    start: Option<usize>,
+    closed_initial_container_end: Option<usize>,
+}
+
+fn probe_blocks_at_document_level_with_start(
+    source: &str,
+    options: &Options<'_>,
+) -> (Vec<BlockNode>, ProbeRootBoundary) {
     let _recording = definition_regions::RecordingPause::enter();
     let _probing = ProbeGuard::enter();
     let _source_ending = SourceEndingGuard::fragment();
-    parse_blocks_with_options_at_level(source, options, true)
+    let mut root_start = ProbeRootBoundary::default();
+    let blocks = drained(options, |pending| {
+        let (blocks, start) = parse_blocks_with_options_at_level_into_reached_with_start(
+            source,
+            &[],
+            None,
+            options,
+            true,
+            false,
+            pending,
+        );
+        root_start = start;
+        blocks
+    });
+    (blocks, root_start)
 }
 
 /// RAII guard that marks the current thread as parsing a figure group's body,
@@ -1028,8 +1055,19 @@ struct ContentColumns {
 #[derive(Default)]
 struct ColumnFrame {
     cols: Vec<usize>,
+    first_list_col: Option<(usize, usize)>,
+    first_list_start: Option<usize>,
     /// The indent of the innermost OPEN definition list, set by its `:: ` term.
     def_list: Option<usize>,
+}
+
+impl ColumnFrame {
+    fn pop_column(&mut self) {
+        if self.cols.pop() == self.first_list_col.map(|(_, column)| column) {
+            self.first_list_col = None;
+            self.first_list_start = None;
+        }
+    }
 }
 
 impl ContentColumns {
@@ -1054,6 +1092,15 @@ impl ContentColumns {
     /// content column read as lazy text - while the same body with one
     /// container peeled off (`> - - x`) registered (carve-rs#1096).
     fn observe(&mut self, raw_line: &str, opaque: bool) -> usize {
+        self.observe_indexed(raw_line, opaque, None)
+    }
+
+    fn observe_indexed(
+        &mut self,
+        raw_line: &str,
+        opaque: bool,
+        line_index: Option<usize>,
+    ) -> usize {
         let bare = without_blockquote_prefixes(raw_line);
         let was_prev_blank = self.prev_blank;
         self.prev_blank = trim_ascii(bare).is_empty();
@@ -1081,7 +1128,7 @@ impl ContentColumns {
                 self.frames.truncate(1);
             }
             let level = self.frames.len() - 1;
-            self.observe_segment(level, bare, was_prev_blank);
+            self.observe_segment(level, bare, was_prev_blank, line_index);
             return self.current().cols.last().copied().unwrap_or(0);
         }
         let mut rest = raw_line;
@@ -1094,7 +1141,7 @@ impl ContentColumns {
             while self.frames.len() <= level {
                 self.frames.push(ColumnFrame::default());
             }
-            self.observe_segment(level, rest, was_prev_blank);
+            self.observe_segment(level, rest, was_prev_blank, line_index);
             let Some(offset) = self.next_quote_offset(level, rest) else {
                 break;
             };
@@ -1145,11 +1192,28 @@ impl ContentColumns {
     /// Record ONE container level's own markers. `line` is the raw line with
     /// every prefix up to and including this level's quote markers removed, so
     /// its columns are measured inside that container.
-    fn observe_segment(&mut self, level: usize, line: &str, was_prev_blank: bool) {
+    fn observe_segment(
+        &mut self,
+        level: usize,
+        line: &str,
+        was_prev_blank: bool,
+        line_index: Option<usize>,
+    ) {
         // Ownership is measured in visual columns. A leading tab reaches
         // column four and must not close a definition body at column three.
         let indent = indent_columns(line);
         let raw_trimmed = trim_ascii(line);
+        if line_index.is_some()
+            && !raw_trimmed.is_empty()
+            && self.frames[level]
+                .first_list_col
+                .is_some_and(|(base, floor)| {
+                    indent < base || (indent < floor && !is_list_marker(raw_trimmed))
+                })
+        {
+            self.frames[level].first_list_col = None;
+            self.frames[level].first_list_start = None;
+        }
         let starts_block = is_heading_marker_line(raw_trimmed)
             || standalone_attrs_block_len(&[raw_trimmed]).is_some()
             || raw_trimmed.starts_with('>')
@@ -1168,7 +1232,7 @@ impl ContentColumns {
             // `:  ` line below it opens a body.
             let frame = &mut self.frames[level];
             while frame.cols.last().is_some_and(|col| *col > term_indent) {
-                frame.cols.pop();
+                frame.pop_column();
             }
             frame.def_list = Some(term_indent);
         } else if let Some((body_indent, marker_width)) =
@@ -1179,13 +1243,13 @@ impl ContentColumns {
             // slices the continuation lines it takes.
             let frame = &mut self.frames[level];
             while frame.cols.last().is_some_and(|col| *col > body_indent) {
-                frame.cols.pop();
+                frame.pop_column();
             }
             frame.cols.push(body_indent + marker_width);
         } else if let Some((marker_indent, marker_width)) = detect_prepass_list_marker(line) {
-            let cols = &mut self.frames[level].cols;
-            while cols.last().is_some_and(|col| *col > marker_indent) {
-                cols.pop();
+            let frame = &mut self.frames[level];
+            while frame.cols.last().is_some_and(|col| *col > marker_indent) {
+                frame.pop_column();
             }
             // One line can open SEVERAL items: `- - a` opens an outer item
             // whose content is another item, so BOTH content columns are
@@ -1194,7 +1258,11 @@ impl ContentColumns {
             // registered nothing here while carve-js and carve-php read it
             // as that item's block (carve#655).
             let mut offset = marker_width;
-            cols.push(offset);
+            frame.cols.push(offset);
+            if frame.first_list_col.is_none() {
+                frame.first_list_start = line_index;
+            }
+            frame.first_list_col.get_or_insert((marker_indent, offset));
             while let Some((nested_indent, nested_width)) =
                 detect_prepass_list_marker(&line[offset..])
             {
@@ -1207,7 +1275,7 @@ impl ContentColumns {
         } else if !raw_trimmed.is_empty() && (was_prev_blank || starts_block) {
             let frame = &mut self.frames[level];
             while frame.cols.last().is_some_and(|col| *col > indent) {
-                frame.cols.pop();
+                frame.pop_column();
             }
             // A line that dedents to or past the term's own column has left the
             // definition list, so the next `:  ` line down there opens no body
@@ -1340,6 +1408,9 @@ fn extract_footnote_defs(
     // Fence state for the note-body walk below, declared per definition since a
     // fence cannot span two notes.
     let mut in_fence: Option<FenceOpen> = None;
+    let mut term_fence_quotes = 0;
+    let mut term_fence_columns = Vec::new();
+    let mut term_fence_owned = false;
     // Whether that fence has a closer, which decides whether a dedent ends it.
     let mut fence_closer_ahead = false;
     // A LINE BLOCK's body is inline content, so a definition-shaped line inside
@@ -1354,7 +1425,7 @@ fn extract_footnote_defs(
     let mut in_comment_fence: Option<OpenCommentFence> = None;
     let comment_fence_closers = comment_fence_close_index(&lines);
     let closer_maxima = fence_closer_suffix_maxima(&lines);
-    let folded_into_term = term_folded_lines(&lines);
+    let folded_into_term = term_folded_lines(&lines, &closer_maxima, options);
     // Built on the first CONTAINER-scoped opener and never for a document that
     // has none, which is every document that only ever writes `%%%` at column 0.
     let mut container_closers: Option<ContainerCommentClosers> = None;
@@ -1406,7 +1477,12 @@ fn extract_footnote_defs(
         // This can collect a def from a container-nested fence body, but avoids
         // opening a fence the block parser never opens and swallowing every
         // later definition in the document.
-        let fence_line = stripped.bare;
+        let term_fence = folded_into_term.fence_openers.get(&i);
+        let fence_line = if let Some(host) = term_fence {
+            &lines[i][host.opener_offset..]
+        } else {
+            stripped.bare
+        };
         if verse_lines[i].is_owned() {
             body.push(lines[i].to_string());
             body_line_map.push(Some(first_source_line + i));
@@ -1414,12 +1490,26 @@ fn extract_footnote_defs(
             continue;
         }
         if let Some(open) = in_fence {
-            if prepass_fence_ends_above(lines[i], open, fence_closer_ahead) {
+            if (term_fence_owned && term_fence_ends_above(lines[i], open, &term_fence_columns))
+                || prepass_fence_ends_above(lines[i], open, fence_closer_ahead)
+            {
                 in_fence = None;
             } else {
                 body.push(lines[i].to_string());
                 body_line_map.push(Some(first_source_line + i));
-                if is_fence_close(fence_line, open) {
+                let close_kept = if term_fence_quotes > 0 {
+                    strip_prepass_quote_levels(lines[i], term_fence_quotes).unwrap_or(lines[i])
+                } else {
+                    lines[i]
+                };
+                let close_line = if !open.quoted && open.content_col == 0 {
+                    fence_line
+                } else if leading_ws(close_kept) >= open.content_col {
+                    &close_kept[open.content_col..]
+                } else {
+                    close_kept
+                };
+                if is_fence_close(close_line, open) {
                     in_fence = None;
                 }
                 i += 1;
@@ -1476,13 +1566,22 @@ fn extract_footnote_defs(
             }
         }
 
-        if let Some(open) = detect_fence_open(fence_line) {
+        if let Some(mut open) = detect_fence_open(fence_line) {
+            if let Some(host) = term_fence {
+                open.content_col = host.content_col;
+                open.quoted = host.quote_depth > 0;
+            }
             // §10 I4, as `extract_link_defs_with_guard`: an unterminated fence
             // interrupts no open paragraph, so going opaque here hid every
             // definition below one from collection (carve-rs#2096).
-            let fence = prepass_fence_opens(&lines, i, open, &closer_maxima);
+            let fence = prepass_fence_opens(&lines, i, open, &closer_maxima, &folded_into_term);
             if fence.opens {
                 in_fence = Some(open);
+                term_fence_quotes = term_fence.map_or(0, |host| host.quote_depth);
+                term_fence_columns = term_fence
+                    .map(|host| host.quote_columns.clone())
+                    .unwrap_or_default();
+                term_fence_owned = term_fence.is_some();
                 fence_closer_ahead = fence.closer_ahead;
             }
             body.push(lines[i].to_string());
@@ -1521,7 +1620,7 @@ fn extract_footnote_defs(
                     &mut probe_budget,
                     &mut unaffordable,
                 );
-            !(folds || unaffordable || folded_into_term.contains(&i))
+            !(folds || unaffordable || folded_into_term.folded.contains(&i))
         }) {
             let normalized_label = label_key(label);
             let first_for_label = !definition_keys.contains_key(&normalized_label);
@@ -2242,13 +2341,48 @@ fn line_folds_into_an_open_paragraph(
     budget: &mut usize,
     unaffordable: &mut bool,
 ) -> bool {
-    let run_start = body
-        .iter()
-        .rposition(|written| is_blank_line(written.as_ref()))
-        .map_or(0, |blank| blank + 1);
+    paragraph_continuation_probe(body, line, options, budget, unaffordable, false)
+}
+
+fn paragraph_continuation_probe(
+    body: &[impl AsRef<str>],
+    line: &str,
+    options: &Options<'_>,
+    budget: &mut usize,
+    unaffordable: &mut bool,
+    collect_notes: bool,
+) -> bool {
+    paragraph_continuation_probe_with_start(
+        body,
+        line,
+        options,
+        budget,
+        unaffordable,
+        collect_notes,
+        false,
+    )
+    .0
+}
+
+fn paragraph_continuation_probe_with_start(
+    body: &[impl AsRef<str>],
+    line: &str,
+    options: &Options<'_>,
+    budget: &mut usize,
+    unaffordable: &mut bool,
+    collect_notes: bool,
+    capture_root: bool,
+) -> (bool, ProbeRootBoundary) {
+    let run_start = if collect_notes {
+        0
+    } else {
+        body.iter()
+            .rposition(|written| is_blank_line(written.as_ref()))
+            .map_or(0, |blank| blank + 1)
+    };
     let run = &body[run_start..];
     if run.is_empty() {
-        return false;
+        return (false, ProbeRootBoundary::default());
     }
     // What the two probes will PARSE, which is the run twice over plus the
     // candidate line - so the price is the work rather than the question.
@@ -2272,7 +2406,7 @@ fn line_folds_into_an_open_paragraph(
     // markup-carve/carve#1881.
     if *budget < cost {
         *unaffordable = true;
-        return false;
+        return (false, ProbeRootBoundary::default());
     }
     *budget -= cost;
 
@@ -2285,37 +2419,132 @@ fn line_folds_into_an_open_paragraph(
     }
     let mut after = String::with_capacity(before.len() + line.len() + 1);
     after.push_str(&before);
+    let raw_before_len = before.len();
     after.push('\n');
     after.push_str(line);
 
-    let before = open_frame(&probe_blocks_at_document_level(
-        &extract_link_defs(&before, options).0,
-        options,
-    ));
-    let after = open_frame(&probe_blocks_at_document_level(
-        &extract_link_defs(&after, options).0,
-        options,
-    ));
-    after.ends_in_paragraph && before.levels == after.levels
+    let _term_probe = ProbeGuard::enter();
+    let reduce = |source: String| {
+        let source = if collect_notes && source.contains("[^") {
+            extract_footnote_defs(&source, 1, false, false, options)
+                .0
+                .source
+        } else {
+            source
+        };
+        reduce_frame_probe_links(source, options)
+    };
+    let before = reduce(before);
+    let unchanged = before == after[..raw_before_len]
+        || before.strip_suffix('\n') == Some(&after[..raw_before_len]);
+    let (before, root_start) = if capture_root && unchanged && options.extensions.is_empty() {
+        let (blocks, root_start) = probe_blocks_at_document_level_with_start(&before, options);
+        (
+            open_frame(&blocks),
+            ProbeRootBoundary {
+                start: root_start.start.map(|start| run_start + start),
+                closed_initial_container_end: root_start
+                    .closed_initial_container_end
+                    .map(|end| run_start + end),
+            },
+        )
+    } else {
+        (
+            open_frame(&probe_blocks_at_document_level(&before, options)),
+            ProbeRootBoundary::default(),
+        )
+    };
+    if !before.ends_in_paragraph {
+        return (false, root_start);
+    }
+    let after = reduce(after);
+    let after = open_frame(&probe_blocks_at_document_level(&after, options));
+    (
+        after.ends_in_paragraph && before.levels == after.levels,
+        root_start,
+    )
 }
 
-/// Line indexes that fold into an open definition term (carve#2411): past the
-/// column of the term's marker, at the term's quote depth, with no blank line
-/// or container-column opener since the term. A list marker ends the term.
-pub(crate) fn term_folded_lines(lines: &[&str]) -> std::collections::HashSet<usize> {
-    fn view_upto(raw: &str, limit: usize) -> (&str, usize) {
+fn reduce_frame_probe_links(source: String, options: &Options<'_>) -> String {
+    if options.extensions.is_empty()
+        && !source.contains('\r')
+        && !source_may_contain_link_definition(&source)
+    {
+        let mut source = source;
+        if !source.is_empty() && !source.ends_with('\n') {
+            source.push('\n');
+        }
+        source
+    } else {
+        extract_link_defs(&source, options).0
+    }
+}
+
+fn source_may_contain_link_definition(source: &str) -> bool {
+    if !source.contains("]: ") {
+        return false;
+    }
+    source
+        .lines()
+        .rev()
+        .filter(|line| line.contains("]: "))
+        .any(|line| {
+            let mut rest = trim_ascii_start(line);
+            loop {
+                let next = trim_ascii_start(strip_container_prefixes(rest, true).bare);
+                if next.len() == rest.len() {
+                    return parse_link_def_line_with_value(next).is_some();
+                }
+                rest = next;
+            }
+        })
+}
+
+/// Lines folded into a term and fences that end one at its container column.
+#[derive(Default)]
+struct TermLineOwnership {
+    folded: std::collections::HashSet<usize>,
+    fence_openers: HashMap<usize, TermFenceHost>,
+}
+
+struct TermFenceHost {
+    content_col: usize,
+    quote_depth: usize,
+    quote_columns: Vec<usize>,
+    opener_offset: usize,
+}
+
+fn term_folded_lines(
+    lines: &[&str],
+    closer_maxima: &(Vec<usize>, Vec<usize>),
+    options: &Options<'_>,
+) -> TermLineOwnership {
+    fn view_upto(raw: &str, limit: usize) -> (&str, usize, bool) {
         let mut view = raw;
         let mut quotes = 0usize;
+        let mut through_list = false;
         while quotes < limit {
-            let Some(rest) = strip_blockquote_prefix(trim_ascii_start(view)) else {
+            let rest = strip_blockquote_prefix(trim_ascii_start(view)).or_else(|| {
+                let mut content = view;
+                while let Some(rest) = term_container_content(content) {
+                    content = rest;
+                }
+                if content.len() == view.len() {
+                    return None;
+                }
+                let rest = strip_blockquote_prefix(trim_ascii_start(content))?;
+                through_list = true;
+                Some(rest)
+            });
+            let Some(rest) = rest else {
                 break;
             };
             view = rest;
             quotes += 1;
         }
-        (view, quotes)
+        (view, quotes, through_list)
     }
-    fn view(raw: &str) -> (&str, usize) {
+    fn view(raw: &str) -> (&str, usize, bool) {
         view_upto(raw, usize::MAX)
     }
     // Only a term folds anything, and the fence scans below are not free on a
@@ -2324,7 +2553,7 @@ pub(crate) fn term_folded_lines(lines: &[&str]) -> std::collections::HashSet<usi
         .iter()
         .any(|raw| term_start_column(view(raw).0).is_some())
     {
-        return std::collections::HashSet::new();
+        return TermLineOwnership::default();
     }
     // Lines by the length of their leading `%` run, so finding the closer of a
     // comment fence opened on `index` stays linear over many unclosed openers.
@@ -2339,25 +2568,106 @@ pub(crate) fn term_folded_lines(lines: &[&str]) -> std::collections::HashSet<usi
         let at = runs.get(&fence_len)?;
         at.get(at.partition_point(|&k| k <= index)).copied()
     };
-    let mut folded = std::collections::HashSet::new();
+    let mut prefix_costs = Vec::with_capacity(lines.len() + 1);
+    prefix_costs.push(0usize);
+    for line in lines {
+        prefix_costs.push(prefix_costs.last().unwrap().saturating_add(line.len() + 1));
+    }
+    let marker_admitted = |start: usize,
+                           budget: &mut usize,
+                           root_start: &mut usize,
+                           reuse_root: &mut bool,
+                           last_unproved_delimiter: Option<usize>,
+                           unresolved_code_delimiter: bool| {
+        if probing() || start == 0 || is_blank_line(view(lines[start - 1]).0) {
+            return true;
+        }
+        let run_start = if *reuse_root && options.extensions.is_empty() && *root_start < start {
+            *root_start
+        } else {
+            0
+        };
+        if *budget
+            < prefix_costs[start]
+                .saturating_sub(prefix_costs[run_start])
+                .saturating_mul(2)
+                .saturating_add(lines[start].len())
+        {
+            return false;
+        }
+        let mut unaffordable = false;
+        let (folds, proved_start) = paragraph_continuation_probe_with_start(
+            &lines[run_start..start],
+            lines[start],
+            options,
+            budget,
+            &mut unaffordable,
+            true,
+            true,
+        );
+        if run_start == 0
+            && !unresolved_code_delimiter
+            && proved_start
+                .closed_initial_container_end
+                .is_some_and(|end| last_unproved_delimiter.is_some_and(|delimiter| delimiter < end))
+        {
+            *reuse_root = true;
+        }
+        if let Some(proved_start) = proved_start.start.map(|proved| run_start + proved) {
+            if proved_start >= *root_start && proved_start < start {
+                *root_start = proved_start;
+            }
+        }
+        !(folds || unaffordable)
+    };
+    let mut ownership = TermLineOwnership::default();
+    let mut term_probe_budget = probe_budget_for(*prefix_costs.last().unwrap());
+    let mut probe_root_start = 0;
+    let mut reuse_probe_root = true;
+    let mut last_unproved_delimiter = None;
+    let mut unresolved_code_delimiter = false;
     let mut term: Option<(usize, usize)> = None;
+    let mut term_start = None;
+    let mut admitted_term_host: Option<(usize, usize, usize)> = None;
+    let mut admitted_host_quote_columns = Vec::new();
+    let mut term_quote_columns = Vec::new();
+    let mut columns = ContentColumns::new();
+    let mut previous_non_blank = "";
     let mut index = 0;
     while index < lines.len() {
+        columns.observe_indexed(lines[index], false, Some(index));
+        if admitted_term_host.is_some()
+            && strip_term_quote_prefixes(lines[index], &admitted_host_quote_columns).is_none()
+        {
+            admitted_term_host = None;
+        }
+        let after_term = opens_definition_entry(previous_non_blank);
+        if !is_blank_line(lines[index]) {
+            previous_non_blank = lines[index];
+        }
         // A `>` past an open term's column is term text, not a deeper quote.
         if let Some((term_col, term_quotes)) = term {
-            let (at_term, quotes) = view_upto(lines[index], term_quotes);
+            let (at_term, quotes, through_list) = view_upto(lines[index], term_quotes);
             let rest = trim_ascii_start(at_term);
-            if quotes == term_quotes
+            if !through_list
+                && quotes == term_quotes
                 && !is_blank_line(at_term)
                 && indent_columns(at_term) > term_col
-                && strip_blockquote_prefix(rest).is_some()
+                && (strip_blockquote_prefix(rest).is_some()
+                    || strip_definition_marker(rest).is_some())
             {
-                folded.insert(index);
+                ownership.folded.insert(index);
                 index += 1;
                 continue;
             }
         }
-        let (view_line, quotes) = view(lines[index]);
+        let (view_line, quotes, through_list) = view(lines[index]);
+        if through_list {
+            term = None;
+        }
+        if admitted_term_host.is_some_and(|(_, _, depth)| depth != quotes) {
+            admitted_term_host = None;
+        }
         if is_blank_line(view_line) {
             term = None;
             index += 1;
@@ -2365,50 +2675,291 @@ pub(crate) fn term_folded_lines(lines: &[&str]) -> std::collections::HashSet<usi
         }
         let col = indent_columns(view_line);
         let rest = trim_ascii_start(view_line);
+        if let Some((base, _, depth)) =
+            admitted_term_host.filter(|&(base, _, depth)| depth == quotes && col == base)
+        {
+            if let Some((_, floor)) = detect_prepass_list_marker(view_line) {
+                admitted_term_host = Some((base, floor, depth));
+            }
+        }
         let comment =
             detect_comment_fence_line(rest).and_then(|open| comment_closer(index, open.fence_len));
+        if admitted_term_host
+            .is_some_and(|(base, floor, _)| col < base || (col < floor && !is_list_marker(rest)))
+        {
+            admitted_term_host = None;
+        }
+        let mut admitted_term_fence = false;
         if let Some((term_col, term_quotes)) = term {
             if quotes == term_quotes && col > term_col && !is_list_marker(rest) {
                 // A folded comment fence takes its body and closer with it.
                 let last = comment.unwrap_or(index);
-                folded.extend(index..=last);
+                ownership.folded.extend(index..=last);
+                previous_non_blank = lines[last];
                 index = last + 1;
                 continue;
             }
-            if quotes != term_quotes
-                || item_block_opener(rest)
+            if quotes == term_quotes
+                && col == term_col
+                && detect_fence_open(rest).is_some()
+                && term_start.is_some_and(|start| {
+                    let marker_col = indent_columns(view(lines[start]).0);
+                    if term_col == 0
+                        || admitted_term_host.is_some_and(|(base, floor, depth)| {
+                            depth == quotes
+                                && (marker_col == floor
+                                    || (marker_col == base
+                                        && is_list_marker(trim_ascii_start(view(lines[start]).0))))
+                        })
+                    {
+                        return true;
+                    }
+                    marker_admitted(
+                        start,
+                        &mut term_probe_budget,
+                        &mut probe_root_start,
+                        &mut reuse_probe_root,
+                        last_unproved_delimiter,
+                        unresolved_code_delimiter,
+                    )
+                })
+            {
+                admitted_term_fence = true;
+                ownership.fence_openers.insert(
+                    index,
+                    TermFenceHost {
+                        content_col: col,
+                        quote_depth: quotes,
+                        quote_columns: if strip_term_quote_prefixes(
+                            lines[index],
+                            &term_quote_columns,
+                        )
+                        .is_some()
+                        {
+                            term_quote_columns.clone()
+                        } else {
+                            term_quote_columns_for(lines[index], &columns)
+                        },
+                        opener_offset: rest.as_ptr() as usize - lines[index].as_ptr() as usize,
+                    },
+                );
+            }
+            if quotes > term_quotes
+                || (item_block_opener(rest) && detect_block_image(rest).is_none())
+                || is_colon_fence_opener_shape(rest)
+                || (rest.starts_with('{')
+                    && standalone_attrs_block_len_iter(
+                        lines[index..]
+                            .iter()
+                            .map(|line| trim_ascii_start(view(line).0)),
+                    )
+                    .is_some())
                 || is_list_marker(rest)
                 || rest.starts_with("%%")
                 || strip_definition_marker(rest).is_some()
-                || parse_link_def_line(rest).is_some()
+                || parse_link_def_line_with_value(rest).is_some_and(|(label, target, _)| {
+                    !label.starts_with('@') && !target.trim().is_empty()
+                })
             {
                 term = None;
             }
         }
         // A fence's payload holds no term.
         if let Some(close) = comment {
+            previous_non_blank = lines[close];
             index = close + 1;
             continue;
         }
-        if let Some(open) = detect_fence_open(rest) {
+        let mut fence_line = view_line;
+        let mut fence_markers = 0;
+        while let Some(content) = detect_list_marker_full(fence_line)
+            .map(|marker| marker.content)
+            .or_else(|| {
+                after_term
+                    .then(|| strip_definition_marker(trim_ascii_start(fence_line)))
+                    .flatten()
+                    .map(|(body, _)| body)
+            })
+        {
+            fence_line = content;
+            fence_markers += 1;
+        }
+        let fence_rest = trim_ascii_start(fence_line);
+        let reusable_before_fence = reuse_probe_root;
+        // An unproved delimiter may acquire a closer in a later prefix.
+        if (detect_fence_open(fence_rest).is_some() && !admitted_term_fence)
+            || is_colon_fence_opener_shape(rest)
+        {
+            reuse_probe_root = false;
+            probe_root_start = 0;
+            last_unproved_delimiter = Some(index);
+        }
+        if let Some(mut open) = detect_fence_open(fence_rest) {
+            open.content_col = view_line
+                [..fence_line.as_ptr() as usize - view_line.as_ptr() as usize]
+                .chars()
+                .count()
+                + indent_columns(fence_line);
+            open.quoted = quotes > 0;
+            let fence = prepass_fence_opens(lines, index, open, closer_maxima, &ownership);
+            if !fence.opens {
+                unresolved_code_delimiter = true;
+                index += 1;
+                continue;
+            }
+            if fence_markers == 1
+                && (admitted_term_fence
+                    || marker_admitted(
+                        index,
+                        &mut term_probe_budget,
+                        &mut probe_root_start,
+                        &mut reuse_probe_root,
+                        last_unproved_delimiter,
+                        unresolved_code_delimiter,
+                    ))
+            {
+                ownership.fence_openers.insert(
+                    index,
+                    TermFenceHost {
+                        content_col: open.content_col,
+                        quote_depth: quotes,
+                        quote_columns: term_quote_columns_for(lines[index], &columns),
+                        opener_offset: fence_rest.as_ptr() as usize
+                            - lines[index].as_ptr() as usize,
+                    },
+                );
+            }
+            let term_host = ownership.fence_openers.get(&index);
+            let term_quote_columns = term_host.map(|host| host.quote_columns.clone());
+            let term_fence_owned = term_host.is_some();
+            let mut consumed_closer = false;
             index += 1;
             while index < lines.len() {
-                let closes = is_fence_close(trim_ascii_start(view(lines[index]).0), open);
+                if (term_fence_owned
+                    && term_fence_ends_above(
+                        lines[index],
+                        open,
+                        term_quote_columns.as_deref().unwrap_or(&[]),
+                    ))
+                    || prepass_fence_ends_above(lines[index], open, fence.closer_ahead)
+                {
+                    if term_fence_owned {
+                        let (next, depth, _) = view(lines[index]);
+                        let next = trim_ascii_start(next);
+                        if detect_fence_open(next).is_some() {
+                            ownership.fence_openers.insert(
+                                index,
+                                TermFenceHost {
+                                    content_col: indent_columns(view(lines[index]).0),
+                                    quote_depth: depth,
+                                    quote_columns: term_quote_columns_for(lines[index], &columns),
+                                    opener_offset: next.as_ptr() as usize
+                                        - lines[index].as_ptr() as usize,
+                                },
+                            );
+                        }
+                    }
+                    break;
+                }
+                if !term_fence_owned {
+                    let (body, depth, _) = view(lines[index]);
+                    for (frame_depth, frame) in columns.frames.iter_mut().enumerate() {
+                        if frame_depth > depth
+                            || (frame_depth == depth
+                                && !is_blank_line(body)
+                                && frame.first_list_col.is_some_and(|(base, floor)| {
+                                    let col = indent_columns(body);
+                                    col < base
+                                        || (col < floor && !is_list_marker(trim_ascii_start(body)))
+                                }))
+                        {
+                            frame.first_list_col = None;
+                            frame.first_list_start = None;
+                        }
+                    }
+                    if admitted_term_host.is_some_and(|(_, floor, host_depth)| {
+                        depth != host_depth
+                            || strip_term_quote_prefixes(lines[index], &admitted_host_quote_columns)
+                                .is_none()
+                            || (!is_blank_line(lines[index]) && indent_columns(body) < floor)
+                    }) {
+                        admitted_term_host = None;
+                    }
+                }
+                let kept = strip_prepass_quote_levels(lines[index], quotes).unwrap_or(lines[index]);
+                let close_line = if leading_ws(kept) >= open.content_col {
+                    &kept[open.content_col..]
+                } else {
+                    kept
+                };
+                let closes = is_fence_close(close_line, open);
+                if !is_blank_line(lines[index]) {
+                    previous_non_blank = lines[index];
+                }
                 index += 1;
                 if closes {
+                    consumed_closer = true;
                     break;
+                }
+            }
+            if reusable_before_fence && consumed_closer {
+                reuse_probe_root = true;
+            }
+            if !admitted_term_fence && !consumed_closer {
+                unresolved_code_delimiter = true;
+            }
+            // A proved term fence establishes an actual item host. Keep its
+            // column through sibling markers and in-item continuations, but
+            // discard it on every non-marker line below that column.
+            if admitted_term_fence
+                && term_start
+                    .is_some_and(|start| detect_list_marker_full(view(lines[start]).0).is_some())
+            {
+                let start = term_start.unwrap();
+                let marker_col = indent_columns(view(lines[start]).0);
+                if !admitted_term_host.is_some_and(|(base, floor, depth)| {
+                    depth == quotes && (marker_col == base || marker_col == floor)
+                }) {
+                    let own_host = (marker_col, open.content_col);
+                    let outer = columns
+                        .frames
+                        .get(quotes)
+                        .and_then(|frame| Some((frame.first_list_col?, frame.first_list_start?)));
+                    let (base, floor) = outer
+                        .filter(|&((base, _), outer_start)| {
+                            base == marker_col
+                                || (term_quote_columns_for(lines[outer_start], &columns)
+                                    == term_quote_columns.clone().unwrap_or_default()
+                                    && marker_admitted(
+                                        outer_start,
+                                        &mut term_probe_budget,
+                                        &mut probe_root_start,
+                                        &mut reuse_probe_root,
+                                        last_unproved_delimiter,
+                                        unresolved_code_delimiter,
+                                    ))
+                        })
+                        .map_or(own_host, |(host, _)| host);
+                    admitted_term_host = Some((base, floor, quotes));
+                    admitted_host_quote_columns = term_quote_columns.clone().unwrap_or_default();
                 }
             }
             continue;
         }
         // A term may follow list markers on its line; its column is then the
         // item's content column.
-        if let Some(term_col) = term_start_column(view_line) {
+        if let Some(term_col) = term_start_column(view_line).filter(|&term_col| {
+            term_col == 0
+                || detect_list_marker_full(view_line).is_some()
+                || columns.reached_by_at(quotes, term_col) == term_col
+        }) {
             term = Some((term_col, quotes));
+            term_start = Some(index);
+            term_quote_columns = term_quote_columns_for(lines[index], &columns);
         }
         index += 1;
     }
-    folded
+    ownership
 }
 
 /// The column of a `:: ` term that opens this line, after any list or
@@ -2559,16 +3110,20 @@ fn prepass_fence_closer_ahead(
 /// §10 I4: an UNTERMINATED fence cannot interrupt an open paragraph. Going
 /// opaque there hides every definition below it from collection, so the pass
 /// must stay open instead (`:` / ` ``` ` / `[A]: b`). With no paragraph above,
-/// or with a closer ahead, the fence is real and its body is verbatim.
+/// or after a definition term at its container column (CARVE-P2-028), the
+/// fence is real and its body is verbatim. A closer also makes it real.
 fn prepass_fence_opens(
     lines: &[&str],
     index: usize,
     open: FenceOpen,
     maxima: &(Vec<usize>, Vec<usize>),
+    terms: &TermLineOwnership,
 ) -> PrepassFence {
     let closer_ahead = prepass_fence_closer_ahead(lines, index, open, maxima);
     PrepassFence {
-        opens: closer_ahead || !prepass_paragraph_open_above(lines, index),
+        opens: closer_ahead
+            || terms.fence_openers.contains_key(&index)
+            || !prepass_paragraph_open_above(lines, index),
         closer_ahead,
     }
 }
@@ -2594,6 +3149,47 @@ fn prepass_fence_ends_above(line: &str, open: FenceOpen, closer_ahead: bool) -> 
         && indent_columns(line) < open.content_col
 }
 
+fn term_container_content(line: &str) -> Option<&str> {
+    detect_list_marker_full(line)
+        .map(|marker| marker.content)
+        .or_else(|| strip_definition_marker(trim_ascii_start(line)).map(|(body, _)| body))
+}
+
+fn term_quote_columns_for(mut line: &str, columns: &ContentColumns) -> Vec<usize> {
+    let mut floors = Vec::new();
+    loop {
+        let base = line;
+        while let Some(content) = term_container_content(line) {
+            line = content;
+        }
+        let marker_col = line.as_ptr() as usize - base.as_ptr() as usize;
+        let floor = marker_col.max(columns.reached_by_at(floors.len(), indent_columns(base)));
+        let Some(rest) = strip_prepass_blockquote_prefix(line) else {
+            break;
+        };
+        floors.push(floor);
+        line = rest;
+    }
+    floors
+}
+
+fn strip_term_quote_prefixes<'a>(mut line: &'a str, quote_columns: &[usize]) -> Option<&'a str> {
+    for &floor in quote_columns {
+        if indent_columns(line) < floor {
+            return None;
+        }
+        line = strip_prepass_blockquote_prefix(line)?;
+    }
+    Some(line)
+}
+
+fn term_fence_ends_above(line: &str, open: FenceOpen, quote_columns: &[usize]) -> bool {
+    let Some(kept) = strip_term_quote_prefixes(line, quote_columns) else {
+        return true;
+    };
+    !is_blank_line(kept) && indent_columns(kept) < open.content_col
+}
+
 fn extract_link_defs(source: &str, options: &Options<'_>) -> (String, BTreeMap<String, LinkDef>) {
     extract_link_defs_with_guard(source, options, None)
 }
@@ -2617,11 +3213,29 @@ fn extract_link_defs_guarded(
 fn extract_link_defs_with_guard(
     source: &str,
     options: &Options<'_>,
+    guard: Option<&mut usize>,
+) -> (String, BTreeMap<String, LinkDef>) {
+    if options.extensions.is_empty()
+        && !source_may_contain_link_definition(source)
+        && !source.contains('\r')
+    {
+        let lines: Vec<_> = source.lines().collect();
+        return (joined_source(&lines), BTreeMap::new());
+    }
+    extract_link_defs_with_guard_full(source, options, guard)
+}
+
+fn extract_link_defs_with_guard_full(
+    source: &str,
+    options: &Options<'_>,
     mut guard: Option<&mut usize>,
 ) -> (String, BTreeMap<String, LinkDef>) {
     let mut body: Vec<std::borrow::Cow<'_, str>> = Vec::new();
     let mut defs = BTreeMap::new();
     let mut in_fence: Option<FenceOpen> = None;
+    let mut term_fence_quotes = 0;
+    let mut term_fence_columns = Vec::new();
+    let mut term_fence_owned = false;
     // Whether that fence has a closer, which decides whether a dedent ends it.
     let mut fence_closer_ahead = false;
     // A LINE BLOCK's body is inline content (`line_block_line = {whitespace},
@@ -2657,11 +3271,11 @@ fn extract_link_defs_with_guard(
     // before the state is entered - see comment_fence_closes.
     let all_lines: Vec<&str> = source.lines().collect();
     let comment_closers = comment_fence_close_index(&all_lines);
-    let folded_into_term = term_folded_lines(&all_lines);
+    let closer_maxima = fence_closer_suffix_maxima(&all_lines);
+    let folded_into_term = term_folded_lines(&all_lines, &closer_maxima, options);
     // See the note in `extract_footnote_defs`: lazy, so a document with no
     // container-scoped comment fence pays nothing for it.
     let mut container_closers: Option<ContainerCommentClosers> = None;
-    let closer_maxima = fence_closer_suffix_maxima(&all_lines);
     // See `extract_footnote_defs`: the line the `after_term` gate asks about.
     let mut previous_non_blank = "";
     for (line_index, line) in all_lines.iter().copied().enumerate() {
@@ -2694,7 +3308,9 @@ fn extract_link_defs_with_guard(
             continue;
         }
         if let Some(open) = in_fence {
-            if prepass_fence_ends_above(line, open, fence_closer_ahead) {
+            if (term_fence_owned && term_fence_ends_above(line, open, &term_fence_columns))
+                || prepass_fence_ends_above(line, open, fence_closer_ahead)
+            {
                 in_fence = None;
             } else {
                 body.push(std::borrow::Cow::Borrowed(line));
@@ -2702,7 +3318,9 @@ fn extract_link_defs_with_guard(
                 // quoted, and NEVER a list marker. A fence closer is a continuation
                 // line of pure indentation, so a literal marker line inside a
                 // document-level code sample stays content.
-                let close_kept = if open.quoted {
+                let close_kept = if term_fence_quotes > 0 {
+                    strip_prepass_quote_levels(line, term_fence_quotes).unwrap_or(line)
+                } else if open.quoted {
                     strip_prepass_blockquote_prefix(line).unwrap_or(line)
                 } else {
                     line
@@ -2724,7 +3342,11 @@ fn extract_link_defs_with_guard(
         // fence on the marker line (`- ````) and on continuation lines.
         let opener_kept;
         let mut authored_fence_col = content_col;
-        let fence_line = if content_col == 0 {
+        let term_fence = folded_into_term.fence_openers.get(&line_index);
+        let fence_line = if let Some(host) = term_fence {
+            authored_fence_col = host.content_col;
+            &line[host.opener_offset..]
+        } else if content_col == 0 {
             stripped.bare
         } else {
             opener_kept = strip_container_prefixes_keep_indent(line);
@@ -2784,10 +3406,21 @@ fn extract_link_defs_with_guard(
         }
         if let Some(mut open) = detect_fence_open(fence_line) {
             open.content_col = authored_fence_col;
-            open.quoted = raw_is_quoted;
-            let fence = prepass_fence_opens(&all_lines, line_index, open, &closer_maxima);
+            open.quoted = term_fence.map_or(raw_is_quoted, |host| host.quote_depth > 0);
+            let fence = prepass_fence_opens(
+                &all_lines,
+                line_index,
+                open,
+                &closer_maxima,
+                &folded_into_term,
+            );
             if fence.opens {
                 in_fence = Some(open);
+                term_fence_quotes = term_fence.map_or(0, |host| host.quote_depth);
+                term_fence_columns = term_fence
+                    .map(|host| host.quote_columns.clone())
+                    .unwrap_or_default();
+                term_fence_owned = term_fence.is_some();
                 fence_closer_ahead = fence.closer_ahead;
             }
             body.push(std::borrow::Cow::Borrowed(line));
@@ -2850,7 +3483,7 @@ fn extract_link_defs_with_guard(
                             &mut unaffordable,
                         )
                     });
-                !(folds || unaffordable || folded_into_term.contains(&line_index))
+                !(folds || unaffordable || folded_into_term.folded.contains(&line_index))
             })
         {
             // A reference definition needs a non-empty destination (carve-js
@@ -2921,6 +3554,13 @@ fn prepass_line_is_quoted(line: &str) -> bool {
     strip_prepass_blockquote_prefix(line).is_some()
         || detect_list_marker_full(line)
             .is_some_and(|marker| strip_prepass_blockquote_prefix(marker.content).is_some())
+}
+
+fn strip_prepass_quote_levels(mut line: &str, depth: usize) -> Option<&str> {
+    for _ in 0..depth {
+        line = strip_prepass_blockquote_prefix(line)?;
+    }
+    Some(line)
 }
 
 fn strip_prepass_blockquote_prefix(line: &str) -> Option<&str> {
@@ -3570,6 +4210,27 @@ fn parse_blocks_with_options_at_level_into_reached(
     in_item_body: bool,
     pending: &mut Vec<PendingBody>,
 ) -> Vec<BlockNode> {
+    parse_blocks_with_options_at_level_into_reached_with_start(
+        source,
+        reached,
+        marker_tail,
+        options,
+        at_document_level,
+        in_item_body,
+        pending,
+    )
+    .0
+}
+
+fn parse_blocks_with_options_at_level_into_reached_with_start(
+    source: &str,
+    reached: &[bool],
+    marker_tail: Option<MarkerTail>,
+    options: &Options<'_>,
+    at_document_level: bool,
+    in_item_body: bool,
+    pending: &mut Vec<PendingBody>,
+) -> (Vec<BlockNode>, ProbeRootBoundary) {
     let mut lines: Vec<&str> = source.lines().collect();
     // `lines()` already drops a single trailing newline; nothing more to do.
     let _ = &mut lines;
@@ -3597,7 +4258,14 @@ fn parse_blocks_with_options_at_level_into_reached(
     cursor.in_item_body = in_item_body;
     cursor.reached = Some(reached);
     cursor.marker_tail = marker_tail;
-    parse_blocks(&mut cursor, options, pending)
+    let blocks = parse_blocks(&mut cursor, options, pending);
+    (
+        blocks,
+        ProbeRootBoundary {
+            start: cursor.last_block_start,
+            closed_initial_container_end: cursor.closed_initial_container_end,
+        },
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -3738,6 +4406,8 @@ struct LineCursor<'a> {
     /// gets no position rather than a wrong one.
     col_map: Option<&'a [Option<isize>]>,
     pos: usize,
+    last_block_start: Option<usize>,
+    closed_initial_container_end: Option<usize>,
     at_document_level: bool,
     /// True for the cursor reading a LIST ITEM's own body, and that body only.
     in_item_body: bool,
@@ -3799,6 +4469,8 @@ impl<'a> LineCursor<'a> {
             line_map,
             col_map,
             pos: 0,
+            last_block_start: None,
+            closed_initial_container_end: None,
             at_document_level: false,
             in_item_body: false,
             invisible_arms: true,
@@ -6658,11 +7330,13 @@ fn parse_blocks(
         // top level. It was not: this loop had the arm and the single-block
         // parser did not, so a `+`-attached `%% c` fell through to a paragraph
         // wrapping an INLINE comment (carve-rs#678).
+        let comment_start = cur.pos;
         match take_comment_block(cur, options) {
             CommentBlock::NotAComment => {}
             CommentBlock::Consumed(None) => continue,
             CommentBlock::Consumed(Some(node)) => {
                 out.push(*node);
+                cur.last_block_start = Some(comment_start);
                 continue;
             }
         }
@@ -6701,6 +7375,7 @@ fn parse_blocks(
                 cur,
                 options,
             );
+            cur.last_block_start = Some(start_line);
             // `append_parsed_block` pushes exactly one node, so the container
             // just emitted is the last one - and stays there, because this loop
             // never removes or reorders what it has pushed.
@@ -10930,6 +11605,7 @@ fn parse_list(
     // blank in the item is interior to it and loosens nothing (§17; the
     // reference tracks the span apart from whether the fence opened).
     let mut item_unopened_fence_span = false;
+    let mut item_rejected_fence_owner = false;
     // Did the item just built carry a BARE `+` lead - an empty first-block item
     // waiting for a document-column-0 block (§17 L3, markup-carve/carve#1436)?
     // Such an item leaves no open paragraph, so a line below its content column
@@ -11094,27 +11770,73 @@ fn parse_list(
                         &mut item_open_fence,
                     );
                     nested.authored_base_at_start |= authored_overindented_opener;
-                    if item_open_fence.is_none()
-                        || cur.peek().is_some_and(|line| line.starts_with(LAZY))
+                    let collected_tail_blank = item_open_fence.is_some()
+                        && cur.pos > 0
+                        && is_blank_line(cur.lines.at(cur.pos - 1));
+                    if item_open_fence.is_some() {
+                        let mut admitted = nested.clone();
+                        rebase_overindented_blocks(&mut admitted, false, options);
+                        if body_ends_with_open_paragraph(&admitted.source, options) {
+                            item_open_fence = None;
+                            item_rejected_fence_owner = true;
+                        }
+                    }
+                    let latest_owner = Cell::new(None);
+                    if item_rejected_fence_owner {
+                        let mut admitted = nested.clone();
+                        rebase_overindented_blocks(&mut admitted, false, options);
+                        latest_owner.set(Some(
+                            body_ends_with_code_block(&admitted.source, options)
+                                || collected_body_takes_the_lazy_line(
+                                    &admitted.source,
+                                    last_consumed_line_below_column(cur, content_col),
+                                    options,
+                                ),
+                        ));
+                    }
+                    if !collected_tail_blank
+                        && (item_open_fence.is_none()
+                            || cur.peek().is_some_and(|line| line.starts_with(LAZY)))
                     {
                         fold_lazy_run_and_resume_in_band(
                             cur,
                             &mut nested,
                             content_col,
-                            content_col.saturating_sub(1),
-                            base_indent,
+                            (content_col.saturating_sub(1), base_indent),
+                            item_rejected_fence_owner,
                             |src, below| {
+                                if let Some(open) = latest_owner.get() {
+                                    return open;
+                                }
                                 let mut rebased = src.clone();
                                 rebase_overindented_blocks(&mut rebased, false, options);
                                 collected_body_takes_the_lazy_line(&rebased.source, below, options)
                             },
                             |cur| {
-                                collect_item_continuation_block_mapped(
+                                let resumed = collect_item_continuation_block_mapped(
                                     cur,
                                     base_indent,
                                     content_col,
                                     &mut item_open_fence,
-                                )
+                                );
+                                if latest_owner.get().is_some() {
+                                    let mut admitted = resumed.clone();
+                                    rebase_overindented_blocks(&mut admitted, false, options);
+                                    let paragraph =
+                                        body_ends_with_open_paragraph(&admitted.source, options);
+                                    if paragraph {
+                                        item_open_fence = None;
+                                    }
+                                    latest_owner.set(Some(
+                                        paragraph
+                                            || (item_open_fence.is_none()
+                                                && body_ends_with_code_block(
+                                                    &admitted.source,
+                                                    options,
+                                                )),
+                                    ));
+                                }
+                                resumed
                             },
                         );
                     }
@@ -11144,7 +11866,9 @@ fn parse_list(
                         last_consumed_line_below_column(cur, content_col),
                         options,
                     );
-                    item_paragraph_open = nested_leaves_paragraph_open;
+                    item_paragraph_open = nested_leaves_paragraph_open
+                        || (item_rejected_fence_owner
+                            && body_ends_with_code_block(&nested.source, options));
                     let mut split_stack: Vec<(Attrs, Option<Pos>)> = Vec::new();
                     while let Some(split) = split_trailing_attrs(&mut nested) {
                         split_stack.push(split);
@@ -11218,9 +11942,10 @@ fn parse_list(
                         )
                     });
                     if !renders_nothing {
-                        pending_blank = item_open_fence.is_some()
-                            && cur.pos > 0
-                            && is_blank_line(cur.lines.at(cur.pos - 1));
+                        pending_blank = collected_tail_blank
+                            || (item_open_fence.is_some()
+                                && cur.pos > 0
+                                && is_blank_line(cur.lines.at(cur.pos - 1)));
                         if pending_blank {
                             blank_run = cur
                                 .lines
@@ -11232,7 +11957,7 @@ fn parse_list(
                         }
                     }
                     place_item_chunk(deferred, last_item, nested_children, carried);
-                    if !nested_leaves_paragraph_open
+                    if !item_paragraph_open
                         && cur.peek().is_some_and(|line| {
                             let indent = indent_columns(line);
                             indent > base_indent && indent < content_col
@@ -11470,6 +12195,7 @@ fn parse_list(
         // A new item carries none of the previous item's fence state.
         item_open_fence = None;
         item_unopened_fence_span = false;
+        item_rejected_fence_owner = false;
         let item_source_line = cur.source_line(cur.pos);
         let item_at = cur.pos;
         cur.consume();
@@ -12027,8 +12753,8 @@ fn parse_list(
                     cur,
                     &mut stream,
                     content_col,
-                    lazy_column,
-                    list_base,
+                    (lazy_column, list_base),
+                    false,
                     |src, _below| {
                         if swallowed_blank_separator || literal_comment_handoff {
                             return false;
@@ -12200,6 +12926,10 @@ fn parse_list(
                 {
                     break;
                 }
+                if detect_fence_open(over_indented).is_some() {
+                    item_unopened_fence_span = true;
+                    item_rejected_fence_owner = true;
+                }
                 // Fully strip ordinary prose's indent and fold it into the lead
                 // paragraph (inline-parsed, so residual indent never leaks).
                 // A sibling/nesting marker above the content column was already
@@ -12271,6 +13001,7 @@ fn parse_list(
                 track_collected_fence(&mut item_open_fence, &dedented, true, indent);
             } else {
                 item_unopened_fence_span = true;
+                item_rejected_fence_owner = true;
             }
             suppress_colon_interrupt |= is_invalid_colon_fence_opener_text(&dedented);
             para_lines.push(dedented);
@@ -12975,6 +13706,16 @@ fn trailing_marker_line_content(body: &str) -> Option<String> {
 #[cfg(test)]
 thread_local! {
     static PARAGRAPH_BODY_PROBES: Cell<usize> = const { Cell::new(0) };
+}
+
+fn body_ends_with_code_block(body: &str, options: &Options<'_>) -> bool {
+    if body.lines().any(is_collected_definition_placeholder) {
+        return false;
+    }
+    matches!(
+        probe_blocks(body, options).last(),
+        Some(BlockNode::CodeBlock(_) | BlockNode::RawBlock(_))
+    )
 }
 
 /// PART 1 S4's one question, asked of a container's WHOLE body: does the last
@@ -13706,18 +14447,21 @@ fn fold_lazy_run_and_resume(
     open: impl FnMut(&MappedSource, bool) -> bool,
     resume: impl FnMut(&mut LineCursor) -> MappedSource,
 ) {
-    fold_lazy_run_and_resume_in_band(cur, nested, content_col, 0, 0, open, resume);
+    fold_lazy_run_and_resume_in_band(cur, nested, content_col, (0, 0), false, open, resume);
 }
 
 fn fold_lazy_run_and_resume_in_band(
     cur: &mut LineCursor,
     nested: &mut MappedSource,
     content_col: usize,
-    lazy_column: usize,
-    list_base: usize,
+    lazy_scope: (usize, usize),
+    frame_band_lines: bool,
     mut open: impl FnMut(&MappedSource, bool) -> bool,
     mut resume: impl FnMut(&mut LineCursor) -> MappedSource,
 ) {
+    let (lazy_column, list_base) = lazy_scope;
+    let mut pending_chunks = Vec::new();
+    let mut staged = LineBuffer::default().into_source();
     loop {
         // A COMMENT BELOW THE CONTENT COLUMN ENDS NOTHING. §10 I5's first
         // exception keeps it invisible and paragraph-closing at any column, and
@@ -13741,7 +14485,12 @@ fn fold_lazy_run_and_resume_in_band(
                 break;
             }
             let line = cur.peek().unwrap();
-            nested.push_newline_at(
+            let destination = if frame_band_lines {
+                &mut staged
+            } else {
+                &mut *nested
+            };
+            destination.push_newline_at(
                 trim_ascii_start(line).to_string(),
                 cur.source_line(cur.pos),
                 cur.source_col(cur.pos)
@@ -13752,9 +14501,28 @@ fn fold_lazy_run_and_resume_in_band(
             // below would stop the fold here - and the container is still open,
             // which is the whole point of the exception. Resume against the
             // sub-list's own column exactly as the plain lazy path does.
-            collect_trailing_lazy_through(cur, nested, lazy_column, list_base);
+            collect_trailing_lazy_through_framed(
+                cur,
+                if frame_band_lines {
+                    &mut staged
+                } else {
+                    &mut *nested
+                },
+                lazy_column,
+                list_base,
+                frame_band_lines,
+            );
             let before_resume = cur.pos;
-            nested.append(resume(cur));
+            let resumed = resume(cur);
+            if frame_band_lines {
+                pending_chunks.push(std::mem::replace(
+                    &mut staged,
+                    LineBuffer::default().into_source(),
+                ));
+                pending_chunks.push(resumed);
+            } else {
+                nested.append(resumed);
+            }
             let next_is_comment = cur
                 .peek()
                 .map(str::to_string)
@@ -13786,15 +14554,38 @@ fn fold_lazy_run_and_resume_in_band(
             break;
         }
         let before = cur.pos;
-        collect_trailing_lazy_through(cur, nested, lazy_column, list_base);
+        collect_trailing_lazy_through_framed(
+            cur,
+            if frame_band_lines {
+                &mut staged
+            } else {
+                &mut *nested
+            },
+            lazy_column,
+            list_base,
+            frame_band_lines,
+        );
         if cur.pos == before {
             break;
         }
         let before_resume = cur.pos;
-        nested.append(resume(cur));
+        let resumed = resume(cur);
+        if frame_band_lines {
+            pending_chunks.push(std::mem::replace(
+                &mut staged,
+                LineBuffer::default().into_source(),
+            ));
+            pending_chunks.push(resumed);
+        } else {
+            nested.append(resumed);
+        }
         if cur.pos == before_resume {
             break;
         }
+    }
+    if frame_band_lines {
+        pending_chunks.push(staged);
+        nested.append_many(pending_chunks);
     }
 }
 
@@ -13818,6 +14609,17 @@ fn collect_trailing_lazy_through(
     base_indent: usize,
     list_base: usize,
 ) {
+    collect_trailing_lazy_through_framed(cur, nested, base_indent, list_base, false);
+}
+
+fn collect_trailing_lazy_through_framed(
+    cur: &mut LineCursor,
+    nested: &mut MappedSource,
+    base_indent: usize,
+    list_base: usize,
+    frame_band_lines: bool,
+) {
+    let mut buffered = frame_band_lines.then(LineBuffer::default);
     while let Some(line) = cur.peek() {
         if is_blank_line(line)
             || indent_columns(line) > base_indent
@@ -13844,24 +14646,35 @@ fn collect_trailing_lazy_through(
         // already spends one to say so - the two collectors have to agree, or
         // the same line parses differently depending on which one took it.
         let indent = indent_columns(line);
-        let take = dedent_below_column(line, indent);
+        let take = if frame_band_lines && indent > list_base {
+            indent
+        } else {
+            dedent_below_column(line, indent)
+        };
         let (sliced, consumed, _) = slice_columns_mapped(line, take, true);
         // A FENCE AT COLUMN 0 HAS NO COLUMN TO SPEND, so it gets the sentinel
         // instead (carve-rs#2313). One column is what keeps a block-shaped line
         // text on the re-parse, and a flush line has none: the fence shape then
         // opened a block one level in, where the fold had just made it the
         // paragraph's text. The description-body twin frames it the same way.
-        let sliced = if indent == 0 && detect_fence_open(trim_ascii_start(line)).is_some() {
+        let sliced = if (frame_band_lines && indent > list_base)
+            || (indent == 0 && detect_fence_open(trim_ascii_start(line)).is_some())
+        {
             format!("{LAZY}{sliced}")
         } else {
             sliced
         };
-        nested.push_newline_at(
-            sliced,
-            cur.source_line(cur.pos),
-            cur.source_col(cur.pos).map(|col| col + consumed as isize),
-        );
+        let source_line = cur.source_line(cur.pos);
+        let source_col = cur.source_col(cur.pos).map(|col| col + consumed as isize);
+        if let Some(buffered) = &mut buffered {
+            buffered.push_at(sliced, source_line, source_col);
+        } else {
+            nested.push_newline_at(sliced, source_line, source_col);
+        }
         cur.consume();
+    }
+    if let Some(buffered) = buffered {
+        nested.append(buffered.into_source());
     }
 }
 
@@ -14097,6 +14910,8 @@ fn collect_indented_block_mapped_with_columns(
     // See `MappedSource::reached`.
     let mut reached: Vec<bool> = Vec::new();
     let mut block_indent: Option<usize> = None;
+    // Strip tab-authored code once, before a nested strip resets its tab stops.
+    let mut tab_code_base: Option<usize> = None;
     let mut colon_open: Vec<usize> = Vec::new();
     let marker_content = cur
         .pos
@@ -14112,6 +14927,7 @@ fn collect_indented_block_mapped_with_columns(
     let mut comment_fence = marker_comment.map(|open| (open.fence_len, strip_cols));
     let mut comment_fence_strip = comment_fence.map(|_| strip_cols);
     let mut definition_ended_paragraph = false;
+    let mut closed_code_leaf = false;
     // A COMMENT FENCE WITH NO CLOSER OPENS NO SPAN AND LEAVES NO PARAGRAPH.
     // PART 9 SS28 degrades it to a line comment, so a frame one level in ends at
     // a line an ancestor claimed (markup-carve/carve-rs#1512) while the OUTERMOST
@@ -14168,7 +14984,8 @@ fn collect_indented_block_mapped_with_columns(
             // What lies past the opener column is the code line's content
             // (PART 11 §7), so a line of spaces keeps that residue.
             if fence.is_some() && !folded_code_span {
-                let (residue, consumed, synthetic) = slice_columns_mapped(line, strip_cols, true);
+                let (residue, consumed, synthetic) =
+                    slice_columns_mapped(line, tab_code_base.unwrap_or(strip_cols), true);
                 lines.push(residue);
                 if cur.line_map.is_some() {
                     line_map.push(cur.source_line(cur.pos));
@@ -14363,7 +15180,7 @@ fn collect_indented_block_mapped_with_columns(
         {
             break;
         }
-        if definition_ended_paragraph && indent < strip_cols {
+        if (definition_ended_paragraph || closed_code_leaf) && indent < strip_cols {
             break;
         }
         // ONLY FOR A LINE AN ANCESTOR ALREADY CLAIMED. PART 9 SS28's degradation
@@ -14552,7 +15369,24 @@ fn collect_indented_block_mapped_with_columns(
         let framed_comment_payload = comment_payload
             && (line.starts_with(LAZY)
                 || comment_fence_strip.is_some_and(|strip| strip < strip_cols));
+        if tab_code_base.is_none()
+            && fence.is_none()
+            && !in_comment_span
+            && stop_at_content_column_marker
+            && nested_item_columns.is_empty()
+            && indent > strip_cols
+            && !folded_code_span
+            && line[..line.len() - trim_ascii_start(line).len()].contains('\t')
+            && detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
+                lines.is_empty()
+                    || lines.last().is_some_and(|line| is_blank_line(line))
+                    || list_code_fence_closer_ahead(cur, open, strip_cols, parent_indent)
+            })
+        {
+            tab_code_base = Some(indent);
+        }
         let stripped = match (in_comment_span, comment_fence_strip) {
+            _ if tab_code_base.is_some_and(|base| indent >= base) => tab_code_base.unwrap(),
             _ if lazy_code_line || lazy_list_marker => indent,
             (true, Some(_)) if comment_payload => strip_cols.min(indent_columns(payload_line)),
             (true, Some(span_strip)) => span_strip.min(indent),
@@ -14642,9 +15476,19 @@ fn collect_indented_block_mapped_with_columns(
                 folded_code_paragraph_open = line_starts_paragraph(paragraph_line)
                     || detect_fence_open(paragraph_line).is_some();
             }
+            let was_in_code = fence.is_some();
             track_collected_fence(fence, fence_line, indent >= strip_cols, indent);
+            if was_in_code && fence.is_none() {
+                closed_code_leaf = true;
+            } else if !was_in_code
+                && !is_line_comment_any_column(line)
+                && !is_collected_definition_placeholder(&sliced)
+            {
+                closed_code_leaf = false;
+            }
             if fence.is_none() {
                 folded_code_span = false;
+                tab_code_base = None;
             }
         }
         track_collected_colon_fence(
@@ -15342,7 +16186,9 @@ fn fold_term(
         // the document column too, which is why this cannot ask
         // `at_document_level`. Asked as a paragraph, `:: t` / `*[A]: b` lost the
         // author's second line and defined an abbreviation (carve-rs#2096).
-        if interrupts_paragraph_as_container(cur, &owned) {
+        // A code opener at the container column ends a term even without a
+        // closer (CARVE-P2-028). Paragraph continuation requires a closer.
+        if detect_fence_open(&owned).is_some() || interrupts_paragraph_as_container(cur, &owned) {
             break;
         }
         // A term's continuation line is a CONTENT LINE, so its trailing
@@ -17656,6 +18502,9 @@ fn open_container(cur: &mut LineCursor, options: &Options<'_>) -> (Box<BlockNode
     // caption slot hanging on the CLOSING fence, this kind only.
     if is_bare_figure_open(&open) && !IN_FIGURE_GROUP.with(Cell::get) {
         let (inner, closed) = collect_shared_colon_body(cur, open.fence_len);
+        if span_start == 0 && closed {
+            cur.closed_initial_container_end = Some(cur.pos);
+        }
         // The slot hangs on the closer. A group left open at end of input
         // closed there without one, so there is no line for a caption to
         // attach to (§4c).
@@ -17678,6 +18527,9 @@ fn open_container(cur: &mut LineCursor, options: &Options<'_>) -> (Box<BlockNode
         );
     }
     let (inner, closed) = collect_shared_colon_body(cur, open.fence_len);
+    if span_start == 0 && closed {
+        cur.closed_initial_container_end = Some(cur.pos);
+    }
     // The span covers the opening fence through the closing one.
     let pos = container_span(cur, span_start, closed, options);
     let title_anchor = open.title_col.and_then(|col| {
@@ -26206,7 +27058,7 @@ mod container_comment_dedent_steps {
             out.push_str(&"%".repeat(3 + i));
             out.push('\n');
         }
-        out.push_str("\n[r][]\n");
+        out.push_str("\n[r]: /u\n\n[r][]\n");
         let lines = out.lines().count() as u64;
         (out, lines)
     }
@@ -26267,7 +27119,7 @@ mod container_comment_dedent_steps {
             out.push_str(&"%".repeat(3 + i));
             out.push('\n');
         }
-        out.push_str("\n[r][]\n");
+        out.push_str("\n[r]: /u\n\n[r][]\n");
         let lines = out.lines().count() as u64;
         (out, lines)
     }
@@ -27299,6 +28151,36 @@ mod shared_colon_work_tests {
     use super::*;
 
     #[test]
+    fn rejected_fence_carry_scans_only_new_chunks() {
+        for positions in [false, true] {
+            for count in [64, 256, 1024] {
+                let source = format!(
+                    "- a\n    ~~~\n{}",
+                    "  ````\n  code\n  ````\nafter\n".repeat(count)
+                );
+                source_map::MAPPED_SOURCE_SCAN_BYTES.with(|work| work.set(0));
+                CODE_INDEX_LINES.with(|work| work.set(0));
+                let html = crate::to_html_with_options(
+                    &source,
+                    &Options {
+                        positions,
+                        ..Options::default()
+                    },
+                );
+                assert_eq!(html.matches("<pre>").count(), count);
+                assert_eq!(html.matches("after").count(), count);
+                assert!(
+                    source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get) <= source.len() * 64,
+                    "count={count}, positions={positions}, scan={}, bytes={}",
+                    source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get),
+                    source.len()
+                );
+                assert!(CODE_INDEX_LINES.with(Cell::get) <= source.lines().count() * 64);
+            }
+        }
+    }
+
+    #[test]
     fn quoted_anonymous_body_comments_share_their_index() {
         for level in 0..=2 {
             for count in [64, 512, 4096] {
@@ -28242,5 +29124,233 @@ mod hosted_inline_fence_lookup_work {
             assert!(LITERAL_CODE_LINES.with(Cell::get) > 0);
             assert!(LITERAL_CODE_LINES.with(Cell::get) <= count);
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_probe_tests {
+    use super::*;
+
+    #[test]
+    fn definition_free_probe_reduction_retains_existing_normalization() {
+        let options = Options::default();
+        for source in [
+            "",
+            "p",
+            "p\n- :: t\n  ```\n  x",
+            "\u{feff}p",
+            "p\r\nq",
+            "p\r",
+            "p\n",
+            "p\n\n",
+            " p \t\n q",
+            "p [text]",
+            "- [x] task",
+            "[r]: /u\np",
+            "p\rinside",
+            "[r]: <b>{=html}",
+            "[r]:\t/u",
+            "> - [r]: /u",
+        ] {
+            assert_eq!(
+                reduce_frame_probe_links(source.to_owned(), &options),
+                extract_link_defs(source, &options).0,
+                "{source:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod definition_gate_tests {
+    use super::*;
+
+    #[test]
+    fn global_gate_preserves_source_maps_and_guard_budget() {
+        let extension = Extension;
+        for positions in [false, true] {
+            for extended in [false, true] {
+                let mut options = Options::default().with_positions(positions);
+                if extended {
+                    options.extensions.push(&extension);
+                }
+                for source in [
+                    "",
+                    "p",
+                    "p\n",
+                    "p\n\n",
+                    "p\r\nq",
+                    "\u{feff}p",
+                    " p \t\n q",
+                    "p [text]: literal",
+                    "[r]: /u",
+                    "[r]:\t/u\n\n[r][]",
+                    "[r]:/u\n\n[r][]",
+                    "[r]:\n  /u\n\n[r][]",
+                    "\u{feff}[r]: /u\n\n[r][]",
+                    "[r]: /u \"title\" {.c}",
+                    "[r]: /u junk",
+                    "[@r]: /u",
+                    "[]: /u",
+                    "- [r]: /u",
+                    "> - [r]: /u",
+                    "  > - : [r]: /u",
+                    ":: t\n: [r]: /u",
+                    ":: t\n: - [r]: /u",
+                    "- a\n  > [r]: /u",
+                    "- a\n  [r]: /u",
+                    "- a\n   [r]: /u",
+                    "- a\n\t[r]: /u",
+                    "> - a\n>   [r]: /u",
+                    "- - x\n   [r]: /u",
+                    "1. a\n   [r]: /u",
+                    "-{.c} [r]: /u",
+                    ". [r]: /u",
+                    "- [x]  - [r]: /u",
+                    "- [x] [r]: /u",
+                    "- [x] p [r]: /u",
+                    "p\n- :: t\n  ```\n  x",
+                    "para\n  - :: t\n    ```",
+                    "```\n[r]: /u\n```",
+                    "> ```\n> [r]: /u\n> ```",
+                    "%%%\n[r]: /u\n%%%",
+                    "::: |\n[r]: /u\n:::",
+                    "- x\n  %%% o\n  filler\n%%%\n\n[r][]\n",
+                ] {
+                    let mut fast_budget = 1_000_000;
+                    let mut full_budget = fast_budget;
+                    let fast =
+                        extract_link_defs_with_guard(source, &options, Some(&mut fast_budget));
+                    let full =
+                        extract_link_defs_with_guard_full(source, &options, Some(&mut full_budget));
+                    assert!(
+                        full.1.is_empty() || source_may_contain_link_definition(source),
+                        "{source:?}"
+                    );
+                    assert_eq!(fast.0, full.0, "{source:?}");
+                    let projection = |map: &BTreeMap<String, LinkDef>| {
+                        map.iter()
+                            .map(|(label, def)| {
+                                (
+                                    label.clone(),
+                                    def.raw_label.clone(),
+                                    def.href.clone(),
+                                    def.title.clone(),
+                                    def.line,
+                                    format!("{:?}", def.attrs),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    assert_eq!(projection(&fast.1), projection(&full.1), "{source:?}");
+                    assert_eq!(fast_budget, full_budget, "{source:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn definition_free_gate_preserves_source_without_scanning_container_bounds() {
+        let source = "- x\n  %%% o\n  filler\n%%%\n\n[r][]\n";
+        std::thread::spawn(move || {
+            let options = Options::default();
+            CONTAINER_DEDENT_STEPS.with(|counter| counter.set(0));
+            let fast = extract_link_defs(source, &options);
+            assert_eq!(CONTAINER_DEDENT_STEPS.with(Cell::get), 0);
+            assert!(fast.1.is_empty());
+            let full = extract_link_defs_with_guard_full(source, &options, None);
+            assert!(CONTAINER_DEDENT_STEPS.with(Cell::get) > 0);
+            assert_eq!(fast.0, full.0);
+            assert!(full.1.is_empty());
+        })
+        .join()
+        .unwrap();
+    }
+
+    struct CountingExtension(Cell<usize>);
+    impl crate::extension::CarveExtension for CountingExtension {
+        fn name(&self) -> &'static str {
+            "definition-gate-callback-control"
+        }
+        fn match_block(
+            &self,
+            _lines: &[&str],
+            _start: usize,
+            _context: &crate::extension::MatcherContext<'_>,
+        ) -> Option<crate::extension::BlockMatch> {
+            self.0.set(self.0.get() + 1);
+            None
+        }
+    }
+
+    #[test]
+    fn definition_gate_retains_extension_matcher_calls() {
+        for (source, has_matcher_work) in [
+            ("p [text]: literal\n\n::: |\nx\n:::\n", true),
+            ("p\n\n::: |\nx\n:::\n", false),
+        ] {
+            for positions in [false, true] {
+                let extension = CountingExtension(Cell::new(0));
+                let mut options = Options::default().with_positions(positions);
+                options.extensions.push(&extension);
+                let full = extract_link_defs_with_guard_full(source, &options, None);
+                let full_calls = extension.0.replace(0);
+                assert_eq!(full_calls > 0, has_matcher_work);
+                let probe = reduce_frame_probe_links(source.to_owned(), &options);
+                assert_eq!(probe, full.0);
+                assert_eq!(extension.0.replace(0), full_calls);
+                let fast = extract_link_defs(source, &options);
+                assert_eq!(fast.0, full.0);
+                assert_eq!(extension.0.get(), full_calls);
+            }
+        }
+    }
+
+    struct Extension;
+    impl crate::extension::CarveExtension for Extension {
+        fn name(&self) -> &'static str {
+            "global-definition-gate-control"
+        }
+    }
+
+    #[test]
+    fn canonical_prefix_gate_preserves_probe_reduction() {
+        let options = Options::default();
+        for source in [
+            "p [text]: literal",
+            "p [text]: literal\n- :: t\n  ```\n  x",
+            "[r]: /u",
+            " [r]: /u",
+            "- [r]: /u",
+            "> - [r]: /u",
+            "  > - : [r]: /u",
+            ">  >   - [r]: /u",
+            ":: t\n: [r]: /u",
+            ":: t\n: - [r]: /u",
+            "- a\n  > [r]: /u",
+            "- a\n  > - [r]: /u",
+            "[r]: /u \"title\" {.c}",
+            "[r]: /u junk",
+            "[@r]: /u",
+            "[]: /u",
+            "\u{feff}[r]: /u",
+            "p\r\n[r]: /u",
+            "p\r",
+            "",
+            "p\n",
+            "p\n\n",
+            "[r]: /u\n",
+            "\t[r]: /u",
+            "- [x] [r]: /u",
+            "- [x] p [r]: /u",
+        ] {
+            assert_eq!(
+                reduce_frame_probe_links(source.to_owned(), &options),
+                extract_link_defs(source, &options).0,
+                "{source:?}"
+            );
+        }
+        assert!(!source_may_contain_link_definition("p [text]: literal"));
+        assert!(source_may_contain_link_definition("  > - : [r]: /u"));
     }
 }
