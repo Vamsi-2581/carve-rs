@@ -1996,3 +1996,6 @@ mod unfinished_nested_fences;
 
 #[path = "../term_description_code.rs"]
 mod term_description_code;
+
+#[path = "../quoted_item_block_end.rs"]
+mod quoted_item_block_end;

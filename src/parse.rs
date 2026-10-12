@@ -10073,6 +10073,7 @@ struct NestedFenceReplay {
 #[derive(Default)]
 struct NestedLevel {
     hosts: Vec<(usize, usize, bool)>,
+    term_columns: HashSet<usize>,
     /// The fence a quoted host holds open, as (opener, the host's content column,
     /// the opener's own column, and whether this is a payload span). The two columns differ when the opener is
     /// SHIFTED past its host, and a closer at either one ends it.
@@ -10244,6 +10245,7 @@ impl NestedFenceReplay {
             }
             if let Some(rest) = strip_blockquote_prefix(text) {
                 chain[level].hosts.clear();
+                chain[level].term_columns.clear();
                 chain[level].colons.clear();
                 chain[level].para = false;
                 chain[level].colon_absorption = false;
@@ -10338,7 +10340,9 @@ impl NestedFenceReplay {
                 let sibling = marker_ends_replayed_item(&here.hosts, column);
                 if !lazy_paragraph {
                     while here.hosts.last().is_some_and(|&(_, col, _)| col > column) {
-                        here.hosts.pop();
+                        if let Some((_, column, _)) = here.hosts.pop() {
+                            here.term_columns.remove(&column);
+                        }
                     }
                 }
                 let inside_item = here.hosts.last().is_some_and(|&(_, _, item)| item);
@@ -10356,6 +10360,9 @@ impl NestedFenceReplay {
                         }
                         let next = col + marker_content_col(inner).expect("matched list marker");
                         here.hosts.push((col, next, true));
+                        if is_definition_list_start(trim_ascii_start(marker.content)) {
+                            here.term_columns.insert(next);
+                        }
                         col = next + indent_columns(marker.content);
                         inner = trim_ascii_start(marker.content);
                         block_start = true;
@@ -10455,9 +10462,12 @@ impl NestedFenceReplay {
                     }
                 }
                 let row = is_table_start(leaf);
+                if !block_start && col == floor {
+                    here.term_columns.remove(&floor);
+                }
                 if floor > 0
-                    && col == floor
-                    && here.hosts.last().is_some_and(|&(_, _, item)| item)
+                    && col >= floor
+                    && !here.term_columns.contains(&floor)
                     && (row
                         || detect_heading(leaf).is_some()
                         || detect_thematic_break(leaf)
