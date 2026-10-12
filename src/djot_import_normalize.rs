@@ -131,7 +131,7 @@ fn quoted_list_boundaries<'a>(
     let mut insertions = Vec::new();
     let mut div_closers = HashMap::new();
     if source.contains(":::") {
-        djot_inline_boundaries_with_div_closers(source, mask, true, Some(&mut div_closers));
+        djot_inline_boundaries_with_div_closers(source, mask, true, Some(&mut div_closers), None);
     }
     let reference = cached_regex!(r"^\[[^\]\n]*\]:").unwrap();
     let mut offset = 0;
@@ -1171,7 +1171,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
     };
     let mut div_closers = HashMap::new();
     if source.contains(":::") {
-        djot_inline_boundaries_with_div_closers(source, &mask, true, Some(&mut div_closers));
+        djot_inline_boundaries_with_div_closers(source, &mask, true, Some(&mut div_closers), None);
     }
     let mut line_offset = 0;
     let line_offsets: Vec<_> = source
@@ -1661,7 +1661,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
                     result.push(format!("{prefix}{}", ":".repeat(open)));
                 }
                 paragraph = false;
-            } else if paragraph || bare && !divs.is_empty() {
+            } else if paragraph {
                 result.push(format!("{}\\{text}", &raw[..indent_bytes]));
             } else {
                 divs.push((

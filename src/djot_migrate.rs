@@ -102,7 +102,8 @@ pub(crate) fn djot_to_carve_prepared(stripped_definitions: &DjotFootnoteAttribut
 fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> String {
     let normalized = &stripped_definitions.source;
     let (frontmatter, separator, body) = split_frontmatter(normalized);
-    let (literal_attributes, inherited) = escape_invalid_djot_attributes(body);
+    let carried = carry_djot_attributes_across_div_closers(body);
+    let (literal_attributes, inherited) = escape_invalid_djot_attributes(&carried);
     let attributes = normalize_djot_attribute_lines(&literal_attributes);
     let owned_references = fold_djot_references(&attributes);
     let fences = normalize_djot_fences(&owned_references);
@@ -5191,7 +5192,7 @@ fn djot_inline_boundaries_with_code_scopes(
     mask: &str,
     code_scopes: bool,
 ) -> Vec<usize> {
-    djot_inline_boundaries_with_div_closers(source, mask, code_scopes, None)
+    djot_inline_boundaries_with_div_closers(source, mask, code_scopes, None, None)
 }
 
 fn djot_inline_boundaries_with_div_closers(
@@ -5199,6 +5200,7 @@ fn djot_inline_boundaries_with_div_closers(
     mask: &str,
     code_scopes: bool,
     mut div_closers: Option<&mut HashMap<usize, Vec<usize>>>,
+    mut div_owners: Option<&mut HashMap<usize, (Option<usize>, usize)>>,
 ) -> Vec<usize> {
     let rows = djot_table_rows(source, mask);
     let quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
@@ -5362,6 +5364,9 @@ fn djot_inline_boundaries_with_div_closers(
                             offset,
                             divs[low..].iter().rev().map(|owner| owner.start).collect(),
                         );
+                    }
+                    if let Some(owners) = div_owners.as_mut() {
+                        owners.insert(offset, (divs[low].item_column, divs[low].item_depth));
                     }
                     divs.truncate(low);
                     previous_block = true;
@@ -6092,6 +6097,150 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
         }
     }
     String::from_utf8(output).expect("link replacements preserve UTF-8")
+}
+
+fn carry_djot_attributes_across_div_closers(source: &str) -> std::borrow::Cow<'_, str> {
+    if !source.contains('{') || !source.contains(":::") {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let mask = mask_djot_inline(source, true);
+    let mut closers = HashMap::new();
+    let mut owners = HashMap::new();
+    djot_inline_boundaries_with_div_closers(
+        source,
+        &mask,
+        true,
+        Some(&mut closers),
+        Some(&mut owners),
+    );
+    if closers.is_empty() {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let lines: Vec<_> = source.split('\n').collect();
+    let mut removed = HashSet::new();
+    let mut moved: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut pending: Vec<(usize, &str)> = Vec::new();
+    let mut residues = HashMap::new();
+    let mut crossed = false;
+    let mut offset = 0;
+    let mut previous_depth = 0;
+    let mut previous = "";
+    let mut closed_owner: Option<(Option<usize>, usize)> = None;
+    let physical = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*[ \t]*").unwrap();
+    let block =
+        cached_regex!(r"^(?:#{1,6} |:{3,}|[`~]{3,}|\[[^\]]+\]:|(?:[*-][ \t]*){3,}$)").unwrap();
+    for (index, line) in lines.iter().enumerate() {
+        let prefix = physical.find(line).unwrap().as_str();
+        let start = prefix.len();
+        let content = &line[start..];
+        let depth = prefix.bytes().filter(|&b| b == b'>').count();
+        let follows_block = !pending.is_empty() || previous.is_empty() || block.is_match(previous);
+        let visible = mask.as_bytes().get(offset + start) == Some(&b'{');
+        let candidate = if content.starts_with('{') && (follows_block || visible) {
+            read_djot_word_attributes(content, 0)
+        } else {
+            None
+        };
+        if follows_block
+            && depth == previous_depth
+            && candidate.as_ref().is_some_and(|(end, value)| {
+                *end == content.trim_end_matches([' ', '\t', '\r']).len() && value == "{}"
+            })
+        {
+            offset += line.len() + 1;
+            continue;
+        }
+        let whole = visible
+            && candidate
+                .is_some_and(|(end, _)| end == content.trim_end_matches([' ', '\t', '\r']).len());
+        if crossed
+            && !closers.contains_key(&offset)
+            && !content.trim_matches([' ', '\t', '\r']).is_empty()
+            && (!whole || depth != previous_depth)
+        {
+            let quote_prefix = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*")
+                .unwrap()
+                .find(line)
+                .unwrap()
+                .as_str();
+            let indent = line[quote_prefix.len()..]
+                .bytes()
+                .take_while(|b| matches!(b, b' ' | b'\t'))
+                .count();
+            let peer_item =
+                closed_owner.is_some_and(|(column, owner_depth)| {
+                    column.is_some_and(|column| depth == owner_depth && indent < column)
+                }) && cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))(?:[ \t]+|$)")
+                    .unwrap()
+                    .is_match(&line[prefix.len()..]);
+            if !peer_item
+                || cached_regex!(r"^(?:[-*][ \t]*){3,}$")
+                    .unwrap()
+                    .is_match(content)
+            {
+                let target_prefix = if depth > previous_depth {
+                    let marker = prefix.match_indices('>').nth(previous_depth).unwrap().0;
+                    &prefix[..marker]
+                } else {
+                    prefix
+                };
+                for (line, value) in pending.drain(..) {
+                    removed.insert(line);
+                    moved
+                        .entry(index)
+                        .or_default()
+                        .push(format!("{target_prefix}{value}"));
+                }
+            }
+            pending.clear();
+            crossed = false;
+        }
+        if whole && follows_block {
+            if !crossed && depth > previous_depth {
+                pending.clear();
+            }
+            pending.push((index, content.trim_end_matches([' ', '\t', '\r'])));
+            if depth > previous_depth {
+                residues.insert(index, prefix.trim_end());
+            }
+        } else if closers.contains_key(&offset) {
+            crossed |= !pending.is_empty();
+            closed_owner = owners.get(&offset).copied();
+        } else if !content.trim_matches([' ', '\t', '\r']).is_empty() {
+            pending.clear();
+        }
+        if !whole {
+            previous = content.trim_matches([' ', '\t', '\r']);
+        }
+        previous_depth = if content.trim_matches([' ', '\t', '\r']).is_empty() {
+            previous_depth.min(depth)
+        } else {
+            depth
+        };
+        offset += line.len() + 1;
+    }
+    if crossed {
+        for (line, _) in pending {
+            removed.insert(line);
+        }
+    }
+    if removed.is_empty() {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let mut out = Vec::new();
+    for index in 0..=lines.len() {
+        for attr in moved.remove(&index).unwrap_or_default() {
+            out.push(attr);
+        }
+        if let Some(line) = lines.get(index) {
+            if !removed.contains(&index) {
+                out.push((*line).to_owned());
+            } else if let Some(residue) = residues.get(&index) {
+                out.push((*residue).to_owned());
+            }
+        }
+    }
+    std::borrow::Cow::Owned(out.join("\n"))
 }
 
 fn normalize_djot_attribute_lines(source: &str) -> String {
