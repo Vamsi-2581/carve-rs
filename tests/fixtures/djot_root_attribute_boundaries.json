@@ -1,0 +1,142 @@
+[
+  {
+    "source": "{#id .class}\n\nA paragraph",
+    "html": "<p id=\"id\" class=\"class\">A paragraph</p>\n"
+  },
+  {
+    "source": "{.a}\n\n{.b}\n\npara",
+    "html": "<p class=\"a b\">para</p>\n"
+  },
+  {
+    "source": "{.a}\n\n> p",
+    "html": "<blockquote class=\"a\">\n<p>p</p>\n</blockquote>\n"
+  },
+  {
+    "source": "> p\n\n{.a}\n\np",
+    "html": "<blockquote>\n<p>p</p>\n</blockquote>\n<p class=\"a\">p</p>\n"
+  },
+  {
+    "source": "{.a}\n\n- x",
+    "html": "<ul class=\"a\">\n<li>\nx\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n{.a}\n\np",
+    "html": "<ul>\n<li>\nx\n</li>\n</ul>\n<p class=\"a\">p</p>\n"
+  },
+  {
+    "source": "a\n{.foo}\n\nb",
+    "html": "<p>a\n</p>\n<p>b</p>\n"
+  },
+  {
+    "source": "a\n{.foo}\nb",
+    "html": "<p>a\n\nb</p>\n"
+  },
+  {
+    "source": "{.a}\n\n",
+    "html": ""
+  },
+  {
+    "source": "{.a}\n\n\n\np",
+    "html": "<p class=\"a\">p</p>\n"
+  },
+  {
+    "source": "{.a}\n\n# head",
+    "html": "<section id=\"head\">\n<h1 class=\"a\">head</h1>\n</section>\n"
+  },
+  {
+    "source": "{.a}\n\n---",
+    "html": "<hr class=\"a\">\n"
+  },
+  {
+    "source": "{.a}\n\n```\nx\n```",
+    "html": "<pre class=\"a\"><code>x\n</code></pre>\n"
+  },
+  {
+    "source": "```\n{.a}\n\np\n```",
+    "html": "<pre><code>{.a}\n\np\n</code></pre>\n"
+  },
+  {
+    "source": "> {.a}\n>\n> p",
+    "html": "<blockquote>\n<p class=\"a\">p</p>\n</blockquote>\n"
+  },
+  {
+    "source": "> {.a}\n\np",
+    "html": "<blockquote>\n</blockquote>\n<p class=\"a\">p</p>\n"
+  },
+  {
+    "source": "{.a}\n>\n> p",
+    "html": "<blockquote class=\"a\">\n<p>p</p>\n</blockquote>\n"
+  },
+  {
+    "source": "> p\n{.a}\n\np",
+    "html": "<blockquote>\n<p>p</p>\n</blockquote>\n<p class=\"a\">p</p>\n"
+  },
+  {
+    "source": "{.a}\n\n[r]: /u\n\np",
+    "html": "<p>p</p>\n"
+  },
+  {
+    "source": "{.a}\n\n[^n]: note\n\np",
+    "html": "<p>p</p>\n"
+  },
+  {
+    "source": "{.a}\n\n| x |\n|---|\n| y |",
+    "html": "<table class=\"a\">\n<tr>\n<th>x</th>\n</tr>\n<tr>\n<td>y</td>\n</tr>\n</table>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n  p",
+    "html": "<ul>\n<li>\n<p>x</p>\n<p class=\"a\">p</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "{key=\"v\"}\n\np",
+    "html": "<p key=\"v\">p</p>\n"
+  },
+  {
+    "source": "{.a}\n\n[r]: /u\n\n[x][r]",
+    "html": "<p><a href=\"/u\" class=\"a\">x</a></p>\n"
+  },
+  {
+    "source": "{.a}\n{.b}\n\n[r]: /u\n\n[x][r]",
+    "html": "<p><a href=\"/u\" class=\"a b\">x</a></p>\n"
+  },
+  {
+    "source": "{.a}\n\n{.b}\n[r]: /u\n\n[x][r]",
+    "html": "<p><a href=\"/u\" class=\"a b\">x</a></p>\n"
+  },
+  {
+    "source": "a\n{.foo}\n\n[r]: /u\n\n[x][r]",
+    "html": "<p>a\n</p>\n<p><a href=\"/u\">x</a></p>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n  {.b}\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a b\">\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "1. x\n\n   {.a}\n\n2. y",
+    "html": "<ol>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<p>y</p>\n</li>\n</ol>\n"
+  },
+  {
+    "source": "- x\n\n  {key=\"v\"}\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li key=\"v\">\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n  p\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n<p class=\"a\">p</p>\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  ```\n  {.a}\n  ```\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n<pre><code>{.a}\n</code></pre>\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n* y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<ul class=\"a\">\n<li>\ny\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n{.a}\n\n- y",
+    "html": "<ul>\n<li>\nx\n</li>\n</ul>\n<ul class=\"a\">\n<li>\ny\n</li>\n</ul>\n"
+  }
+]

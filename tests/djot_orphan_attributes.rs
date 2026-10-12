@@ -4,7 +4,10 @@ fn djot_attribute_ownership_survives_import() {
         ("{#id} at beginning\n", "<p> at beginning</p>"),
         ("After {#id} space\n{.class}\n", "<p>After  space\n</p>"),
         ("not a [span] {#id}.\n", "<p>not a [span] .</p>"),
-        ("{#id .class}\n\nA paragraph\n", "<p>A paragraph</p>"),
+        (
+            "{#id .class}\n\nA paragraph\n",
+            "<p id=\"id\" class=\"class\">A paragraph</p>",
+        ),
         ("[span]{#id}", "<p><span id=\"id\">span</span></p>"),
         ("`x`{.c}", "<p><code class=\"c\">x</code></p>"),
         (
@@ -51,4 +54,36 @@ fn pending_attribute_runs_keep_their_containers() {
             "{source}: {converted}"
         );
     }
+}
+
+#[test]
+fn root_attribute_boundaries_match_native_djot() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/djot_root_attribute_boundaries.json")).unwrap();
+    let between_tags = regex::Regex::new(r">\s+<").unwrap();
+    let li_open = regex::Regex::new(r"(<li[^>]*>)[\r\n]+").unwrap();
+    let li_close = regex::Regex::new(r"[\r\n]+</li>").unwrap();
+    let table_groups = regex::Regex::new(r"</?(?:thead|tbody)>").unwrap();
+    let normalize = |html: &str| {
+        let html = between_tags.replace_all(html.trim(), "><");
+        let html = table_groups.replace_all(&html, "");
+        let html = html.replace(" scope=\"col\"", "");
+        let html = li_open.replace_all(&html, "$1");
+        li_close.replace_all(&html, "</li>").into_owned()
+    };
+    let mut failures = Vec::new();
+    for case in cases.as_array().unwrap() {
+        let source = case["source"].as_str().unwrap();
+        let expected = case["html"].as_str().unwrap();
+        let converted = carve::djot_to_carve(source);
+        let html = carve::to_html(&converted);
+        if normalize(&html) != normalize(expected) {
+            failures.push(format!(
+                "{source:?}: {converted:?}\nactual: {}\nexpected: {}",
+                normalize(&html),
+                normalize(expected)
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }

@@ -43,7 +43,16 @@ fn drop_orphan_attribute_line(result: &mut Vec<String>) {
     }
 }
 
+#[cfg(test)]
 pub(super) fn blocks(source: &str) -> String {
+    blocks_with_list_attributes(source, "", &mut Vec::new())
+}
+
+pub(super) fn blocks_with_list_attributes(
+    source: &str,
+    attribute_prefix: &str,
+    item_attributes: &mut Vec<String>,
+) -> String {
     let mask = mask_code_and_destinations(source);
     let mut div_closers = HashMap::new();
     if source.contains(":::") {
@@ -111,6 +120,7 @@ pub(super) fn blocks(source: &str) -> String {
     let mut quote_paragraph_depth = None;
     let mut quote_attribute_depth = None;
     let mut moved_quote_attributes = None;
+    let mut pending_item_attributes: Vec<(usize, usize, String)> = Vec::new();
     for (n, raw) in lines.iter().enumerate() {
         let prior_move = moved_quote_attributes.take();
         if let Some((from, to)) = prior_move {
@@ -132,6 +142,12 @@ pub(super) fn blocks(source: &str) -> String {
         let (indent, indent_bytes) = leading_indent(raw);
         let text = &raw[indent_bytes..];
         let visible = masks[n].get(indent_bytes..).unwrap_or("");
+        let attribute_only = visible.starts_with('{')
+            && read_djot_word_attributes(text, 0)
+                .is_some_and(|(end, _)| end == text.trim_end().len());
+        if !raw.trim().is_empty() && !attribute_only && !marker.is_match(visible) {
+            pending_item_attributes.clear();
+        }
         if rejected_comment_starts_block(visible) {
             let outside_list = lists.first().is_some_and(|list| indent <= list.source);
             let outside_quote = in_quote && !visible.starts_with('>');
@@ -265,6 +281,18 @@ pub(super) fn blocks(source: &str) -> String {
             paragraph = false;
             previous_blank = false;
             continue;
+        }
+        if in_quote
+            && quoted(raw).0 == 0
+            && indent == 0
+            && visible.starts_with('{')
+            && read_djot_word_attributes(text, 0)
+                .is_some_and(|(end, _)| end == text.trim_end().len())
+        {
+            result.push(String::new());
+            in_quote = false;
+            quote_paragraph_depth = None;
+            paragraph = false;
         }
         if quoted(raw).0 > 0
             && (in_quote || !paragraph || n > 0 && masks[n - 1].trim_start().starts_with('>'))
@@ -493,6 +521,52 @@ pub(super) fn blocks(source: &str) -> String {
             let marker_end = item.get(2).unwrap().end();
             let payload_start = item.get(0).unwrap().end();
             let mut payload = text.to_owned();
+            let carried = if !attribute_prefix.is_empty()
+                && top
+                    .as_ref()
+                    .is_some_and(|list| !nested && kind == list.kind)
+            {
+                let mut parts = Vec::new();
+                for (owner, row, attrs) in pending_item_attributes.drain(..) {
+                    if owner == indent {
+                        result[row].clear();
+                        parts.push(attrs);
+                    }
+                }
+                (!parts.is_empty()).then(|| {
+                    let merged = attributes(&parts.join(""))
+                        .into_iter()
+                        .flat_map(|(_, values)| values)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let token = format!("{attribute_prefix}{}\0", item_attributes.len());
+                    item_attributes.push(format!("{{{merged}}}"));
+                    token
+                })
+            } else {
+                let mut moved = false;
+                for (owner, row, attrs) in pending_item_attributes.drain(..) {
+                    if !nested
+                        && owner == indent
+                        && top.as_ref().is_some_and(|list| kind != list.kind)
+                    {
+                        result[row] = format!("{}{attrs}", " ".repeat(target));
+                        moved = true;
+                    }
+                }
+                if moved {
+                    let previous = top.as_ref().unwrap();
+                    result[previous.start] = format!(
+                        "{}{{loose}}\n{}",
+                        " ".repeat(previous.target),
+                        result[previous.start]
+                    );
+                }
+                None
+            };
+            if let Some(token) = carried {
+                payload.insert_str(payload_start, &token);
+            }
             if is_bullet {
                 payload.replace_range(..1, &(written as char).to_string());
             }
@@ -635,6 +709,13 @@ pub(super) fn blocks(source: &str) -> String {
         } else {
             let attribute = text.starts_with('{')
                 && read_djot_word_attributes(text, 0).is_some_and(|(end, _)| end == text.len());
+            if attribute_only && !paragraph {
+                if let Some(list) = lists.last().filter(|list| indent >= list.column) {
+                    if let Some((_, wire)) = read_djot_word_attributes(text, 0) {
+                        pending_item_attributes.push((list.source, result.len(), wire));
+                    }
+                }
+            }
             result.push(display.clone());
             if previous_blank && !attribute && !reference.is_match(text) {
                 for list in &mut lists {
@@ -1033,7 +1114,12 @@ pub(super) fn references(source: &str) -> String {
         while let Some(previous) = source[..previous_end].strip_suffix('\n') {
             let previous_start = previous.rfind('\n').map_or(0, |at| at + 1);
             let previous_line = &previous[previous_start..];
+            if previous_line.trim().is_empty() {
+                previous_end = previous_start;
+                continue;
+            }
             if !previous_line.starts_with('{')
+                || comment_continues_paragraph(source, previous_start)
                 || read_djot_word_attributes(previous_line, 0)
                     .map_or(true, |(end, _)| end != previous_line.len())
             {
@@ -1998,21 +2084,21 @@ mod tests {
     }
 
     #[test]
-    fn djot_reference_attribute_runs_stop_at_blank_lines() {
-        for source in [
-            "{.a}\n\n[r]: u\n\n[x][r]\n",
-            "{.a}\n{.b}\n\n[r]: u\n\n[x][r]\n",
+    fn djot_reference_attribute_runs_cross_blank_lines() {
+        for (source, classes) in [
+            ("{.a}\n\n[r]: u\n\n[x][r]\n", "a"),
+            ("{.a}\n{.b}\n\n[r]: u\n\n[x][r]\n", "a b"),
         ] {
             let converted = migrate_djot(source).value;
             assert_eq!(
                 crate::to_html(&converted),
-                "<p><a href=\"u\">x</a></p>",
+                format!("<p><a href=\"u\" class=\"{classes}\">x</a></p>"),
                 "{converted:?}"
             );
         }
         assert_eq!(
             crate::to_html(&migrate_djot("{.a}\n\n{.b}\n[r]: u\n\n[x][r]\n").value),
-            "<p><a href=\"u\" class=\"b\">x</a></p>"
+            "<p><a href=\"u\" class=\"a b\">x</a></p>"
         );
     }
 

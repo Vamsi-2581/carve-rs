@@ -105,7 +105,13 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     let (literal_attributes, inherited) = escape_invalid_djot_attributes(body);
     let attributes = normalize_djot_attribute_lines(&literal_attributes);
     let fences = normalize_djot_fences(&attributes);
-    let blocks = normalize::blocks(&fences);
+    let item_attribute_prefix = djot_placeholder_prefix(&fences, "\0DJOTITEMATTR\0");
+    let mut item_attributes = Vec::new();
+    let blocks = normalize::blocks_with_list_attributes(
+        &fences,
+        &item_attribute_prefix,
+        &mut item_attributes,
+    );
     let fence_closers = normalize::table_edges(&blocks);
     let folded_references = fold_djot_references(&fence_closers);
     let inline = normalize::inline(&folded_references);
@@ -260,6 +266,27 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
                 .into_owned()
         });
     let converted = converted.replace(&empty_note, "%%%%");
+    let converted = if item_attributes.is_empty() {
+        converted
+    } else {
+        let pattern = regex::Regex::new(&format!(
+            r"([ \t]){}([0-9]+)\x00",
+            regex::escape(&item_attribute_prefix)
+        ))
+        .unwrap();
+        pattern
+            .replace_all(&converted, |caps: &regex::Captures<'_>| {
+                caps[2]
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|index| item_attributes.get(index))
+                    .map_or_else(
+                        || caps[0].to_string(),
+                        |attrs| format!("{attrs}{}", &caps[1]),
+                    )
+            })
+            .into_owned()
+    };
     let converted = cached_regex!(r"\x00DJOTINVALIDATTR\x00[0-9]+\x00")
         .unwrap()
         .replace_all(&converted, |caps: &regex::Captures<'_>| {
@@ -2084,8 +2111,10 @@ fn consume_orphan_djot_attributes(source: &str) -> (String, OrphanAttributeSpans
         let first = quote_prefix.find(line).unwrap().end();
         let depth = line[..first].bytes().filter(|&byte| byte == b'>').count();
         if line[first..].trim().is_empty() {
-            follows_blank = true;
-            next_depth = (depth != 0).then_some(depth);
+            if depth != 0 {
+                follows_blank = true;
+                next_depth = Some(depth);
+            }
             continue;
         }
         let visible = masked_lines[index].as_bytes().get(first);
@@ -2105,6 +2134,7 @@ fn consume_orphan_djot_attributes(source: &str) -> (String, OrphanAttributeSpans
         }
     }
     let mut lines = Vec::new();
+    let mut line_offset = 0;
     for (index, line) in source.split('\n').enumerate() {
         let mask = masked_lines[index].as_bytes();
         let bytes = line.as_bytes();
@@ -2140,7 +2170,8 @@ fn consume_orphan_djot_attributes(source: &str) -> (String, OrphanAttributeSpans
                 .unwrap_or("");
             let previous = quote_prefix.replace(previous, "");
             let previous = previous.trim();
-            let block = index == 0
+            let block = !comment_continues_paragraph(source, line_offset + at)
+                || index == 0
                 || previous.is_empty()
                 || (previous.starts_with('{') && previous.ends_with('}'))
                 || block_end.is_match(previous);
@@ -2167,6 +2198,7 @@ fn consume_orphan_djot_attributes(source: &str) -> (String, OrphanAttributeSpans
             cursor = end;
         }
         output.push_str(&line[cursor..]);
+        line_offset += line.len() + 1;
         if !drop_line {
             lines.push(output);
         } else if line[..first].contains('>') {
@@ -7994,7 +8026,9 @@ pub(crate) fn strip_footnote_definition_attributes(input: &str) -> DjotFootnoteA
                     }
                 }
             }
-            pending.clear();
+            if !content.is_empty() {
+                pending.clear();
+            }
         }
         let reference = block_allowed
             && mask.as_bytes().get(offset + prefix.len()) == Some(&b'[')
