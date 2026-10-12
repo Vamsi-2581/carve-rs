@@ -7175,6 +7175,7 @@ fn rebase_overindented_blocks(
     // A code-shaped run outside the preceding verse's bases is inline text.
     // Keep its authored column through repeated rebase passes.
     let mut last_literal_base = None;
+    let mut term_boundary = false;
     // Has a line AT the container's minimum column been read since the scan
     // last stood inside a descendant? It is ownership evidence exactly as an
     // open paragraph is: the scan is back in the parent's coordinate system,
@@ -7387,21 +7388,18 @@ fn rebase_overindented_blocks(
                 }
                 after_blank = false;
                 paragraph_open = false;
-                block_at_minimum = false;
+                block_at_minimum = term_boundary;
                 continue;
             }
             if let Some(open) = detect_comment_fence_line(&lines[i]) {
-                i += 1;
-                while i < lines.len() {
-                    let closes = is_comment_fence_close(&lines[i], open.fence_len);
-                    i += 1;
-                    if closes {
-                        break;
-                    }
-                }
+                let close = entry_closers
+                    .get_or_init(|| comment_closers_by_run(&lines))
+                    .get(&open.fence_len)
+                    .and_then(|at| at.get(at.partition_point(|&at| at <= i)).copied());
+                i = close.map_or(i + 1, |at| at + 1);
                 after_blank = false;
                 paragraph_open = false;
-                block_at_minimum = false;
+                block_at_minimum = term_boundary;
                 continue;
             }
             // Verse lines are inline content, including indented block markers.
@@ -7472,6 +7470,7 @@ fn rebase_overindented_blocks(
             // as an authored base of the outer body; the first line outside the
             // extent is deliberately classified by that outer body.
             if is_definition_list_start(&lines[i]) {
+                term_boundary = true;
                 i = definition_entry_end(&lines, i, 0, &entry_closers) + 1;
                 after_blank = false;
                 paragraph_open = false;
@@ -7479,6 +7478,9 @@ fn rebase_overindented_blocks(
                 continue;
             }
             paragraph_open = line_starts_paragraph(&lines[i]);
+            if paragraph_open {
+                term_boundary = false;
+            }
             after_blank = false;
             // A comment reaching this frame closes its paragraph. A lower
             // comment preserves the owner established before it; the next
@@ -7493,6 +7495,9 @@ fn rebase_overindented_blocks(
             || (!is_list_marker(&opener) && !item_block_opener(&opener))
         {
             paragraph_open = line_starts_paragraph(&opener);
+            if paragraph_open {
+                term_boundary = false;
+            }
             after_blank = false;
             i += 1;
             continue;
@@ -13611,11 +13616,14 @@ fn parse_list(
                         if swallowed_blank_separator || literal_comment_handoff {
                             return false;
                         }
-                        let src = &src.source;
-                        if marker_line_was_the_whole_block {
-                            return body_ends_with_open_paragraph(src, options);
+                        if marker_line_was_the_whole_block
+                            || !is_definition_list_start(marker.content)
+                        {
+                            return body_ends_with_open_paragraph(&src.source, options);
                         }
-                        body_ends_with_open_paragraph(src, options)
+                        let mut rebased = src.clone();
+                        rebase_overindented_blocks(&mut rebased, false, options);
+                        body_ends_with_open_paragraph(&rebased.source, options)
                     },
                     |cur| collect_indented_block_mapped(cur, base_indent, content_col),
                 );
@@ -13630,8 +13638,14 @@ fn parse_list(
             }
             // A heading, a fence or a table on the marker line leaves the item
             // holding no paragraph - see `item_paragraph_open`.
-            item_paragraph_open =
-                !literal_comment_handoff && body_ends_with_open_paragraph(&stream.source, options);
+            item_paragraph_open = !literal_comment_handoff
+                && if is_definition_list_start(marker.content) {
+                    let mut rebased = stream.clone();
+                    rebase_overindented_blocks(&mut rebased, false, options);
+                    body_ends_with_open_paragraph(&rebased.source, options)
+                } else {
+                    body_ends_with_open_paragraph(&stream.source, options)
+                };
             let children = item_body(deferred, items.len(), stream, None, false, options);
             items.push(ListItem {
                 attrs: item_attrs,

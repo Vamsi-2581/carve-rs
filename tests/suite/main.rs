@@ -1933,3 +1933,6 @@ mod continued_marker_note_code_floor;
 
 #[path = "../definition_term_floor_text.rs"]
 mod definition_term_floor_text;
+
+#[path = "../term_ended_block_wave.rs"]
+mod term_ended_block_wave;
