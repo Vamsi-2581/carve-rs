@@ -77,6 +77,13 @@ fn root_attribute_boundaries_match_native_djot() {
         let expected = case["html"].as_str().unwrap();
         let converted = carve::djot_to_carve(source);
         let html = carve::to_html(&converted);
+        assert_eq!(
+            normalize(&carve::to_html(
+                &carve::render_carve(&carve::parse(&converted)).unwrap()
+            )),
+            normalize(&html),
+            "{source}: formatting changed the document"
+        );
         if let Some(native) = case.get("nativeAst") {
             let document = carve::parse(&converted);
             let carve::ast::BlockNode::List(list) = &document.children[0] else {
@@ -112,4 +119,12 @@ fn root_attribute_boundaries_match_native_djot() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+fn a_comment_between_items_adds_no_empty_attribute() {
+    let source = "- x\n\n  {% c %}\n\n- y";
+    let converted = carve::djot_to_carve(source);
+    assert!(!converted.contains("-{}"), "{converted}");
+    assert_eq!(carve::to_html(&converted), carve::to_html("- x\n\n- y"));
 }

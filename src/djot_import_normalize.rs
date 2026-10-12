@@ -150,7 +150,8 @@ pub(super) fn blocks_with_list_attributes(
         let attribute_only = visible.starts_with('{')
             && read_djot_word_attributes(text, 0)
                 .is_some_and(|(end, _)| end == text.trim_end().len());
-        if !raw.trim().is_empty()
+        if !pending_item_attributes.is_empty()
+            && !raw.trim().is_empty()
             && !attribute_only
             && (!marker.is_match(visible) || thematic(text))
         {
@@ -723,7 +724,9 @@ pub(super) fn blocks_with_list_attributes(
             if attribute_only && !paragraph {
                 if let Some(list) = lists.last().filter(|list| indent >= list.column) {
                     if let Some((_, wire)) = read_djot_word_attributes(text, 0) {
-                        pending_item_attributes.push((list.source, result.len(), wire));
+                        if wire != "{}" {
+                            pending_item_attributes.push((list.source, result.len(), wire));
+                        }
                     }
                 }
             }
@@ -1109,6 +1112,7 @@ fn reference_uses<'a>(source: &'a str, mask: &str) -> Vec<ReferenceUse<'a>> {
 }
 
 pub(super) fn references(source: &str) -> String {
+    let _paragraph_cache = ParagraphCacheScope::new(source);
     let definition = cached_regex!(r"(?m)^\[([^\]\n^]+)\]:[ \t]*(\S*)[ \t]*$").unwrap();
     let mask = reference_mask(source);
     let mut definitions = HashMap::new();
