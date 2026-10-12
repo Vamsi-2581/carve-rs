@@ -12441,6 +12441,7 @@ fn parse_list(
     // blank in the item is interior to it and loosens nothing (§17; the
     // reference tracks the span apart from whether the fence opened).
     let mut item_unopened_fence_span = false;
+    let mut item_unclosed_fence_base = None;
     let mut item_rejected_fence_owner = false;
     // Did the item just built carry a BARE `+` lead - an empty first-block item
     // waiting for a document-column-0 block (§17 L3, markup-carve/carve#1436)?
@@ -12533,8 +12534,11 @@ fn parse_list(
                 break;
             }
             if indent > base_indent {
-                let authored_overindented_opener =
-                    indent > content_col && item_block_opener(trim_ascii_start(line));
+                let foreign_fence_base = indent > content_col
+                    && item_unclosed_fence_base.is_some_and(|base| base != indent);
+                let authored_overindented_opener = indent > content_col
+                    && !foreign_fence_base
+                    && item_block_opener(trim_ascii_start(line));
                 // After a blank line, lazy continuation no longer applies: a line
                 // must reach the item's content column to keep belonging to it
                 // (PART 9 §24 C3). A line BELOW content_column ends the list and
@@ -12613,6 +12617,9 @@ fn parse_list(
                         &mut item_open_fence,
                     );
                     nested.authored_base_at_start |= authored_overindented_opener;
+                    if foreign_fence_base {
+                        nested.authored_base_at_start = false;
+                    }
                     let collected_tail_blank = item_open_fence.is_some()
                         && cur.pos > 0
                         && is_blank_line(cur.lines.at(cur.pos - 1));
@@ -12628,14 +12635,11 @@ fn parse_list(
                     if item_rejected_fence_owner {
                         let mut admitted = nested.clone();
                         rebase_overindented_blocks(&mut admitted, false, options);
-                        latest_owner.set(Some(
-                            body_ends_with_code_block(&admitted.source, options)
-                                || collected_body_takes_the_lazy_line(
-                                    &admitted.source,
-                                    last_consumed_line_below_column(cur, content_col),
-                                    options,
-                                ),
-                        ));
+                        latest_owner.set(Some(collected_body_takes_the_lazy_line(
+                            &admitted.source,
+                            last_consumed_line_below_column(cur, content_col),
+                            options,
+                        )));
                     }
                     if !collected_tail_blank
                         && (item_open_fence.is_none()
@@ -12670,14 +12674,7 @@ fn parse_list(
                                     if paragraph {
                                         item_open_fence = None;
                                     }
-                                    latest_owner.set(Some(
-                                        paragraph
-                                            || (item_open_fence.is_none()
-                                                && body_ends_with_code_block(
-                                                    &admitted.source,
-                                                    options,
-                                                )),
-                                    ));
+                                    latest_owner.set(Some(paragraph));
                                 }
                                 resumed
                             },
@@ -12689,7 +12686,7 @@ fn parse_list(
                     // can establish its authored block base (#1705). Without
                     // this, it is indistinguishable from a first-line residual
                     // indent produced by a tab straddling the content column.
-                    nested.authored_base_at_start |= pending_blank;
+                    nested.authored_base_at_start |= pending_blank && !foreign_fence_base;
                     let definition_ended_paragraph = nested
                         .source
                         .lines()
@@ -12709,9 +12706,7 @@ fn parse_list(
                         last_consumed_line_below_column(cur, content_col),
                         options,
                     );
-                    item_paragraph_open = nested_leaves_paragraph_open
-                        || (item_rejected_fence_owner
-                            && body_ends_with_code_block(&nested.source, options));
+                    item_paragraph_open = nested_leaves_paragraph_open;
                     let mut split_stack: Vec<(Attrs, Option<Pos>)> = Vec::new();
                     while let Some(split) = split_trailing_attrs(&mut nested) {
                         split_stack.push(split);
@@ -13070,6 +13065,7 @@ fn parse_list(
         // A new item carries none of the previous item's fence state.
         item_open_fence = None;
         item_unopened_fence_span = false;
+        item_unclosed_fence_base = None;
         item_rejected_fence_owner = false;
         let item_source_line = cur.source_line(cur.pos);
         let item_at = cur.pos;
@@ -13824,6 +13820,7 @@ fn parse_list(
                 // still lazy paragraph text.
                 let over_indented = trim_ascii_start(next);
                 if item_block_opener(over_indented)
+                    && item_unclosed_fence_base.map_or(true, |base| base == indent)
                     && !detect_fence_open(over_indented).is_some_and(|open| {
                         !list_code_fence_closer_ahead(cur, open, content_col, base_indent)
                     })
@@ -13832,6 +13829,7 @@ fn parse_list(
                 }
                 if detect_fence_open(over_indented).is_some() {
                     item_unopened_fence_span = true;
+                    item_unclosed_fence_base.get_or_insert(indent);
                     item_rejected_fence_owner = true;
                 }
                 // Fully strip ordinary prose's indent and fold it into the lead
@@ -13905,6 +13903,7 @@ fn parse_list(
                 track_collected_fence(&mut item_open_fence, &dedented, true, indent);
             } else {
                 item_unopened_fence_span = true;
+                item_unclosed_fence_base.get_or_insert(indent);
                 item_rejected_fence_owner = true;
             }
             suppress_colon_interrupt |= is_invalid_colon_fence_opener_text(&dedented);
@@ -14634,27 +14633,6 @@ fn trailing_marker_line_content(body: &str) -> Option<String> {
     Some(marker.content.to_string())
 }
 
-fn body_ends_with_code_block(body: &str, options: &Options<'_>) -> bool {
-    if body.lines().any(is_collected_definition_placeholder) {
-        return false;
-    }
-    matches!(
-        probe_blocks(body, options).last(),
-        Some(BlockNode::CodeBlock(_) | BlockNode::RawBlock(_))
-    )
-}
-
-/// PART 1 S4's one question, asked of a container's WHOLE body: does the last
-/// block leave a paragraph open?
-///
-/// [`nested_ends_with_open_paragraph`] answers the same question for a body
-/// collected BESIDE a marker line that is still holding a paragraph of its own,
-/// which is why it looks PAST a trailing run of comments: there the open
-/// paragraph is the marker line's, and an invisible block did not close it.
-/// Here the body is all there is - `- %% c` writes the comment as the item's
-/// first and only block, so there is no earlier paragraph for it to leave open,
-/// and looking past it would find one that was never written
-/// (markup-carve/carve#1280).
 fn body_ends_with_open_paragraph(body: &str, options: &Options<'_>) -> bool {
     let blocks = probe_blocks(body, options);
     block_ends_with_open_paragraph(blocks.last(), colon_fences_left_open(body), false)
