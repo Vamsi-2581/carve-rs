@@ -17633,7 +17633,8 @@ fn collect_definition_body(
                     sliced.insert_str(0, LAZY);
                 }
                 if fence.open.is_some()
-                    || detect_fence_open(&sliced).is_none()
+                    || !paragraph_open
+                    || detect_fence_open(trim_ascii_start(&sliced)).is_none()
                     || accept_fence_opener
                 {
                     fence.track(&sliced, indent);
