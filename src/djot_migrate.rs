@@ -1841,6 +1841,57 @@ fn convert_djot_block_markers(source: &str) -> String {
         nested_lines.push(ancestors.last().is_some_and(|top| top.1));
         ancestors.push((columns, list_marker(line)));
     }
+    let mut item_columns: Vec<(usize, usize)> = Vec::new();
+    let mut boundary = true;
+    let mut quote_depth = 0;
+    let empty_marker = cached_regex!(r"^(?:[-*+]|[0-9]+[.)]|\([0-9]+\))[ \t]*$").unwrap();
+    let full_marker = cached_regex!(r"^(?:[-*+]|[0-9]+[.)]|\([0-9]+\))[ \t]+").unwrap();
+    for index in 0..lines.len() {
+        let prefix = quote_prefix_len(masked[index]);
+        let depth = masked[index][..prefix]
+            .bytes()
+            .filter(|byte| *byte == b'>')
+            .count();
+        if depth != quote_depth {
+            boundary = true;
+        }
+        quote_depth = depth;
+        let rest = &masked[index][prefix..];
+        let (column, indent) = leading_indent(rest);
+        let content = &rest[indent..];
+        if content.trim().is_empty() {
+            boundary = true;
+            continue;
+        }
+        let sibling = item_columns
+            .iter()
+            .any(|&(held_depth, held_column)| held_depth == depth && held_column == column);
+        if empty_marker.is_match(content) && (boundary || sibling) {
+            let marker = content.trim_end();
+            let marker = if marker == "+" { "-" } else { marker };
+            lines[index] = format!("{}{}{} +", &lines[index][..prefix], &rest[..indent], marker);
+            item_columns.retain(|&(held_depth, held_column)| {
+                held_depth < depth || held_depth == depth && held_column < column
+            });
+            item_columns.push((depth, column));
+            boundary = true;
+        } else {
+            if full_marker.is_match(content) && (boundary || sibling) {
+                item_columns.retain(|&(held_depth, held_column)| {
+                    held_depth < depth || held_depth == depth && held_column < column
+                });
+                item_columns.push((depth, column));
+            } else if boundary {
+                item_columns.retain(|&(held_depth, held_column)| {
+                    held_depth < depth || held_depth == depth && held_column < column
+                });
+            }
+            boundary = false;
+        }
+    }
+    let rewritten = lines.join("\n");
+    let masked_source = mask_code_and_destinations(&rewritten);
+    let masked: Vec<&str> = masked_source.split('\n').collect();
     let mut containers: Vec<(usize, bool)> = Vec::new();
     let host_prefix = cached_regex!(r"^(?:[ \t]*> ?|[ \t]*(?:(?:[-*+]|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-zA-Z])[.)]|\([0-9A-Za-z]+\)) +(?:\[[ xX]\] +)?|: |\[\^[^\]\r\n]+\]: +))").unwrap();
     for index in 0..lines.len() {
@@ -3479,7 +3530,7 @@ fn normalize_plus_bullets(source: &str) -> String {
             .unwrap_or(out.len());
 
         // A masked line is code: its `+` is content, not a marker.
-        let mut i = line_start;
+        let mut i = line_start + quote_prefix_len(&masked[line_start..line_end]);
         while i < line_end && (mask[i] == b' ' || mask[i] == b'\t') {
             i += 1;
         }

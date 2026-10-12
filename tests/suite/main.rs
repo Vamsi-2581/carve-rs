@@ -1948,3 +1948,6 @@ mod djot_literal_wave;
 
 #[path = "../markdown_strike_wave.rs"]
 mod markdown_strike_wave;
+
+#[path = "../djot_empty_item_wave.rs"]
+mod djot_empty_item_wave;
