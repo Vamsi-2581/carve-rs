@@ -1846,6 +1846,7 @@ fn convert_djot_block_markers(source: &str) -> String {
     let mut div_widths = Vec::new();
     let mut item_columns: Vec<(usize, usize)> = Vec::new();
     let mut boundary = true;
+    let mut thematic_lines = HashSet::new();
     let mut quote_depth = 0;
     let mut quote_exit_items = HashMap::new();
     let empty_marker = cached_regex!(
@@ -1858,6 +1859,7 @@ fn convert_djot_block_markers(source: &str) -> String {
     .unwrap();
     let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
     let thematic = cached_regex!(r"^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,})$").unwrap();
+    let quote_owner_prefix = cached_regex!(r"^[ \t]*>(?:[ \t]|$)").unwrap();
     for index in 0..lines.len() {
         let prefix = quote_prefix_len(&lines[index]);
         if prefix > 0
@@ -1871,6 +1873,28 @@ fn convert_djot_block_markers(source: &str) -> String {
             .bytes()
             .filter(|byte| *byte == b'>')
             .count();
+        let mut owner_quote_columns = Vec::new();
+        if depth > quote_depth {
+            let mut rest = lines[index].as_str();
+            while let Some(prefix) = quote_owner_prefix.find(rest) {
+                owner_quote_columns.push(leading_indent(rest).0);
+                rest = &rest[prefix.end()..];
+            }
+        }
+        let outside_item_quote = depth > quote_depth
+            && item_columns.iter().any(|&(held_depth, column)| {
+                owner_quote_columns
+                    .get(held_depth)
+                    .is_some_and(|&indent| indent <= column)
+            });
+        if outside_item_quote {
+            item_columns.retain(|&(held_depth, column)| {
+                !owner_quote_columns
+                    .get(held_depth)
+                    .is_some_and(|&indent| indent <= column)
+            });
+            boundary = true;
+        }
         if depth > quote_depth && !boundary {
             continue;
         }
@@ -1904,7 +1928,14 @@ fn convert_djot_block_markers(source: &str) -> String {
             });
             continue;
         }
-        if heading.is_match(content) || (boundary && thematic.is_match(content)) {
+        let thematic_boundary = boundary
+            || item_columns
+                .iter()
+                .any(|&(held_depth, held_column)| held_depth == depth && held_column == column);
+        if heading.is_match(content) || (thematic_boundary && thematic.is_match(content)) {
+            if thematic_boundary && thematic.is_match(content) {
+                thematic_lines.insert(index);
+            }
             boundary = true;
             item_columns.retain(|&(held_depth, held_column)| {
                 held_depth < depth || held_depth == depth && held_column < column
@@ -2039,7 +2070,9 @@ fn convert_djot_block_markers(source: &str) -> String {
             marker = Some(byte);
             count += 1;
         }
-        if valid && count >= 3 {
+        if valid && count >= 3 && !thematic_lines.contains(&index) {
+            lines[index].insert(prefix + indent_bytes, '\\');
+        } else if valid && count >= 3 {
             let nested = quote.is_empty() && nested_lines[index];
             lines[index] = format!(
                 "{}{}***",

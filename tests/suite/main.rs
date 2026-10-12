@@ -1981,3 +1981,6 @@ mod djot_verbatim_quote_payload;
 
 #[path = "../djot_quote_paragraph_continuations.rs"]
 mod djot_quote_paragraph_continuations;
+
+#[path = "../djot_quoted_thematic_text.rs"]
+mod djot_quoted_thematic_text;
