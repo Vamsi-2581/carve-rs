@@ -15029,6 +15029,7 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
     let mut fence: Option<FenceOpen> = None;
     let mut comment_closers: Option<HashMap<usize, usize>> = None;
     let mut closer_index = None;
+    let entry_closers = std::cell::OnceCell::new();
     let mut i = 0;
     while i < lines.len() {
         if let Some(open) = fence {
@@ -15118,6 +15119,16 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
             .unwrap_or(lines.len());
             if !is_the_whole_item_body(i, end) {
                 i = end;
+                continue;
+            }
+        }
+        if is_definition_list_start(lines[i]) {
+            let (end, _) = definition_entry_extent(&lines, i, 0, &entry_closers);
+            if !lines[i..=end]
+                .windows(2)
+                .any(|pair| pair.iter().all(|line| is_blank_line(line)))
+            {
+                i = end + 1;
                 continue;
             }
         }

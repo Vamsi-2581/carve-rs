@@ -1963,3 +1963,6 @@ mod terminal_colon_content_plus;
 
 #[path = "../term_led_description_code.rs"]
 mod term_led_description_code;
+
+#[path = "../held_description_tightness.rs"]
+mod held_description_tightness;
