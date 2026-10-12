@@ -15033,7 +15033,7 @@ fn closed_colon_span_end(
     None
 }
 
-fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> bool {
+fn continuation_source_loosens(source: &str, _source_is_the_item_body: bool) -> bool {
     let lines: Vec<&str> = source.split('\n').collect();
     // A blank line INSIDE AN OPEN FENCE is that block's own content, not an
     // interior block separator, so it must not loosen the item (carve-php#404
@@ -15047,32 +15047,6 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
     // ONE STATEFUL LEFT-TO-RIGHT PASS, not one scan per line: each closed span
     // is jumped over whole, and spans never overlap, so the walk stays linear.
     //
-    // WHEN THE CONTAINER IS THE ITEM'S WHOLE BODY, ITS CLOSER IS A SPELLING.
-    // An unclosed opener runs to the end of the item and a closer on the item's
-    // final line ends in the same place, so the two spell ONE container and §17's
-    // looseness may not move across them. The canonical writer SUPPLIES the
-    // missing closer, so the pair is `x` and `fmt(x)`, which PART 11 §1 requires
-    // to parse alike. markup-carve/carve#1602 ruled the reading is the one the
-    // source already gives, LOOSE. Whether such an item SHOULD be loose is left
-    // open there; that it cannot be both is settled.
-    //
-    // BOUNDED TO AN ITEM WHOSE WHOLE BODY IS THE CONTAINER: the source must be
-    // the item's body from its first block (`source_is_the_item_body`, which
-    // only the marker-line-lead callers can say), the opener must be its first
-    // line, and the closer its last. A container with anything beside it in the
-    // item is one block among several, and its interior blank is its own
-    // content rather than a separator between the item's blocks - that is the
-    // case the skip was written for (markup-carve/carve#985).
-    //
-    // The bound is measured, not assumed: corpus 279-10 reaches this scan with
-    // the SAME lines as the case above, because its lead paragraph is not part of
-    // the collected chunk. Nothing in the text tells the two apart - only the
-    // caller knows whether a block precedes it - so widening the lift to that
-    // caller flips 279-10 loose and moves its pinned HTML.
-    let last_content = lines.iter().rposition(|line| !is_blank_line(line));
-    let is_the_whole_item_body = |start: usize, end: usize| {
-        source_is_the_item_body && start == 0 && last_content.is_some_and(|last| end > last)
-    };
     let mut fence: Option<FenceOpen> = None;
     let mut comment_closers: Option<HashMap<usize, usize>> = None;
     let mut closer_index = None;
@@ -15119,10 +15093,8 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
                 &mut comment_closers,
             )
             .unwrap_or(lines.len());
-            if !is_the_whole_item_body(i, end) {
-                i = end;
-                continue;
-            }
+            i = end;
+            continue;
         }
         if let Some(fence_len) = detect_hardbreaks_block_open(lines[i]) {
             let end = closed_colon_span_end(
@@ -15134,10 +15106,8 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
                 &mut comment_closers,
             )
             .unwrap_or(lines.len());
-            if !is_the_whole_item_body(i, end) {
-                i = end;
-                continue;
-            }
+            i = end;
+            continue;
         }
         if let Some(fence_len) = detect_quote_block_open(lines[i]) {
             let end = closed_colon_span_end(
@@ -15149,10 +15119,8 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
                 &mut comment_closers,
             )
             .unwrap_or(lines.len());
-            if !is_the_whole_item_body(i, end) {
-                i = end;
-                continue;
-            }
+            i = end;
+            continue;
         }
         if let Some(open) = detect_container_open(lines[i]) {
             let end = closed_colon_span_end(
@@ -15164,10 +15132,8 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
                 &mut comment_closers,
             )
             .unwrap_or(lines.len());
-            if !is_the_whole_item_body(i, end) {
-                i = end;
-                continue;
-            }
+            i = end;
+            continue;
         }
         if is_definition_list_start(lines[i]) {
             let (end, _) = definition_entry_extent(&lines, i, 0, &entry_closers);
