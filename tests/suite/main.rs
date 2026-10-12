@@ -1936,3 +1936,6 @@ mod definition_term_floor_text;
 
 #[path = "../term_ended_block_wave.rs"]
 mod term_ended_block_wave;
+
+#[path = "../description_band_wave.rs"]
+mod description_band_wave;
