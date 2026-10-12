@@ -201,28 +201,46 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         }
     });
     let alt_prefix = djot_placeholder_prefix(&folded, "\0DJOTALT\0");
+    let image_paragraph = djot_placeholder_prefix(&folded, "\0DJOTIMAGEPARAGRAPH\0");
     let mut alts = Vec::new();
     let mut alt_cache = std::collections::HashMap::<String, String>::new();
-    let image = cached_regex!(r"!\[([^\[\]\n]*)\]([\[(])").unwrap();
+    let image = cached_regex!(r"!\[([^\[\]]*)\]([\[(])").unwrap();
+    let mut image_starts = HashSet::new();
+    let mut image_offset = 0;
+    for line in folded.split('\n') {
+        image_starts.insert(image_offset + djot_content_start(line));
+        image_offset += line.len() + 1;
+    }
     let mask = mask_code_and_destinations(&folded);
     let folded = image
         .replace_all(&folded, |caps: &regex::Captures<'_>| {
             let at = caps.get(0).unwrap().start();
             if mask.as_bytes()[at] != b'!'
+                || mask.as_bytes()[at + caps[0].len() - 2] != b']'
+                || cached_regex!(r"\n[ \t]*\n").unwrap().is_match(&caps[1])
                 || is_escaped(folded.as_bytes(), at)
-                || caps[1].contains('\\')
-                || caps[1].starts_with('^')
             {
                 return caps[0].to_string();
             }
+            let paragraph = if image_starts.contains(&at) {
+                image_paragraph.as_str()
+            } else {
+                ""
+            };
+            if caps[1].starts_with('^') {
+                return caps[0].to_string();
+            }
+            if caps[1].contains('\\') || caps[1].contains('\n') {
+                return format!("{paragraph}{}", &caps[0]);
+            }
             if !caps[1].bytes().any(|byte| b"_*`{^~".contains(&byte)) {
                 alts.push(caps[1].to_string());
-                return format!("![{alt_prefix}{}\0]{}", alts.len() - 1, &caps[2]);
+                return format!("{paragraph}![{alt_prefix}{}\0]{}", alts.len() - 1, &caps[2]);
             }
             let label = &caps[1];
             if let Some(alt) = alt_cache.get(label) {
                 alts.push(alt.clone());
-                return format!("![{alt_prefix}{}\0]{}", alts.len() - 1, &caps[2]);
+                return format!("{paragraph}![{alt_prefix}{}\0]{}", alts.len() - 1, &caps[2]);
             }
             let alt = crate::to_plain_text_with_options(
                 &djot_to_carve(&format!(
@@ -243,7 +261,7 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
             .to_string();
             alt_cache.insert(label.to_string(), alt.clone());
             alts.push(alt);
-            format!("![{alt_prefix}{}\0]{}", alts.len() - 1, &caps[2])
+            format!("{paragraph}![{alt_prefix}{}\0]{}", alts.len() - 1, &caps[2])
         })
         .into_owned();
     let prefix = djot_placeholder_prefix(&folded, "\0DJOTSTRONG");
@@ -277,7 +295,9 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
                 )
                 .into_owned()
         });
-    let converted = converted.replace(&empty_note, "%%%%");
+    let converted = converted
+        .replace(&empty_note, "%%%%")
+        .replace(&image_paragraph, "{%%}");
     let converted = cached_regex!(r"\x00DJOTINVALIDATTR\x00[0-9]+\x00")
         .unwrap()
         .replace_all(&converted, |caps: &regex::Captures<'_>| {
