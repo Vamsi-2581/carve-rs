@@ -1898,6 +1898,8 @@ mod markdown_nested_emphasis;
 mod list_code_fence_floor;
 #[path = "../markdown_footnote_continuation.rs"]
 mod markdown_footnote_continuation;
+#[path = "../new_quote_definition_opacity.rs"]
+mod new_quote_definition_opacity;
 
 #[path = "../roundtrip_carriers_2.rs"]
 mod roundtrip_carriers_2;
@@ -1905,5 +1907,7 @@ mod roundtrip_carriers_2;
 #[path = "../tab_authored_list_code_fences.rs"]
 mod tab_authored_list_code_fences;
 
+#[path = "../authored_definition_note_code_hosts.rs"]
+mod authored_definition_note_code_hosts;
 #[path = "../inline_fence_paragraph_resume.rs"]
 mod inline_fence_paragraph_resume;
