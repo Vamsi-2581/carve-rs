@@ -1954,3 +1954,36 @@ mod djot_empty_item_wave;
 
 #[path = "../quoted_closed_leaf_wave.rs"]
 mod quoted_closed_leaf_wave;
+
+#[path = "../literal_payload_columns.rs"]
+mod literal_payload_columns;
+
+#[path = "../terminal_colon_content_plus.rs"]
+mod terminal_colon_content_plus;
+
+#[path = "../term_led_description_code.rs"]
+mod term_led_description_code;
+
+#[path = "../held_description_tightness.rs"]
+mod held_description_tightness;
+
+#[path = "../invisible_leaf_after_quote.rs"]
+mod invisible_leaf_after_quote;
+
+#[path = "../quoted_list_opening_spans.rs"]
+mod quoted_list_opening_spans;
+
+#[path = "../djot_parenthesized_words.rs"]
+mod djot_parenthesized_words;
+
+#[path = "../djot_verbatim_quote_payload.rs"]
+mod djot_verbatim_quote_payload;
+
+#[path = "../djot_quote_paragraph_continuations.rs"]
+mod djot_quote_paragraph_continuations;
+
+#[path = "../djot_quoted_thematic_text.rs"]
+mod djot_quoted_thematic_text;
+
+#[path = "../term_intervening_block_payload.rs"]
+mod term_intervening_block_payload;
