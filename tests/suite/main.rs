@@ -2011,3 +2011,6 @@ mod retained_paragraphs;
 
 #[path = "../descendant_fence_scope.rs"]
 mod descendant_fence_scope;
+
+#[path = "../agreed_comment_retention.rs"]
+mod agreed_comment_retention;

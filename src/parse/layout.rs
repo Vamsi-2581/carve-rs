@@ -1655,7 +1655,7 @@ mod layout_html_tests {
         // is three new documents, not a widening. The scanner is unchanged and
         // the per-document assertion above proves each byte-identical.
         assert_eq!(
-            accepted, 63,
+            accepted, 65,
             "update the pinned acceptance count only after reviewing the exact-parity widening"
         );
     }

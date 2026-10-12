@@ -1620,8 +1620,11 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // All four round-trip strictly; the reported-lossy set is unchanged.
     // Spec fefeb53 adds the three category 555 raw-payload documents.
     // All three round-trip strictly; the reported-lossy set is unchanged.
-    const STRICT: usize = 1774;
-    const LOSSY: usize = 548;
+    // Spec bd667aef adds 54 documents: 39 strict and 15 with existing losses.
+    // Corpus 455, 455-2 and 455-3 move from strict to reported lossy when the
+    // unfinished nested fence releases their flush-left body and closer.
+    const STRICT: usize = 1810;
+    const LOSSY: usize = 566;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in
