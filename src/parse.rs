@@ -16122,7 +16122,11 @@ fn collect_indented_block_mapped_with_columns(
         // consumed and dropped - "as if the marker line had been a comment" -
         // rather than handed to the nested parse, where it would end the item
         // and cost the lazy fold the same document without it still has.
-        if strip_cols > 0 && indent == strip_cols && trim_ascii(line) == "+" {
+        if strip_cols > 0
+            && indent == strip_cols
+            && trim_ascii(line) == "+"
+            && marker_colon.is_none()
+        {
             cur.consume();
             continue;
         }
