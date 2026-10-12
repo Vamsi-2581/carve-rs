@@ -3290,6 +3290,7 @@ fn mask_djot_opaque_with_comments(
     } else {
         HashMap::new()
     };
+    let quote_prefix = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*[ \t]*").unwrap();
     let mut definition_lines = std::collections::HashSet::new();
     let mut line_offset = 0;
     let mut previous_line: &str = "";
@@ -3300,7 +3301,11 @@ fn mask_djot_opaque_with_comments(
                     || previous_line[djot_content_start(previous_line)..]
                         .trim()
                         .is_empty()
-                    || reference_boundary.is_match(previous_line.trim())
+                    || reference_boundary
+                        .is_match(previous_line[djot_content_start(previous_line)..].trim())
+                    || reference_boundary.is_match(
+                        previous_line[quote_prefix.find(previous_line).unwrap().end()..].trim(),
+                    )
                 {
                     definition_lines.insert(line_offset + definition.end() - 2);
                 }
@@ -8748,6 +8753,72 @@ mod destination_mask_tests {
                 format!("[t]{} and ~x~ later", " ".repeat(target.len() + 2))
             );
         }
+    }
+
+    #[test]
+    fn quote_boundary_requires_space_or_line_ending() {
+        for (heads, boundary) in [
+            (&["># heading", ">***", ">{.c}", ">:::"][..], false),
+            (&["> # heading", "> ***", "> {.c}", "> :::", ">"][..], true),
+        ] {
+            for head in heads {
+                let source = format!("{head}\n[r]: /a`b");
+                let mask = super::mask_djot_opaque(
+                    &source,
+                    super::OpaqueOptions {
+                        unclosed_code: false,
+                        ..super::OpaqueOptions::default()
+                    },
+                );
+                let expected = if boundary {
+                    source.replace("/a`b", "    ")
+                } else {
+                    source
+                };
+                assert_eq!(mask, expected.into_bytes(), "{head}");
+            }
+        }
+    }
+
+    #[test]
+    fn list_hosted_block_boundaries_remain_opaque() {
+        for head in [
+            "- ",
+            "1. ",
+            ": ",
+            "- [ ] ",
+            "- # H",
+            "- [a]: /x",
+            "- {.c}",
+            "- :::",
+        ] {
+            let source = format!("{head}\n[r]: /a`b\n[s]: /c`d");
+            let mask = super::mask_djot_opaque(
+                &source,
+                super::OpaqueOptions {
+                    unclosed_code: false,
+                    ..super::OpaqueOptions::default()
+                },
+            );
+            let expected = source
+                .replace("/a`b", "    ")
+                .replace("/c`d", "    ")
+                .replace("/x", "  ");
+            assert_eq!(mask, expected.into_bytes(), "{head}");
+        }
+    }
+
+    #[test]
+    fn definitions_do_not_join_code_across_paragraphs() {
+        let source = "[r]: /x\n\na `b\n\nc` d";
+        let mask = super::mask_djot_opaque(
+            source,
+            super::OpaqueOptions {
+                unclosed_code: false,
+                ..super::OpaqueOptions::default()
+            },
+        );
+        assert_eq!(mask, source.replace("/x", "  ").into_bytes());
     }
 
     #[test]
