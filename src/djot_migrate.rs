@@ -204,73 +204,9 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     let image_paragraph = djot_placeholder_prefix(&folded, "\0DJOTIMAGEPARAGRAPH\0");
     let mut alts = Vec::new();
     let mut alt_cache = std::collections::HashMap::<(String, usize, bool), String>::new();
-    let mut image_starts = HashSet::new();
-    let mut image_lines = Vec::new();
-    let mut image_line = 0;
-    let mut image_offset = 0;
-    let mut image_item_column = 0;
-    let mut image_item_quote = 0;
-    let mut image_divs: Vec<(usize, usize, usize)> = Vec::new();
-    let image_owner_marker = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+").unwrap();
     let mask = mask_code_and_destinations(&folded);
-    for line in folded.split('\n') {
-        let content_start = djot_content_start(line);
-        image_starts.insert(image_offset + content_start);
-        let (depth, body) = quoted(line);
-        let text = body.trim_start_matches([' ', '\t']);
-        let indent = body.len() - text.len();
-        if image_owner_marker.is_match(text) {
-            image_item_column = indent + 1;
-            image_item_quote = depth;
-        } else if !text.is_empty()
-            && (depth < image_item_quote
-                || depth == image_item_quote
-                    && indent < image_item_column
-                    && cached_regex!(r"^(?:#{1,6} |:{3,}|[-*+] |\{|\|)")
-                        .unwrap()
-                        .is_match(text))
-        {
-            image_item_column = 0;
-        }
-        if let Some(delimiter) = cached_regex!(r"^(:{3,})(?:[ \t]+\S.*)?[ \t]*$")
-            .unwrap()
-            .captures(&line[content_start..])
-        {
-            if mask.as_bytes()[image_offset + content_start] != b' ' {
-                if image_divs.last().is_some_and(|&(width, div_depth, _)| {
-                    line[..content_start]
-                        .bytes()
-                        .filter(|&ch| ch == b'>')
-                        .count()
-                        == div_depth
-                        && cached_regex!(r"^:{3,}[ \t]*$")
-                            .unwrap()
-                            .is_match(&line[content_start..])
-                        && delimiter[1].len() >= width
-                }) {
-                    image_divs.pop();
-                } else {
-                    image_divs.push((
-                        delimiter[1].len(),
-                        line[..content_start]
-                            .bytes()
-                            .filter(|&ch| ch == b'>')
-                            .count(),
-                        content_start,
-                    ));
-                }
-            }
-        }
-        image_lines.push((
-            image_offset + line.len() + 1,
-            line[..content_start].bytes().filter(|&b| b == b'>').count(),
-            image_item_column,
-            image_item_quote,
-            image_divs.last().copied(),
-            line.as_bytes().get(content_start) == Some(&b'|'),
-        ));
-        image_offset += line.len() + 1;
-    }
+    let (image_starts, image_lines) = image_line_owners(&folded, &mask);
+    let mut image_line = 0;
     let folded = replace_image_labels(&folded, &mask, |image, label, at| {
         if mask.as_bytes()[at] != b'!'
             || mask.as_bytes()[at + image.len() - 1] != b']'
@@ -634,6 +570,84 @@ fn replace_image_labels(
     }
     output.push_str(&source[cursor..]);
     output
+}
+
+type ImageLineOwner = (
+    usize,
+    usize,
+    usize,
+    usize,
+    Option<(usize, usize, usize)>,
+    bool,
+);
+
+fn image_line_owners(source: &str, mask: &str) -> (HashSet<usize>, Vec<ImageLineOwner>) {
+    let mut image_starts = HashSet::new();
+    let mut image_lines = Vec::new();
+    let mut image_offset = 0;
+    let mut image_item_column = 0;
+    let mut image_item_quote = 0;
+    let mut image_divs: Vec<(usize, usize, usize)> = Vec::new();
+    let image_owner_marker = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+").unwrap();
+    for line in source.split('\n') {
+        let content_start = djot_content_start(line);
+        image_starts.insert(image_offset + content_start);
+        let (depth, body) = quoted(line);
+        let text = body.trim_start_matches([' ', '\t']);
+        let indent = body.len() - text.len();
+        if image_owner_marker.is_match(text) {
+            image_item_column = indent + 1;
+            image_item_quote = depth;
+        } else if !text.is_empty()
+            && (depth < image_item_quote
+                || depth == image_item_quote
+                    && indent < image_item_column
+                    && cached_regex!(r"^(?:#{1,6} |:{3,}|[-*+] |\{|\|)")
+                        .unwrap()
+                        .is_match(text))
+        {
+            image_item_column = 0;
+        }
+        if let Some(delimiter) = cached_regex!(r"^(:{3,})(?:[ \t]+\S.*)?[ \t]*$")
+            .unwrap()
+            .captures(&line[content_start..])
+        {
+            if mask.as_bytes()[image_offset + content_start] != b' ' {
+                if image_divs.last().is_some_and(|&(width, div_depth, _)| {
+                    line[..content_start]
+                        .bytes()
+                        .filter(|&ch| ch == b'>')
+                        .count()
+                        == div_depth
+                        && cached_regex!(r"^:{3,}[ \t]*$")
+                            .unwrap()
+                            .is_match(&line[content_start..])
+                        && delimiter[1].len() >= width
+                }) {
+                    image_divs.pop();
+                } else {
+                    image_divs.push((
+                        delimiter[1].len(),
+                        line[..content_start]
+                            .bytes()
+                            .filter(|&ch| ch == b'>')
+                            .count(),
+                        content_start,
+                    ));
+                }
+            }
+        }
+        image_lines.push((
+            image_offset + line.len() + 1,
+            line[..content_start].bytes().filter(|&b| b == b'>').count(),
+            image_item_column,
+            image_item_quote,
+            image_divs.last().copied(),
+            line.as_bytes().get(content_start) == Some(&b'|'),
+        ));
+        image_offset += line.len() + 1;
+    }
+    (image_starts, image_lines)
 }
 
 fn image_alt_layout(
@@ -6624,6 +6638,7 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
         }
         label
     }
+    let mut image_lines: Option<Vec<ImageLineOwner>> = None;
     let quote_depths: Vec<_> = source
         .split('\n')
         .map(|line| {
@@ -6645,7 +6660,12 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
     let mut occupied_labels: Option<HashSet<String>> = None;
     let mut pipe_serial = 0;
     let mut line = 0;
-    let boundaries: HashSet<_> = djot_inline_boundaries(source, &mask).into_iter().collect();
+    let mut boundaries: HashSet<_> = djot_inline_boundaries(source, &mask).into_iter().collect();
+    if source.contains(":::") {
+        let mut div_closers = HashMap::new();
+        djot_inline_boundaries_with_div_closers(source, &mask, true, Some(&mut div_closers), None);
+        boundaries.extend(div_closers.into_keys());
+    }
     let mut destination_owner: Option<usize> = None;
     let mut i = 0;
     let blank = cached_regex!(r"^\n[ \t]*(?:>[ \t]*)*\n").unwrap();
@@ -6839,6 +6859,27 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
             destination_owner = None;
             i += 1;
             continue;
+        }
+        if owner.image {
+            let authored_label = &source[owner.at + 1..owner.label_end];
+            if authored_label.contains('\n') {
+                let lines = image_lines.get_or_insert_with(|| image_line_owners(source, &mask).1);
+                let image_owner = lines[lines.partition_point(|line| line.0 <= owner.at)];
+                if !image_alt_layout(
+                    authored_label,
+                    image_owner.1,
+                    image_owner.2,
+                    image_owner.3,
+                    None,
+                )
+                .2
+                {
+                    stack.pop();
+                    destination_owner = None;
+                    i += 1;
+                    continue;
+                }
+            }
         }
         let mut label = label_of(
             source,
