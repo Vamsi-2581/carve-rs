@@ -64,7 +64,28 @@ use json::Value;
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[];
 
 /// Exact HTML corrections pending in the shared vectors, retired when the pin agrees.
-const HTML_AHEAD_OF_PIN: &[(&str, &str, &str)] = &[];
+const AHEAD_OF_PIN: &[(&str, &str, &str)] = &[
+    (
+        "i01-padding-is-a-run-of-whitespace",
+        "html",
+        r#""<p>body</p>\n<p>{{\tc.crv\t}}</p>""#,
+    ),
+    (
+        "i01-section-after-a-tab",
+        "html",
+        r#""<p>{{ child\t<span class=\"tag\"><strong>#pick</strong></span> }}</p>""#,
+    ),
+    (
+        "i01-section-after-a-tab",
+        "warnings",
+        r#"[{"rule":"include-unresolved"}]"#,
+    ),
+    (
+        "i01-section-after-a-tab",
+        "dependencies",
+        r#"[{"id":"child\t","resolved":false}]"#,
+    ),
+];
 
 // ---------------------------------------------------------------------------
 // Vector location
@@ -512,22 +533,25 @@ fn parse_vector(source: &str) -> carve::Document {
 /// Compare one vector's actual run against its goldens, returning a list of
 /// human-readable field mismatches (empty when the vector fully passes).
 fn compare(name: &str, vector: &Value, run: &RunResult) -> Vec<String> {
-    let expected = &vector["expected"];
-    let mut diffs = Vec::new();
-
-    let exp_html = expected["html"].as_str().expect("expected.html");
-    let exp_html = if let Some((_, reason, ahead)) =
-        HTML_AHEAD_OF_PIN.iter().find(|(slug, _, _)| *slug == name)
-    {
+    let mut expected = vector["expected"].clone();
+    for (_, field, ahead) in AHEAD_OF_PIN.iter().filter(|(slug, _, _)| *slug == name) {
+        let ahead = Value::parse(ahead).expect("declared include field");
         assert_ne!(
-            exp_html, *ahead,
-            "{name}: remove its retired HTML_AHEAD_OF_PIN entry"
+            expected[*field], ahead,
+            "{name}.{field}: retire the caught-up declaration"
         );
-        eprintln!("{name}: ahead of the shared golden ({reason})");
-        ahead
-    } else {
-        exp_html
-    };
+        let Value::Obj(fields) = &mut expected else {
+            panic!("expected object")
+        };
+        fields
+            .iter_mut()
+            .find(|(key, _)| key == field)
+            .expect("declared field")
+            .1 = ahead;
+    }
+    let expected = &expected;
+    let mut diffs = Vec::new();
+    let exp_html = expected["html"].as_str().expect("expected.html");
     if run.html != exp_html {
         diffs.push(format!(
             "html:\n    expected {exp_html:?}\n    actual   {:?}",
@@ -702,10 +726,10 @@ fn include_conformance_vectors_match_carve_js_goldens() {
     // feature the filesystem vectors are skipped, and the count is asserted
     // rather than printed: a skip rule with a typo would otherwise skip
     // everything and the suite would go green having checked nothing.
-    for (name, _, _) in HTML_AHEAD_OF_PIN {
+    for (name, _, _) in AHEAD_OF_PIN {
         assert!(
             seen.iter().any(|slug| slug == name),
-            "HTML_AHEAD_OF_PIN names missing vector {name}"
+            "AHEAD_OF_PIN names missing vector {name}"
         );
     }
     let compared = passed + documented.len() + failures.len();

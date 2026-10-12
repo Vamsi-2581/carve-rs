@@ -2794,10 +2794,10 @@ fn adjacent_lines_after_a_section_is_a_selection_conflict() {
 }
 
 #[test]
-fn a_tab_separates_the_path_from_the_name() {
+fn a_tab_belongs_to_the_path_before_the_name() {
     let result = expanded_alpha("{{ c.crv\t#Alpha }}");
-    assert_eq!(result.rules(), Vec::<&str>::new());
-    assert!(result.html.contains("alpha text"), "{}", result.html);
+    assert_eq!(result.rules(), vec!["include-unresolved"]);
+    assert!(result.html.contains("c.crv\t"), "{}", result.html);
 }
 
 #[test]
@@ -2836,4 +2836,15 @@ fn the_padding_around_the_whole_directive_is_still_required() {
         assert_eq!(result.rules(), Vec::<&str>::new(), "{source}");
         assert_eq!(result.html, literal_html(source), "{source}");
     }
+}
+
+#[test]
+fn include_padding_and_slot_separators_are_spaces() {
+    for source in ["{{\tc.crv }}", "{{ c.crv\t}}"] {
+        let result = expand(source, &[("c.crv", "expanded")]);
+        assert!(result.html.contains("c.crv"), "{}", result.html);
+        assert!(result.dependencies.is_empty());
+    }
+    let result = expand("{{ c.crv\t#Alpha }}", &[("c.crv", "# Alpha\nbody")]);
+    assert_eq!(result.rules(), vec!["include-unresolved"]);
 }

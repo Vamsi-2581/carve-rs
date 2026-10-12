@@ -1987,3 +1987,6 @@ mod djot_quoted_thematic_text;
 
 #[path = "../term_intervening_block_payload.rs"]
 mod term_intervening_block_payload;
+
+#[path = "../space_only_inline_slots.rs"]
+mod space_only_inline_slots;

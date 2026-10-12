@@ -7162,7 +7162,7 @@ fn spell_crossref_target(text: &str) -> String {
     if text.is_empty()
         || text
             .bytes()
-            .any(|b| matches!(b, b'>' | b' ' | b'\t' | b'\r' | b'\n' | 0))
+            .any(|b| matches!(b, b'>' | b' ' | b'\r' | b'\n' | 0))
     {
         crate::render_carve_error::record_unspellable(
             "heading_ref",

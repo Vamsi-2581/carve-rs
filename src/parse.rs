@@ -4403,18 +4403,13 @@ fn closing_title_quote(after_pad: &str) -> Option<usize> {
 /// tell a brace or a quote in the DESTINATION from one opening the block, so
 /// `[a]: /u{x} {.c}` and `[a]: it's {.c}` both fell through to prose.
 ///
-/// THE HEAD OF THE LINE IS DELIBERATELY UNTOUCHED. carve#911 rules what follows
-/// the destination; a run BEFORE it is a different question, and the executable
-/// spec agrees with the leniency - `[a]: <U+202F>javascript:alert(1)` is still a
-/// definition there, with the destination sanitized rather than the line
-/// refused.
 fn parse_link_def_target_parts(target: &str) -> Option<(String, Option<String>, Option<Attrs>)> {
     // THE LINE ENDING IS `whitespace` - a space or a tab, the same terminal
     // `blank_line` takes (PART 1, carve#890). So `[a]: /u<SP>` is a definition
     // and `[a]: /u<NBSP>` is not: a no-break space, an en quad, a byte order
     // mark and a form feed are CONTENT under that ruling, and content after the
     // destination is what the anchor rejects.
-    let target = trim_ascii_end(target.trim_start());
+    let target = trim_ascii_end(target.trim_start_matches(' '));
     // `link_destination` ends at the first whitespace, and that scan IS the
     // Unicode property (`unicode_url_char` is "non-whitespace, non-ASCII").
     let end = target
@@ -21157,7 +21152,7 @@ fn parse_attrs_with(src: &str, space_only: bool) -> Option<Attrs> {
     // them one at a time is how the executable spec left `[x]{<TAB>}` a valid
     // EMPTY block after its separator had already been narrowed. Inside a
     // QUOTED value the character is content and does not move.
-    if space_only {
+    {
         let mut quote: Option<char> = None;
         let mut escaped = false;
         for ch in src.chars() {
@@ -21176,7 +21171,8 @@ fn parse_attrs_with(src: &str, space_only: bool) -> Option<Attrs> {
                 None => match ch {
                     '\\' => escaped = true,
                     '"' | '\'' => quote = Some(ch),
-                    '\t' | '\r' | '\n' => return None,
+                    '\t' => return None,
+                    '\r' | '\n' if space_only => return None,
                     _ => {}
                 },
             }
@@ -24887,7 +24883,7 @@ fn parse_crossref(text: &str, pos: usize, bounds: &InlineBounds<'_>) -> Option<(
     }
     let close = inner
         .bytes()
-        .position(|b| matches!(b, b'>' | b' ' | b'\t' | b'\r' | b'\n'))?;
+        .position(|b| matches!(b, b'>' | b' ' | b'\r' | b'\n'))?;
     if inner.as_bytes()[close] != b'>' {
         bounds
             .crossref_invalid_range
@@ -26382,7 +26378,7 @@ impl CrossrefIndex {
 /// label and the heading text are both trimmed, their internal whitespace runs
 /// collapsed to one space, NFC-normalized, and then compared with exact case.
 pub(crate) fn normalize_heading_label(s: &str) -> String {
-    s.split([' ', '\t', '\n', '\u{000C}', '\r'])
+    s.split(' ')
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")

@@ -41,12 +41,12 @@ fn a_definition_destination_ends_at_unicode_whitespace() {
 }
 
 #[test]
-fn a_definition_destination_is_trimmed_at_the_ends() {
+fn a_definition_separator_accepts_only_spaces() {
     for space in [NNBSP, THIN, IDEOGRAPHIC] {
         let out = carve::to_html(&format!("[x][r]\n\n[r]: {space}https://e.com\n"));
         assert!(
-            out.contains(r#"href="https://e.com""#),
-            "leading {space:?} survived: {out}"
+            !out.contains("href="),
+            "leading {space:?} formed a definition: {out}"
         );
     }
 }
