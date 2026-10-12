@@ -11,7 +11,7 @@ const COMMENT: &str = "<!---->";
 pub(crate) struct PreparedStrikes<'a> {
     pub text: Cow<'a, str>,
     comments: Vec<usize>,
-    references: HashMap<(usize, usize), (String, String)>,
+    references: HashMap<(usize, usize), (String, String, bool)>,
 }
 
 impl PreparedStrikes<'_> {
@@ -30,6 +30,12 @@ impl PreparedStrikes<'_> {
         original(range.start)..original(range.end)
     }
 
+    pub fn reference_has_title(&self, range: &Range<usize>) -> Option<bool> {
+        self.references
+            .get(&(range.start, range.end))
+            .map(|(_, _, title)| *title)
+    }
+
     pub fn reference(
         &self,
         link: BrokenLink<'_>,
@@ -40,7 +46,7 @@ impl PreparedStrikes<'_> {
         let range = self.original_range(link.span);
         self.references
             .get(&(range.start, range.end))
-            .map(|(destination, title)| (destination.clone().into(), title.clone().into()))
+            .map(|(destination, title, _)| (destination.clone().into(), title.clone().into()))
     }
 }
 
@@ -77,12 +83,7 @@ pub(crate) fn prepare(source: &str, options: Options) -> PreparedStrikes<'_> {
             continue;
         }
         let end = at + bytes[at..].iter().take_while(|&&byte| byte == b'~').count();
-        let mut escape = at;
-        while escape > 0 && bytes[escape - 1] == b'\\' {
-            escape -= 1;
-        }
         if end == at + 1
-            && (at - escape) % 2 == 0
             && word_neighbor(source[..at].chars().next_back())
             && word_neighbor(source[end..].chars().next())
         {
@@ -97,7 +98,8 @@ pub(crate) fn prepare(source: &str, options: Options) -> PreparedStrikes<'_> {
     let mut owners: Vec<Range<usize>> = Vec::new();
     let mut opaque = 0usize;
     let mut autolink = false;
-    for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
+    let mut parser = Parser::new_ext(source, options).into_offset_iter();
+    while let Some((event, range)) = parser.next() {
         match &event {
             Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock | Tag::MetadataBlock(_)) => opaque += 1,
             Event::End(TagEnd::CodeBlock | TagEnd::HtmlBlock | TagEnd::MetadataBlock(_)) => {
@@ -112,12 +114,14 @@ pub(crate) fn prepare(source: &str, options: Options) -> PreparedStrikes<'_> {
                     link_type,
                     dest_url,
                     title,
+                    id,
                     ..
                 }
                 | Tag::Image {
                     link_type,
                     dest_url,
                     title,
+                    id,
                     ..
                 },
             ) => {
@@ -134,7 +138,14 @@ pub(crate) fn prepare(source: &str, options: Options) -> PreparedStrikes<'_> {
                     link_type,
                     LinkType::Reference | LinkType::Collapsed | LinkType::Shortcut
                 ) {
-                    let target = (dest_url.to_string(), title.to_string());
+                    let target = (
+                        dest_url.to_string(),
+                        title.to_string(),
+                        parser
+                            .reference_definitions()
+                            .get(id)
+                            .is_some_and(|definition| definition.title.is_some()),
+                    );
                     result
                         .references
                         .insert((range.start, range.end), target.clone());

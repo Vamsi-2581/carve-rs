@@ -7718,6 +7718,18 @@ fn definition_entry_extent(
             j += 1;
             continue;
         }
+        if term_open
+            && column == base
+            && local.starts_with('{')
+            && !trim_ascii_end(&local).ends_with('}')
+        {
+            if let Some(count) = standalone_attrs_block_len_iter(
+                std::iter::once(local.as_str())
+                    .chain(lines[j + 1..].iter().map(|line| line.as_ref())),
+            ) {
+                return (j + count - 1, last_half_is_term);
+            }
+        }
         if term_open && column > base {
             let text = strip_leading_columns(candidate, column);
             if !is_list_marker(&text) {
@@ -10114,7 +10126,7 @@ impl NestedFenceReplay {
                 } else {
                     if is_comment_fence_close(trim_ascii_start(text), width) {
                         chain[level].host_comment = None;
-                        chain[level].by_comment = true;
+                        chain[level].by_comment = false;
                     }
                     if !provisional {
                         chain.truncate(level + 1);
@@ -10187,11 +10199,7 @@ impl NestedFenceReplay {
                 && (!chain[level].colons.is_empty() || chain[level].by_colon)
                 && is_line_comment_any_column(text)
             {
-                chain[level].by_comment = chain[level].para
-                    || chain[level]
-                        .hosts
-                        .last()
-                        .is_some_and(|&(_, column, _)| indent_columns(text) >= column);
+                chain[level].by_comment = false;
                 chain[level].para = false;
                 chain[level].colon_absorption = false;
                 return;
@@ -10463,11 +10471,10 @@ impl NestedFenceReplay {
                 return;
             }
             if is_line_comment_any_column(text) {
-                here.by_comment = here.para
-                    || here
-                        .hosts
-                        .last()
-                        .is_some_and(|&(_, column, _)| indent_columns(text) >= column);
+                here.by_comment = here
+                    .hosts
+                    .last()
+                    .is_some_and(|&(_, column, _)| indent_columns(text) < column);
             }
             let mut paragraph = ParaOpen::from_line(text, here.colon_absorption);
             here.para = paragraph.get();
@@ -14633,7 +14640,27 @@ fn trailing_marker_line_content(body: &str) -> Option<String> {
     Some(marker.content.to_string())
 }
 
+/// PART 1 S4's one question, asked of a container's WHOLE body: does the last
+/// block leave a paragraph open?
+///
+/// [`nested_ends_with_open_paragraph`] answers the same question for a body
+/// collected BESIDE a marker line that is still holding a paragraph of its own,
+/// which is why it looks PAST a trailing run of comments: there the open
+/// paragraph is the marker line's, and an invisible block did not close it.
+/// Here the body is all there is - `- %% c` writes the comment as the item's
+/// first and only block, so there is no earlier paragraph for it to leave open,
+/// and looking past it would find one that was never written
+/// (markup-carve/carve#1280).
 fn body_ends_with_open_paragraph(body: &str, options: &Options<'_>) -> bool {
+    if body_ends_with_an_attribute_line(body)
+        || body
+            .lines()
+            .rev()
+            .find(|line| !is_blank_line(line))
+            .is_some_and(|line| is_collected_definition_placeholder(trim_ascii_start(line)))
+    {
+        return false;
+    }
     let blocks = probe_blocks(body, options);
     block_ends_with_open_paragraph(blocks.last(), colon_fences_left_open(body), false)
 }
@@ -15908,6 +15935,7 @@ fn collect_indented_block_mapped_with_columns(
     let mut nested_fence: Option<FenceOpen> = None;
     while let Some(line) = cur.peek() {
         if is_blank_line(line) {
+            marker_colon_retained_para = false;
             if comment_fence.is_none() && fence.is_none() {
                 marker_term_open = false;
             }
@@ -16177,19 +16205,26 @@ fn collect_indented_block_mapped_with_columns(
         if !colon_open.is_empty() && indent < strip_cols && !fence_owns_flush_left {
             break;
         }
+        if marker_colon_retained_para
+            && indent >= strip_cols
+            && item_block_opener(trim_ascii_start(line))
+            && strip_blockquote_prefix(trim_ascii_start(line)).is_none()
+            && !is_line_comment_any_column(line)
+            && comment_fence.is_none()
+            && fence.is_none()
+        {
+            marker_colon_retained_para = false;
+        }
         if marker_colon.is_some()
             && !literal_marker_body
             && indent < strip_cols
             && indent > parent_indent
             && !marker_colon_retained_para
         {
-            let after_comment = cur
-                .closed_comment_location
-                .is_some_and(|(at, _)| at + 1 == cur.pos)
-                || cur
-                    .pos
-                    .checked_sub(1)
-                    .is_some_and(|at| is_line_comment_any_column(cur.lines.at(at)));
+            let after_comment = cur.pos.checked_sub(1).is_some_and(|at| {
+                let previous = cur.lines.at(at);
+                indent_columns(previous) < strip_cols && is_line_comment_any_column(previous)
+            });
             if after_comment && !interrupts_lazy_continuation_as_container(cur, line) {
                 marker_colon_retained_para = true;
             }
@@ -16630,7 +16665,10 @@ fn collect_indented_block_mapped_with_columns(
                 && !is_line_comment_any_column(line)
                 && !is_collected_definition_placeholder(&sliced)
             {
-                closed_code_leaf = false;
+                closed_code_leaf = indent >= strip_cols
+                    && (parse_standalone_attrs(trim_ascii_start(line)).is_some()
+                        || parse_footnote_def_line(trim_ascii_start(line)).is_some()
+                        || parse_link_def_line(trim_ascii_start(line)).is_some());
             }
             if fence.is_none() {
                 folded_code_span = false;
@@ -17768,6 +17806,9 @@ fn body_ends_with_an_attribute_line(source: &str) -> bool {
     let Some(end) = lines.iter().rposition(|line| !is_blank_line(line)) else {
         return false;
     };
+    if !trim_ascii_end(lines[end]).ends_with('}') {
+        return false;
+    }
     // The WRAPPED spelling (`{.k` / `#x}`) counts too. This used to test the
     // last line alone, so a block that closed on it but OPENED on an earlier one
     // was invisible here and the body was read as ending in a paragraph
@@ -29421,29 +29462,38 @@ mod shared_colon_work_tests {
     #[test]
     fn rejected_fence_carry_scans_only_new_chunks() {
         for positions in [false, true] {
-            for count in [64, 256, 1024] {
-                let source = format!(
-                    "- a\n    ~~~\n{}",
-                    "  ````\n  code\n  ````\nafter\n".repeat(count)
-                );
-                source_map::MAPPED_SOURCE_SCAN_BYTES.with(|work| work.set(0));
-                CODE_INDEX_LINES.with(|work| work.set(0));
-                let html = crate::to_html_with_options(
-                    &source,
-                    &Options {
-                        positions,
-                        ..Options::default()
-                    },
-                );
-                assert_eq!(html.matches("<pre>").count(), count);
-                assert_eq!(html.matches("after").count(), count);
-                assert!(
-                    source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get) <= source.len() * 64,
-                    "count={count}, positions={positions}, scan={}, bytes={}",
-                    source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get),
-                    source.len()
-                );
-                assert!(CODE_INDEX_LINES.with(Cell::get) <= source.lines().count() * 64);
+            for retained in [false, true] {
+                for count in [64, 256, 1024] {
+                    let source = format!(
+                        "- a\n    ~~~\n{}",
+                        format!(
+                            "  ````\n  code\n  ````\n{}after\n",
+                            if retained { "  " } else { "" }
+                        )
+                        .repeat(count)
+                    );
+                    source_map::MAPPED_SOURCE_SCAN_BYTES.with(|work| work.set(0));
+                    CODE_INDEX_LINES.with(|work| work.set(0));
+                    let html = crate::to_html_with_options(
+                        &source,
+                        &Options {
+                            positions,
+                            ..Options::default()
+                        },
+                    );
+                    assert_eq!(
+                        html.matches("<pre>").count(),
+                        if retained { count } else { 1 }
+                    );
+                    assert_eq!(html.matches("after").count(), count);
+                    assert!(
+                        source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get) <= source.len() * 64,
+                        "count={count}, positions={positions}, scan={}, bytes={}",
+                        source_map::MAPPED_SOURCE_SCAN_BYTES.with(Cell::get),
+                        source.len()
+                    );
+                    assert!(CODE_INDEX_LINES.with(Cell::get) <= source.lines().count() * 64);
+                }
             }
         }
     }

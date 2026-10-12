@@ -326,5 +326,93 @@
     "carve": "- +\n- +\n",
     "native_html": "<ul>\n<li>\n</li>\n<li>\n</li>\n</ul>\n",
     "html": "<ul><li></li><li></li></ul>"
+  },
+  {
+    "id": "empty-review-code-after",
+    "source": "```\nx\n```\n-\n",
+    "carve": "```\nx\n```\n- +\n",
+    "from": "djot",
+    "native_html": "<pre><code>x\n</code></pre>\n<ul>\n<li>\n</li>\n</ul>\n",
+    "html": "<pre><code>x\n</code></pre><ul><li></li></ul>"
+  },
+  {
+    "id": "empty-review-div",
+    "source": "::: box\n-\n:::\n",
+    "carve": "::: box\n- +\n:::\n",
+    "from": "djot",
+    "native_html": "<div class=\"box\">\n<ul>\n<li>\n</li>\n</ul>\n</div>\n",
+    "html": "<div class=\"box\"><ul><li></li></ul></div>"
+  },
+  {
+    "id": "empty-review-hr",
+    "source": "***\n-\n",
+    "carve": "***\n- +\n",
+    "from": "djot",
+    "native_html": "<hr>\n<ul>\n<li>\n</li>\n</ul>\n",
+    "html": "<hr><ul><li></li></ul>"
+  },
+  {
+    "id": "empty-review-heading",
+    "source": "- a\n# h\n-\n",
+    "carve": "- a\n# h\n- +\n",
+    "from": "djot",
+    "native_html": "<ul>\n<li>\na\n</li>\n</ul>\n<section id=\"h\">\n<h1>h</h1>\n<ul>\n<li>\n</li>\n</ul>\n</section>\n",
+    "html": "<ul><li>a</li></ul><section id=\"h\"><h1>h</h1><ul><li></li></ul></section>"
+  },
+  {
+    "id": "empty-review-alpha",
+    "source": "a. x\nb.\nc. y\n",
+    "carve": "a. x\nb. +\nc. y\n",
+    "from": "djot",
+    "native_html": "<ol type=\"a\">\n<li>\nx\n</li>\n<li>\n</li>\n<li>\ny\n</li>\n</ol>\n",
+    "html": "<ol type=\"a\"><li>x</li><li></li><li>y</li></ol>"
+  },
+  {
+    "id": "empty-review-roman",
+    "source": "i) x\nii)\niii) y\n",
+    "carve": "i) x\nii) +\niii) y\n",
+    "from": "djot",
+    "native_html": "<ol type=\"i\">\n<li>\nx\n</li>\n<li>\n</li>\n<li>\ny\n</li>\n</ol>\n",
+    "html": "<ol type=\"i\" data-delim=\")\"><li>x</li><li></li><li>y</li></ol>"
+  },
+  {
+    "id": "empty-review-paren",
+    "source": "(a) x\n(b)\n(c) y\n",
+    "carve": "a. x\nb. +\nc. y\n",
+    "from": "djot",
+    "native_html": "<ol type=\"a\">\n<li>\nx\n</li>\n<li>\n</li>\n<li>\ny\n</li>\n</ol>\n",
+    "html": "<ol type=\"a\"><li>x</li><li></li><li>y</li></ol>"
+  },
+  {
+    "id": "empty-review-inline-fence",
+    "from": "djot",
+    "source": "x\n```\ny\n```\n-\n",
+    "carve": "x\n`\ny\n`\n-\n",
+    "native_html": "<p>x\n<code>\ny\n</code>\n-</p>\n",
+    "html": "<p>x\n<code>\ny\n</code>\n-</p>"
+  },
+  {
+    "id": "empty-review-quote-exit",
+    "from": "djot",
+    "source": "> a\n-\n",
+    "carve": "> a\n\n- +\n",
+    "native_html": "<blockquote>\n<p>a</p>\n</blockquote>\n<ul>\n<li>\n</li>\n</ul>\n",
+    "html": "<blockquote><p>a</p></blockquote><ul><li></li></ul>"
+  },
+  {
+    "id": "empty-review-quote-paragraph",
+    "from": "djot",
+    "source": "> a\n> -\n",
+    "carve": "> a\n> -\n",
+    "native_html": "<blockquote>\n<p>a\n-</p>\n</blockquote>\n",
+    "html": "<blockquote><p>a\n-</p></blockquote>"
+  },
+  {
+    "id": "empty-review-escaped-quote",
+    "from": "djot",
+    "source": "a\n> -\n",
+    "carve": "a\n\\> -\n",
+    "native_html": "<p>a\n&gt; -</p>\n",
+    "html": "<p>a\n&gt; -</p>"
   }
 ]

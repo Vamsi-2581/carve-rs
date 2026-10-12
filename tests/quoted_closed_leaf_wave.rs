@@ -8,8 +8,8 @@ fn quoted_closed_leaves_release_below_column_tail() {
     for row in rows.as_array().unwrap() {
         let imported = row["source"].as_str().unwrap();
         for html in [
-            carve::to_html(&imported),
-            carve::render_html(&carve::parse(&imported)).unwrap(),
+            carve::to_html(imported),
+            carve::render_html(&carve::parse(imported)).unwrap(),
         ] {
             assert_eq!(
                 whitespace.replace_all(&html, "><").trim(),

@@ -1841,32 +1841,76 @@ fn convert_djot_block_markers(source: &str) -> String {
         nested_lines.push(ancestors.last().is_some_and(|top| top.1));
         ancestors.push((columns, list_marker(line)));
     }
+    let fenced_mask = mask_djot_fences(source, None, &[], true);
+    let fenced_lines: Vec<_> = fenced_mask.split('\n').collect();
+    let mut div_widths = Vec::new();
     let mut item_columns: Vec<(usize, usize)> = Vec::new();
     let mut boundary = true;
     let mut quote_depth = 0;
-    let empty_marker = cached_regex!(r"^(?:[-*+]|[0-9]+[.)]|\([0-9]+\))[ \t]*$").unwrap();
-    let full_marker = cached_regex!(r"^(?:[-*+]|[0-9]+[.)]|\([0-9]+\))[ \t]+").unwrap();
+    let mut quote_exit_items = HashSet::new();
+    let empty_marker = cached_regex!(
+        r"^(?:[-*+]|(?:[0-9]+|[ivxlcdmIVXLCDM]+|[a-zA-Z])[.)]|\([0-9A-Za-z]+\))[ \t]*$"
+    )
+    .unwrap();
+    let full_marker = cached_regex!(
+        r"^(?:[-*+]|(?:[0-9]+|[ivxlcdmIVXLCDM]+|[a-zA-Z])[.)]|\([0-9A-Za-z]+\))[ \t]+"
+    )
+    .unwrap();
+    let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
+    let thematic = cached_regex!(r"^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,})$").unwrap();
     for index in 0..lines.len() {
-        let prefix = quote_prefix_len(masked[index]);
-        let depth = masked[index][..prefix]
+        let prefix = quote_prefix_len(&lines[index]);
+        let depth = lines[index][..prefix]
             .bytes()
             .filter(|byte| *byte == b'>')
             .count();
+        let exits_quote = depth < quote_depth;
         if depth != quote_depth {
             boundary = true;
         }
         quote_depth = depth;
         let rest = &masked[index][prefix..];
-        let (column, indent) = leading_indent(rest);
+        let (column, indent) = leading_indent(&lines[index][prefix..]);
         let content = &rest[indent..];
+        let authored = &lines[index][prefix + indent..];
         if content.trim().is_empty() {
+            if authored.trim().is_empty()
+                || (fenced_lines[index] != lines[index] && fenced_lines[index].trim().is_empty())
+            {
+                boundary = true;
+            }
+            continue;
+        }
+        let colon_width = authored.bytes().take_while(|byte| *byte == b':').count();
+        let div_close = colon_width >= 3
+            && authored.trim_end().len() == colon_width
+            && div_widths.last() == Some(&(depth, colon_width));
+        if div_close || (boundary && colon_width >= 3) {
+            if div_close {
+                div_widths.pop();
+            } else {
+                div_widths.push((depth, colon_width));
+            }
             boundary = true;
+            item_columns.retain(|&(held_depth, held_column)| {
+                held_depth < depth || held_depth == depth && held_column < column
+            });
+            continue;
+        }
+        if heading.is_match(content) || (boundary && thematic.is_match(content)) {
+            boundary = true;
+            item_columns.retain(|&(held_depth, held_column)| {
+                held_depth < depth || held_depth == depth && held_column < column
+            });
             continue;
         }
         let sibling = item_columns
             .iter()
             .any(|&(held_depth, held_column)| held_depth == depth && held_column == column);
         if empty_marker.is_match(content) && (boundary || sibling) {
+            if exits_quote {
+                quote_exit_items.insert(index);
+            }
             let marker = content.trim_end();
             let marker = if marker == "+" { "-" } else { marker };
             lines[index] = format!("{}{}{} +", &lines[index][..prefix], &rest[..indent], marker);
@@ -1994,7 +2038,18 @@ fn convert_djot_block_markers(source: &str) -> String {
             );
         }
     }
-    lines.join("\n")
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if quote_exit_items.contains(&index) {
+                format!("\n{line}")
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn mask_djot_attributes(source: &str) -> String {

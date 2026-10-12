@@ -438,5 +438,21 @@
     "native_html": "<table>\n<thead>\n<tr>\n<th>col</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td><del>a</del>b~</td>\n</tr>\n</tbody>\n</table>\n",
     "carve": "|= col |\n| {~a~}b~ |\n",
     "html": "<table><thead><tr><th scope=\"col\">col</th></tr></thead><tbody><tr><td><s>a</s>b~</td></tr></tbody></table>"
+  },
+  {
+    "id": "gfm-review-0",
+    "source": "€~a~b~\n",
+    "from": "markdown",
+    "native_html": "<p>€<s>a</s>b~</p>\n",
+    "carve": "€{~a~}b~\n",
+    "html": "<p>€<s>a</s>b~</p>"
+  },
+  {
+    "id": "gfm-review-1",
+    "source": "~a~€~\n",
+    "from": "markdown",
+    "native_html": "<p><s>a</s>€~</p>\n",
+    "carve": "~a~€~\n",
+    "html": "<p><s>a</s>€~</p>"
   }
 ]

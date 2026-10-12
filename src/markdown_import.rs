@@ -780,10 +780,12 @@ fn markdown_to_ast_with_code_lines(
                             .count(),
                     )
                 } else {
-                    parser
-                        .reference_definitions()
-                        .get(id)
-                        .is_some_and(|definition| definition.title.is_some())
+                    strikes.reference_has_title(&range).unwrap_or_else(|| {
+                        parser
+                            .reference_definitions()
+                            .get(id)
+                            .is_some_and(|definition| definition.title.is_some())
+                    })
                 }
             }
             _ => false,
