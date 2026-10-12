@@ -1954,3 +1954,6 @@ mod djot_empty_item_wave;
 
 #[path = "../quoted_closed_leaf_wave.rs"]
 mod quoted_closed_leaf_wave;
+
+#[path = "../literal_payload_columns.rs"]
+mod literal_payload_columns;
