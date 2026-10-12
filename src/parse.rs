@@ -16528,6 +16528,14 @@ fn collect_indented_block_mapped_with_columns(
         }
         if authored_code_base.is_none()
             && (marker_definition_has_description || !marker_term_open)
+            && !(marker_is_definition_term
+                && marker_definition_has_description
+                && lines.last().is_some_and(|line| is_blank_line(line))
+                && lines
+                    .iter()
+                    .rev()
+                    .nth(1)
+                    .is_some_and(|line| !is_blank_line(line)))
             && fence.is_none()
             && !in_comment_span
             && colon_open.is_empty()
