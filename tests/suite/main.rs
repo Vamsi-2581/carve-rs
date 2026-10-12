@@ -1969,3 +1969,6 @@ mod held_description_tightness;
 
 #[path = "../invisible_leaf_after_quote.rs"]
 mod invisible_leaf_after_quote;
+
+#[path = "../quoted_list_opening_spans.rs"]
+mod quoted_list_opening_spans;

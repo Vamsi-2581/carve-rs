@@ -5569,6 +5569,29 @@ fn fill_offsets(blocks: &mut [BlockNode], line_starts: &CodepointLineStarts) {
 }
 
 /// Widen a container over the DEFINITION it hosted.
+fn start_list_at_markup_after_quote(pos: &mut Pos, lines: &[&str]) {
+    let Some(line) = lines.get(pos.start_line.saturating_sub(1)) else {
+        return;
+    };
+    let prefix: String = line
+        .chars()
+        .take(pos.start_column.saturating_sub(1))
+        .collect();
+    if !prefix.contains('>') {
+        return;
+    }
+    let tail: String = line
+        .chars()
+        .skip(pos.start_column.saturating_sub(1))
+        .collect();
+    if detect_list_marker_full(&tail).is_none() {
+        return;
+    }
+    let placing = tail.chars().count() - trim_ascii_start(&tail).chars().count();
+    pos.start_column += placing;
+    pos.start_offset += placing;
+}
+
 fn narrow_to_last_placed_child(blocks: &mut [BlockNode], lines: &[&str]) {
     for block in blocks.iter_mut() {
         match block {
@@ -5647,6 +5670,9 @@ fn narrow_to_last_placed_child(blocks: &mut [BlockNode], lines: &[&str]) {
                 }
             }
             BlockNode::List(n) => {
+                if let Some(pos) = n.pos.as_mut() {
+                    start_list_at_markup_after_quote(pos, lines);
+                }
                 for item in &mut n.items {
                     narrow_to_last_placed_child(&mut item.children, lines);
                     let last = item
@@ -5656,6 +5682,7 @@ fn narrow_to_last_placed_child(blocks: &mut [BlockNode], lines: &[&str]) {
                         .find_map(crate::ast_json::block_pos)
                         .cloned();
                     if let Some(pos) = item.pos.as_mut() {
+                        start_list_at_markup_after_quote(pos, lines);
                         narrow_container_end(pos, last, lines, false);
                     }
                 }
