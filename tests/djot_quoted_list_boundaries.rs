@@ -272,3 +272,11 @@ fn paragraph_footnote_does_not_open_reference_boundary() {
         1
     );
 }
+
+#[test]
+fn adjacent_footnotes_remain_footnotes_beside_caret_reference() {
+    let result = carve::migrate_djot("[^n]:/u\n\n[^n][^n]");
+    let html = carve::to_html(&result.value);
+    assert_eq!(html.matches("role=\"doc-noteref\"").count(), 2);
+    assert!(!html.contains("carve-djot-reference"));
+}

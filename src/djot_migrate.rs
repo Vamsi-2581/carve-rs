@@ -102,7 +102,20 @@ pub(crate) fn djot_to_carve_prepared(stripped_definitions: &DjotFootnoteAttribut
 fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> String {
     let normalized = &stripped_definitions.source;
     let (frontmatter, separator, body) = split_frontmatter(normalized);
-    let carried = carry_djot_attributes_across_div_closers(body);
+    let caret_references = if body.contains("[^")
+        && body.contains("]:")
+        && body.lines().any(|line| {
+            cached_regex!(r"^\[\^[^\]\n]*\]:")
+                .unwrap()
+                .is_match(&line[djot_content_start(line)..])
+        }) {
+        let mut accepted = HashMap::new();
+        fold_djot_references_with_decisions(body, Some(&mut accepted));
+        std::borrow::Cow::Owned(normalize::caret_references(body, &accepted))
+    } else {
+        std::borrow::Cow::Borrowed(body)
+    };
+    let carried = carry_djot_attributes_across_div_closers(&caret_references);
     let (literal_attributes, inherited) = escape_invalid_djot_attributes(&carried);
     let attributes = normalize_djot_attribute_lines(&literal_attributes);
     let owned_references = fold_djot_references(&attributes);
@@ -177,6 +190,7 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         .collect();
     let folded = collapsed.replace_all(&folded, |caps: &regex::Captures<'_>| {
         if collapsed_mask.as_bytes()[caps.get(0).unwrap().start()] == caps[0].as_bytes()[0]
+            && !(caps[2].starts_with('^') && caps[2].len() > 1)
             && definitions.contains(&caps[2])
         {
             format!("{}[{}]", &caps[1], &caps[2])
@@ -6322,7 +6336,7 @@ pub(super) fn fold_djot_references_with_decisions(
     let mut lines: Vec<String> = source.split('\n').map(str::to_owned).collect();
     let mask = mask_djot_inline(source, false);
     let mut rows = djot_table_rows(source, &mask);
-    let definition = cached_regex!(r"^\[([^\^\]\n][^\]\n]*|)\]:[ \t]*([^ \t\r\n]*)\r?$").unwrap();
+    let definition = cached_regex!(r"^\[([^\]\n]*)\]:[ \t]*([^ \t\r\n]*)\r?$").unwrap();
     let boundary = cached_regex!(r"^(?:#{1,6} |:{3,}|\[[^\]]*\]:|(?:[-*][ \t]*){3,}$)").unwrap();
     let fence_end = cached_regex!(r"^(?:`{3,}|~{3,})[ \t]*$").unwrap();
     let marker = cached_regex!(r"(?:[-*+]|[0-9A-Za-z]+[.)]|\([0-9A-Za-z]+\)|:)[ \t]+").unwrap();
@@ -6356,7 +6370,15 @@ pub(super) fn fold_djot_references_with_decisions(
         let owner_exit = definition_owner.is_some_and(|(start, owner_depth)| {
             depth < owner_depth || depth == owner_depth && physical_prefix.len() < start
         });
-        let metadata = definition.is_match(content)
+        let definition_caps = definition.captures(content).filter(|caps| {
+            !caps[1].starts_with('^')
+                || caps[1].len() == 1
+                || !matches!(
+                    content.as_bytes().get(caps[1].len() + 3),
+                    None | Some(b' ' | b'\t' | b'\r')
+                )
+        });
+        let metadata = definition_caps.is_some()
             || content.starts_with('{')
                 && read_djot_word_attributes(content, 0)
                     .is_some_and(|(end, _)| end == content.trim_end().len());
@@ -6447,7 +6469,7 @@ pub(super) fn fold_djot_references_with_decisions(
         if !separator.is_empty() {
             lines[n] = format!("{separator}{line}");
         }
-        if let Some(caps) = definition.captures(content) {
+        if let Some(caps) = definition_caps {
             if mask.as_bytes().get(offset + at) == Some(&b'[') && !allowed {
                 lines[n] = format!("{}{}", &line[..at], line[at..].replacen("]:", "]\\:", 1));
             }
@@ -7003,6 +7025,7 @@ fn normalize_djot_footnotes(
             at > 0
                 && at < bytes.len()
                 && bytes[at - 1] == b'!'
+                && (bytes.get(at + 1) != Some(&b'^') || close == at + 2)
                 && matches!(bytes.get(close + 1), Some(b'[' | b'('))
         })
         .map(|(&at, &close)| (at, close))
@@ -7062,7 +7085,7 @@ fn normalize_djot_footnotes(
             .map(|d| d.1)
             .or_else(|| brackets.get(&i).copied());
         if bytes[i..].starts_with(b"[^") && (definition.is_some() || mask.as_bytes()[i] == b'[') {
-            if let Some(end) = end {
+            if let Some(end) = end.filter(|&end| end > i + 2) {
                 let key = definition.map_or_else(|| key_of(&source[i + 2..end]), |d| d.0.clone());
                 {
                     let rename =
@@ -7087,6 +7110,13 @@ fn normalize_djot_footnotes(
                         output.extend_from_slice(empty_note.as_bytes());
                         i += 1;
                     }
+                    if definition.is_some()
+                        && bytes.get(i) == Some(&b':')
+                        && bytes.get(i + 1) == Some(&b'\t')
+                    {
+                        output.extend_from_slice(b": ");
+                        i += 2;
+                    }
                     if definition.is_none()
                         && bytes.get(i) == Some(&b':')
                         && line_heads.contains(&at)
@@ -7097,6 +7127,14 @@ fn normalize_djot_footnotes(
                     continue;
                 }
             }
+        }
+        if bytes[i] == b'!'
+            && !is_escaped(bytes, i)
+            && bytes.get(i + 1..i + 3) == Some(b"[^")
+            && brackets.get(&(i + 1)).is_some_and(|&end| end > i + 3)
+            && mask.as_bytes().get(i + 1) == Some(&b'[')
+        {
+            output.push(b'\\');
         }
         output.push(bytes[i]);
         i += 1;
@@ -7416,7 +7454,7 @@ fn djot_content_start(line: &str) -> usize {
     let bytes = line.as_bytes();
     let mut at = 0;
     let marker_re = cached_regex!(
-        r"^(?:\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})\)|:)[ \t]+)"
+        r"^(?:\[\^[^\]\n]+\]:(?:[ \t]+|[\r\n]*$)|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]{2,}|[IVXLCDM]{2,})\)|:)[ \t]+)"
     )
     .unwrap();
     while at < bytes.len() {

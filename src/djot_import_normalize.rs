@@ -2170,7 +2170,9 @@ fn reference_uses<'a>(source: &'a str, mask: &str) -> Vec<ReferenceUse<'a>> {
         }
         if bytes[i] == b']' {
             if let Some(start) = stack.pop() {
-                if bytes.get(start + 1) != Some(&b'^') && bytes.get(i + 1) == Some(&b'[') {
+                if !(bytes.get(start + 1) == Some(&b'^') && i > start + 2)
+                    && bytes.get(i + 1) == Some(&b'[')
+                {
                     let mut end = i + 2;
                     while end < bytes.len()
                         && mask.as_bytes()[end] != b']'
@@ -2278,7 +2280,18 @@ fn reference_attribute_text(attrs: &[(String, Vec<String>)], table: bool) -> Str
 }
 
 pub(super) fn references(source: &str) -> String {
-    let definition = cached_regex!(r"(?m)^\[([^\]\n^][^\]\n]*)\]:[ \t]*([^ \t\r\n]*)\r?$").unwrap();
+    references_impl(source, None)
+}
+
+pub(super) fn caret_references(
+    source: &str,
+    accepted: &HashMap<usize, ReferenceDecision>,
+) -> String {
+    references_impl(source, Some(accepted))
+}
+
+fn references_impl(source: &str, accepted: Option<&HashMap<usize, ReferenceDecision>>) -> String {
+    let definition = cached_regex!(r"(?m)^\[([^\]\n]+)\]:[ \t]*([^ \t\r\n]*)\r?$").unwrap();
     let quote_prefix = cached_regex!(r"^(?:[ \t]*>[ \t]*)*[ \t]*").unwrap();
     let list_marker = cached_regex!(r"(?:[-*+] |[0-9A-Za-z]+[.)] |\([0-9A-Za-z]+\) )").unwrap();
     let block_end = cached_regex!(
@@ -2316,6 +2329,19 @@ pub(super) fn references(source: &str) -> String {
         let Some(c) = definition.captures(line[content_start..].trim_end_matches('\n')) else {
             continue;
         };
+        let caret = c[1].starts_with('^');
+        if caret
+            && c[1].len() > 1
+            && matches!(
+                line[content_start..].as_bytes().get(c[1].len() + 3),
+                None | Some(b' ' | b'\t' | b'\r' | b'\n')
+            )
+        {
+            continue;
+        }
+        if accepted.is_some_and(|decisions| !caret || !decisions.contains_key(&line_number)) {
+            continue;
+        }
         if content_start > 0
             && !valid_definition_lines
                 .get_or_insert_with(|| reference_definitions(source, &mask).1)
@@ -2339,7 +2365,10 @@ pub(super) fn references(source: &str) -> String {
         let mut first_attribute = line_start;
         let mut attribute_starts = Vec::new();
         let mut attribute_depth: Option<usize> = None;
-        while let Some(previous) = source[..previous_end].strip_suffix('\n') {
+        while let Some(previous) = source[..previous_end]
+            .strip_suffix('\n')
+            .filter(|_| accepted.is_none())
+        {
             let previous_start = previous.rfind('\n').map_or(0, |at| at + 1);
             let previous_line = &previous[previous_start..];
             let attribute_start = djot_content_start(previous_line);
@@ -2477,6 +2506,7 @@ pub(super) fn references(source: &str) -> String {
     let mut override_counts = HashMap::<String, HashMap<String, usize>>::new();
     let uses: Vec<_> = references
         .into_iter()
+        .filter(|reference| !reference.text.starts_with('^') || reference.text.len() == 1)
         .map(|reference| {
             let key = cached_reference_label(reference.text, reference.label, &mut label_cache);
             let mut end = reference.end;
@@ -2514,11 +2544,18 @@ pub(super) fn references(source: &str) -> String {
         }
     }
     let mut occupied: HashSet<String> = definitions.keys().cloned().collect();
+    if let Some(decisions) = accepted {
+        occupied.extend(
+            decisions
+                .values()
+                .map(|decision| definition_label(&decision.label)),
+        );
+    }
     occupied.extend(uses.iter().map(|reference| reference.key.clone()));
     let mut serial = 0;
     let mut aliases = HashMap::new();
     for key in &definition_keys {
-        if (key.contains('\\') || key.contains('|') || key.contains('['))
+        if (key.starts_with('^') || key.contains('\\') || key.contains('|') || key.contains('['))
             && !aliases.contains_key(key)
         {
             aliases.insert(
@@ -2664,6 +2701,20 @@ pub(super) fn references(source: &str) -> String {
         let Some((target, _, has_attribute_lines)) = definitions.get(&key) else {
             continue;
         };
+        if accepted.is_some() {
+            if let Some(alias) = aliases.get(&key) {
+                edits.push((
+                    start,
+                    end,
+                    format!(
+                        "[{}][{alias}]{}",
+                        reference.text,
+                        &source[reference.end..end]
+                    ),
+                ));
+            }
+            continue;
+        }
         if target.is_empty() {
             continue;
         }
@@ -2900,7 +2951,7 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
     let mut label_cache = HashMap::new();
     for reference in &references {
         let at = reference.start;
-        if reference.text.starts_with('^') {
+        if reference.text.starts_with('^') && reference.text.len() > 1 {
             continue;
         }
         let image =
