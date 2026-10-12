@@ -7343,6 +7343,8 @@ fn rebase_overindented_blocks(
     let quote_lines = std::cell::OnceCell::new();
     let mut i = 0usize;
     let mut nested_columns: Vec<usize> = Vec::new();
+    let mut descendant_code: Option<(FenceOpen, usize)> = None;
+    let mut orphaned_code: Option<(FenceOpen, usize)> = None;
     let mut after_blank = false;
     let mut paragraph_open = false;
     let mut opaque_quote_tail = false;
@@ -7370,6 +7372,32 @@ fn rebase_overindented_blocks(
         }
         let base = indent_columns(&lines[i]);
         let local_at_base = strip_leading_columns(&lines[i], base);
+        let mut closed_descendant_code = false;
+        if let Some((open, column)) = descendant_code {
+            if base < column {
+                orphaned_code = descendant_code.take();
+            } else if base == column && is_fence_close(&local_at_base, open) {
+                descendant_code = None;
+                closed_descendant_code = true;
+            }
+        }
+        if orphaned_code
+            .is_some_and(|(open, column)| base == column && is_fence_close(&local_at_base, open))
+        {
+            orphaned_code = None;
+            paragraph_open = true;
+            after_blank = false;
+            i += 1;
+            continue;
+        }
+        if !closed_descendant_code
+            && descendant_code.is_none()
+            && nested_columns.last().is_some_and(|column| base >= *column)
+        {
+            if let Some(open) = detect_fence_open(&local_at_base) {
+                descendant_code = Some((open, base));
+            }
+        }
         if base > 0
             && last_literal_base.is_some_and(|column| base != column)
             && detect_fence_open(&local_at_base).is_some()

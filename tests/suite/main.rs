@@ -2008,3 +2008,6 @@ mod item_hosted_named_colon;
 
 #[path = "../retained_paragraphs.rs"]
 mod retained_paragraphs;
+
+#[path = "../descendant_fence_scope.rs"]
+mod descendant_fence_scope;
