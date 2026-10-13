@@ -185,8 +185,8 @@ fn a_description_host_and_the_code_fence_spelling_are_unmoved() {
         concat!(
             "<ul>\n",
             "  <li>a\n",
-            "    <pre><code> p\n",
-            " ```\n",
+            "    <pre><code>p\n",
+            "```\n",
             "\n",
             "tail\n",
             "</code></pre>\n",
