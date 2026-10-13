@@ -50,15 +50,75 @@ impl PreparedStrikes<'_> {
     }
 }
 
-fn word_neighbor(value: Option<char>) -> bool {
+fn punctuation(ch: char) -> bool {
     static PUNCTUATION: OnceLock<Regex> = OnceLock::new();
-    value.is_some_and(|ch| {
-        let mut buffer = [0; 4];
-        !ch.is_whitespace()
-            && !ch.is_ascii_punctuation()
-            && !PUNCTUATION
-                .get_or_init(|| Regex::new(r"^\p{P}$").unwrap())
-                .is_match(ch.encode_utf8(&mut buffer))
+    let mut buffer = [0; 4];
+    ch.is_ascii_punctuation()
+        || PUNCTUATION
+            .get_or_init(|| Regex::new(r"^\p{P}$").unwrap())
+            .is_match(ch.encode_utf8(&mut buffer))
+}
+
+fn word_neighbor(value: Option<char>) -> bool {
+    value.is_some_and(|ch| !ch.is_whitespace() && !punctuation(ch))
+}
+
+/// Return the literal delimiter when pulldown pairs underscores whose
+/// flanks cmark-gfm rejects. Keep interior events, source coordinates, and
+/// reference labels intact.
+pub(crate) fn literal_underscore(
+    source: &str,
+    event: &Event<'_>,
+    range: &Range<usize>,
+) -> Option<Range<usize>> {
+    let (count, opening) = match event {
+        Event::Start(Tag::Emphasis) => (1, true),
+        Event::End(TagEnd::Emphasis) => (1, false),
+        Event::Start(Tag::Strong) => (2, true),
+        Event::End(TagEnd::Strong) => (2, false),
+        _ => return None,
+    };
+    let bytes = source.as_bytes();
+    let start = range.start;
+    let end = range.end;
+    if !bytes[start..start + count].iter().all(|&byte| byte == b'_')
+        || !bytes[end - count..end].iter().all(|&byte| byte == b'_')
+    {
+        return None;
+    }
+    let flanks = |at: usize| {
+        let mut start = at;
+        let mut end = at + count;
+        while start > 0 && bytes[start - 1] == b'_' {
+            start -= 1;
+        }
+        while bytes.get(end) == Some(&b'_') {
+            end += 1;
+        }
+        if bytes.get(start.wrapping_sub(1)) != Some(&b'~') && bytes.get(end) != Some(&b'~') {
+            return (true, true);
+        }
+        // cmark-gfm skips registered extension delimiters during this scan.
+        let before = source[..start].chars().rev().find(|&ch| ch != '~');
+        let after = source[end..].chars().find(|&ch| ch != '~');
+        let before_space = before.map_or(true, char::is_whitespace);
+        let after_space = after.map_or(true, char::is_whitespace);
+        let before_punct = before.is_some_and(punctuation);
+        let after_punct = after.is_some_and(punctuation);
+        let left = !after_space && (!after_punct || before_space || before_punct);
+        let right = !before_space && (!before_punct || after_space || after_punct);
+        (
+            left && (!right || before_punct),
+            right && (!left || after_punct),
+        )
+    };
+    if flanks(start).0 && flanks(end - count).1 {
+        return None;
+    }
+    Some(if opening {
+        start..start + count
+    } else {
+        end - count..end
     })
 }
 
