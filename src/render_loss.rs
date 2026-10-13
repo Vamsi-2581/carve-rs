@@ -46,6 +46,10 @@ pub struct RenderLoss {
     pub format: Option<String>,
     pub attribute: Option<String>,
     pub style: Option<&'static str>,
+    /// The authored ordered-list delimiter, for `list-delimiter-changed`.
+    pub delim: Option<char>,
+    /// The delimiter written instead, for `list-delimiter-changed`.
+    pub emitted_delim: Option<char>,
     pub target: RenderTarget,
     pub node_type: RawNodeType,
     pub pos: Option<Pos>,
@@ -149,6 +153,8 @@ pub(crate) fn record_raw_drop(format: &str, node_type: RawNodeType, pos: Option<
                 code: "raw-format-dropped",
                 attribute: None,
                 style: None,
+                delim: None,
+                emitted_delim: None,
                 format: Some(format.to_string()),
                 target: c.target,
                 node_type,
@@ -204,6 +210,8 @@ pub(crate) fn record_destination_denied(pos: Option<&Pos>, sink: DeniedSink) {
                 code: "destination-denied",
                 attribute: None,
                 style: None,
+                delim: None,
+                emitted_delim: None,
                 format: None,
                 target: c.target,
                 node_type: RawNodeType::Inline,
@@ -238,6 +246,8 @@ pub(crate) fn record_carrier_collision(
                 code: "carrier-attribute-dropped",
                 attribute: Some(authored.to_owned()),
                 style: None,
+                delim: None,
+                emitted_delim: None,
                 format: None,
                 target: c.target,
                 node_type,
@@ -261,6 +271,8 @@ pub(crate) fn record_ruby_flattened(ruby: &Ruby) {
                 code: "ruby-flattened",
                 attribute: None,
                 style: None,
+                delim: None,
+                emitted_delim: None,
                 format: None,
                 target: c.target,
                 node_type: RawNodeType::Inline,
@@ -286,6 +298,8 @@ pub(crate) fn record_editorial_comment_flattened(pos: Option<&Pos>) {
                 code: "editorial-comment-flattened",
                 attribute: None,
                 style: None,
+                delim: None,
+                emitted_delim: None,
                 format: None,
                 target: c.target,
                 node_type: RawNodeType::Inline,
@@ -309,6 +323,8 @@ pub(crate) fn record_definition_list_flattened(pos: Option<&Pos>) {
                 code: "definition-list-flattened",
                 attribute: None,
                 style: None,
+                delim: None,
+                emitted_delim: None,
                 format: None,
                 target: c.target,
                 node_type: RawNodeType::Block,
@@ -336,6 +352,8 @@ pub(crate) fn record_list_style_dropped(style: OrderedListType, pos: Option<&Pos
                 code: "list-style-dropped",
                 attribute: None,
                 style: Some(style),
+                delim: None,
+                emitted_delim: None,
                 format: None,
                 target: c.target,
                 node_type: RawNodeType::Block,
@@ -426,3 +444,28 @@ pub fn with_render_loss_report<T>(
 }
 
 pub(crate) use with_render_loss_report as checked;
+
+pub(crate) fn record_list_delimiter_changed(delim: char, emitted: char, pos: Option<&Pos>) {
+    COLLECTOR.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(c) = slot.as_mut() else { return };
+        c.total += 1;
+        *c.totals_by_code.entry("list-delimiter-changed").or_default() += 1;
+        if c.losses.len() < c.max {
+            c.losses.push(RenderLoss {
+                code: "list-delimiter-changed",
+                attribute: None,
+                style: None,
+                delim: Some(delim),
+                emitted_delim: Some(emitted),
+                format: None,
+                target: c.target,
+                node_type: RawNodeType::Block,
+                pos: pos.cloned(),
+                message: format!(
+                    "Changed an ordered list delimiter from {delim} to {emitted} while rendering markdown"
+                ),
+            });
+        }
+    });
+}
