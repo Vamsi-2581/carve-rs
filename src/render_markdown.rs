@@ -285,7 +285,7 @@ fn render_frontmatter(doc: &Document) -> Option<String> {
     Some(out)
 }
 
-fn referenced_link_labels(doc: &Document) -> HashSet<String> {
+pub(crate) fn referenced_link_labels(doc: &Document) -> HashSet<String> {
     use crate::include_walk::{visit_block_children, visit_inline_children, SubtreeVisitor};
     struct Labels(HashSet<String>);
     impl SubtreeVisitor for Labels {

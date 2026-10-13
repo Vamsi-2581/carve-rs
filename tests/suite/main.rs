@@ -2020,3 +2020,30 @@ mod line_block_fence_writer;
 
 #[path = "../spec_wave_parity.rs"]
 mod spec_wave_parity;
+
+#[path = "../wave7_quoted_term.rs"]
+mod wave7_quoted_term;
+
+#[path = "../wave7_html_tabs.rs"]
+mod wave7_html_tabs;
+
+#[path = "../wave7_unused_references.rs"]
+mod wave7_unused_references;
+
+#[path = "../wave7_link_footnotes.rs"]
+mod wave7_link_footnotes;
+
+#[path = "../wave7_2606.rs"]
+mod wave7_2606;
+
+#[path = "../wave7_2607.rs"]
+mod wave7_2607;
+
+#[path = "../wave7_2608.rs"]
+mod wave7_2608;
+
+#[path = "../wave7_2609.rs"]
+mod wave7_2609;
+
+#[path = "../wave7_description_openers.rs"]
+mod wave7_description_openers;

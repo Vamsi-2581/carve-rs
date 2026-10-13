@@ -7174,6 +7174,7 @@ impl<'a> Importer<'a> {
             .map(|label| crate::parse::label_key(&label))
             .collect();
 
+        let mut labels_in_order = Vec::with_capacity(definitions.len());
         for (index, definition) in definitions.iter().enumerate() {
             let conflicting = conflicting_carriers.contains(&node_key(&definition.block));
             if conflicting {
@@ -7216,6 +7217,39 @@ impl<'a> Importer<'a> {
                 number.to_string()
             };
             used_labels.insert(crate::parse::label_key(&label));
+            labels_in_order.push(label);
+        }
+        debug_assert_eq!(labels_in_order.len(), definitions.len());
+        // Register every site before reading bodies that can reference later notes.
+        for (definition, label) in definitions.iter().zip(&labels_in_order) {
+            for reference in &definition.refs {
+                let site = footnote_reference_site(reference);
+                let attrs = if Self::tag(reference).as_deref() == Some("sup") {
+                    let mut attrs = self.attrs(reference, "footnote").unwrap_or_default();
+                    attrs.id = None;
+                    attrs.order.retain(|slot| !matches!(slot, AttrSlot::Id));
+                    (!attrs.classes.is_empty() || !attrs.key_values.is_empty()).then_some(attrs)
+                } else {
+                    None
+                };
+                self.footnote_refs.insert(
+                    node_key(&site),
+                    (
+                        site,
+                        Footnote {
+                            attrs,
+                            id: Some(label.clone()),
+                            inline: None,
+                            number: None,
+                            ref_id: None,
+                            pos: None,
+                        },
+                    ),
+                );
+            }
+        }
+        for (index, (definition, label)) in definitions.iter().zip(&labels_in_order).enumerate() {
+            let conflicting = conflicting_carriers.contains(&node_key(&definition.block));
             if index == 0 {
                 remove_footnote_separator(&definition.block);
             }
@@ -7265,9 +7299,10 @@ impl<'a> Importer<'a> {
                 None
             };
             if inline.is_some()
-                && labels
-                    .iter()
-                    .any(|label| valid_footnote_carrier_label(label))
+                && std::iter::once(&definition.block)
+                    .chain(definition.refs.iter())
+                    .filter_map(|handle| Self::carrier(handle, crate::roundtrip::FOOTNOTE_LABEL))
+                    .any(|label| valid_footnote_carrier_label(&label))
             {
                 self.diag(
                     HtmlImportDiagnosticCode::AttributeDropped,
@@ -7288,12 +7323,16 @@ impl<'a> Importer<'a> {
 
             for reference in &definition.refs {
                 let site = footnote_reference_site(reference);
+                let attrs = self
+                    .footnote_refs
+                    .get(&node_key(&site))
+                    .and_then(|(_, note)| note.attrs.clone());
                 self.footnote_refs.insert(
                     node_key(&site),
                     (
                         site.clone(),
                         Footnote {
-                            attrs: None,
+                            attrs,
                             id: if inline.is_some() {
                                 None
                             } else {
@@ -7454,15 +7493,104 @@ fn footnote_pair_candidates(
         anchors.push((element.clone(), fragment.to_string()));
     }
 
-    if anchors.is_empty()
-        || (!heuristic
-            && !anchors.iter().any(|(anchor, _)| {
-                Importer::attr(anchor, "role").as_deref() == Some("doc-noteref")
-            }))
-    {
-        return Vec::new();
-    }
     let mut candidates = Vec::new();
+    let mut bare_sites = HashSet::new();
+    let mut bare_targets = Vec::new();
+    let mut bare_target_numbers = HashMap::new();
+    let mut ambiguous_bare_targets = HashSet::new();
+    for backlink in elements {
+        if Importer::tag(backlink).as_deref() != Some("a")
+            || Importer::attr(backlink, "role").as_deref() != Some("doc-backlink")
+        {
+            continue;
+        }
+        let href = Importer::attr(backlink, "href").unwrap_or_default();
+        let Some(identity) = href.strip_prefix("#fnref") else {
+            continue;
+        };
+        if identity.is_empty()
+            || !identity
+                .split('-')
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            || identity.matches('-').count() > 1
+        {
+            continue;
+        }
+        let Some(reference) = targets
+            .get(&href[1..])
+            .filter(|node| Importer::tag(node).as_deref() == Some("sup"))
+        else {
+            continue;
+        };
+        let mut target = parent_handle(backlink);
+        while let Some(node) = target.as_ref() {
+            if Importer::attr(node, "id").is_some() {
+                break;
+            }
+            target = parent_handle(node);
+        }
+        let Some(target) = target else { continue };
+        let mut ancestor = parent_handle(&target);
+        while let Some(node) = ancestor.as_ref() {
+            if Importer::attr(node, "role").as_deref() == Some("doc-endnotes") {
+                break;
+            }
+            ancestor = parent_handle(node);
+        }
+        if ancestor.is_none() {
+            continue;
+        }
+        let fragment = Importer::attr(&target, "id").unwrap();
+        used.insert(fragment.clone());
+        let number = identity.split('-').next().unwrap();
+        let target_key = node_key(&target);
+        if bare_target_numbers
+            .insert(target_key, number.to_string())
+            .is_some_and(|previous| previous != number)
+        {
+            ambiguous_bare_targets.insert(target_key);
+        }
+        bare_targets.push((reference.clone(), target, fragment));
+    }
+    // Count every target before deciding whether a wrapper holds one note.
+    let definition_labels = bare_targets
+        .iter()
+        .map(|(_, _, label)| label.clone())
+        .chain(
+            anchors
+                .iter()
+                .filter(|(anchor, _)| {
+                    Importer::attr(anchor, "role").as_deref() != Some("doc-backlink")
+                        && (heuristic
+                            || Importer::attr(anchor, "role").as_deref() == Some("doc-noteref"))
+                })
+                .map(|(_, fragment)| fragment.clone()),
+        )
+        .collect();
+    let mut bare_lookups = FootnoteLookups::default();
+    for (reference, target, fragment) in bare_targets {
+        if ambiguous_bare_targets.contains(&node_key(&target))
+            || bare_lookups.target_count(&target, elements, &definition_labels) > 1
+        {
+            continue;
+        }
+        let Some(block) = resolve_footnote_definition_block(&target, elements, &used, lookups)
+        else {
+            continue;
+        };
+        if lookups.contains(&block, &reference, elements, order)
+            || !bare_sites.insert(node_key(&reference))
+        {
+            continue;
+        }
+        candidates.push(FootnoteCandidate {
+            reference: reference.clone(),
+            block,
+            fragment,
+            marked: std::cell::Cell::new(Some(true)),
+            backlink: std::cell::Cell::new(Some(false)),
+        });
+    }
     for (anchor, fragment) in anchors {
         // OUTSIDE THE HEURISTIC ONLY THE AUTHORED ROLE OPENS A PAIR. The vendor
         // classes belong to the heuristic: a class is a styling hook, where the
@@ -7540,6 +7668,7 @@ fn resolve_footnote_definition_block(
             .map(|tag| FOOTNOTE_WRAPPER_BLOCKS.contains(&tag.as_str()))
             .unwrap_or(false);
         if wraps
+            && Importer::attr(&parent, "role").as_deref() != Some("doc-endnotes")
             && !Importer::attr(&parent, "id").unwrap_or_default().is_empty()
             && lookups.target_count(&parent, elements, used) == 1
         {
@@ -8531,8 +8660,9 @@ fn dom_text_is_layout_only(node: &Handle) -> bool {
 }
 
 fn collapse(s: &str) -> String {
+    let collapsible = |ch| is_layout_space(ch) && ch != '\t';
     let value = s
-        .split(is_layout_space)
+        .split(collapsible)
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
@@ -8545,17 +8675,9 @@ fn collapse(s: &str) -> String {
     }
     format!(
         "{}{}{}",
-        if s.starts_with(is_layout_space) {
-            " "
-        } else {
-            ""
-        },
+        if s.starts_with(collapsible) { " " } else { "" },
         value,
-        if s.ends_with(is_layout_space) {
-            " "
-        } else {
-            ""
-        }
+        if s.ends_with(collapsible) { " " } else { "" }
     )
 }
 

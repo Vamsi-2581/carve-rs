@@ -4378,7 +4378,24 @@ fn render_inline_after(
                     out.push_str("<sup id=\"");
                     write_escaped_attr(out, ref_id);
                     out.push('"');
-                    out.push_str(&render_attrs_without_id_for(&f.attrs, "sup"));
+                    if options.html_carriers() {
+                        if let Some(label) = &f.id {
+                            write_carrier(
+                                out,
+                                crate::roundtrip::FOOTNOTE_LABEL,
+                                label,
+                                &f.attrs,
+                                f.pos.as_ref(),
+                                crate::render_loss::RawNodeType::Inline,
+                            );
+                        }
+                        out.push_str(&render_attrs_without_id_and_keys(
+                            &f.attrs,
+                            &[crate::roundtrip::FOOTNOTE_LABEL],
+                        ));
+                    } else {
+                        out.push_str(&render_attrs_without_id_for(&f.attrs, "sup"));
+                    }
                     // The reference keeps its back-link target inside the link text.
                     write!(out, ">{number}</sup>").unwrap();
                     return;
