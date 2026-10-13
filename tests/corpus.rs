@@ -835,6 +835,11 @@ const IMPLEMENTED: &[&str] = &[
     "a-closed-fence-at-a-marker-line-note-s-body-column-opens-in-the-note",
     "a-span-never-covers-another-cell",
     "a-quote-or-a-term-at-a-marker-line-note-s-body-column-opens-in-the-note",
+    "a-comment-between-a-heading-and-a-colon-fence-leaves-the-fence-an-opener",
+    "a-comment-in-a-marker-line-note-changes-nothing",
+    "a-comment-closes-a-marker-line-note-s-paragraph-and-an-unclosed-fence-below-it-opens-in-the-note",
+    "a-fence-past-the-column-after-an-attribute-line-opens-on-its-authored-base",
+    "a-footnote-definition-past-a-box-s-column-is-hoisted",
 ];
 
 // Spec-main categories tracked by separate implementation work. Keep them

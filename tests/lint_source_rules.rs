@@ -324,6 +324,7 @@ fn a_fence_below_a_comment_in_a_marker_line_note_is_not_a_list_warning() {
         "- [^n]: text\n    %% c\n    ```\n    code\n    ```\nafter [^n]\n",
         "- [^n]: text\n    more\n\n    %% c\n    ~~~\n    code\nafter [^n]\n",
         "- [^n]: text\n    more\n    %% c\n    ~~~\n    code\nafter [^n]\n",
+        "- [^n]: text\n\n    %% c\n        ```\n        code\n        ```\nafter [^n]\n",
     ] {
         let warnings: Vec<_> = lint_carve(source)
             .into_iter()
@@ -332,7 +333,6 @@ fn a_fence_below_a_comment_in_a_marker_line_note_is_not_a_list_warning() {
         assert!(warnings.is_empty(), "{source:?}: {warnings:?}");
     }
     for source in [
-        "- [^n]: text\n\n    %% c\n        ```\n        code\n        ```\nafter [^n]\n",
         "- [^n]: text\n\n    - child\n\n      %% c\n        ```\n        code\n        ```\nafter [^n]\n",
     ] {
         assert!(

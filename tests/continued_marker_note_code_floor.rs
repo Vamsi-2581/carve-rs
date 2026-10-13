@@ -68,3 +68,31 @@ fn continued_marker_notes_follow_code_ownership() {
         }
     }
 }
+
+#[test]
+fn a_comment_line_in_a_marker_line_note_changes_no_owner() {
+    let pairs = [
+        (
+            "- [^n]: text\n    %% c\n    ```\n    code\n    ```\nafter [^n]\n",
+            "- [^n]: text\n    ```\n    code\n    ```\nafter [^n]\n",
+        ),
+        (
+            "- [^n]: text\n\n    %% c\n    ```\n    code\n    ```\nafter [^n]\n",
+            "- [^n]: text\n\n    ```\n    code\n    ```\nafter [^n]\n",
+        ),
+        (
+            "- [^n]: text\n    more\n    %% c\n    ~~~\n    code\nafter [^n]\n",
+            "- [^n]: text\n    more\n\n    ~~~\n    code\nafter [^n]\n",
+        ),
+    ];
+    for (commented, plain) in pairs {
+        let html = carve::to_html(commented);
+        assert_eq!(html, carve::to_html(plain), "{commented:?}");
+        assert!(html.contains("<li></li>"), "{commented:?}: {html}");
+        assert!(html.contains("<p>after "), "{commented:?}: {html}");
+        assert!(
+            html.contains("<pre><code>code\n</code></pre>"),
+            "{commented:?}: {html}"
+        );
+    }
+}
