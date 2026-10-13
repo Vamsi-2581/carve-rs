@@ -79,12 +79,18 @@ fn root_attribute_boundaries_match_native_djot() {
         let mut spaced = String::new();
         let mut end = 0;
         let mut in_code = false;
+        let mut in_backlink = false;
         for tag in html_tags.find_iter(html) {
             let text = &html[end..tag.start()];
             if in_code {
                 spaced.push_str(text);
             } else {
-                spaced.push_str(&text_spaces.replace_all(text, " "));
+                let text = if in_backlink {
+                    text.replace('\u{FE0E}', "")
+                } else {
+                    text.to_owned()
+                };
+                spaced.push_str(&text_spaces.replace_all(&text, " "));
             }
             if let Some(parts) = opening_tag.captures(tag.as_str()) {
                 let mut attributes: Vec<_> = tag_attribute
@@ -101,6 +107,11 @@ fn root_attribute_boundaries_match_native_djot() {
                 spaced.push('>');
             } else {
                 spaced.push_str(tag.as_str());
+            }
+            if tag.as_str().starts_with("<a ") && tag.as_str().contains("role=\"doc-backlink\"") {
+                in_backlink = true;
+            } else if tag.as_str() == "</a>" {
+                in_backlink = false;
             }
             if tag.as_str().starts_with("<code") {
                 in_code = true;

@@ -101,6 +101,7 @@ fn deep_quoted_item_attributes(
         kind: String,
         attributes: Vec<(usize, String)>,
     }
+    let _paragraph_cache = ParagraphCacheScope::new(source);
     let lines: Vec<_> = source.split('\n').collect();
     let mask = mask_code_and_destinations(source);
     let masks: Vec<_> = mask.split('\n').collect();
@@ -152,6 +153,8 @@ fn deep_quoted_item_attributes(
         let prior_paragraph = previous_paragraph;
         previous_depth = depth;
         previous_paragraph = !text.is_empty()
+            && !visible.starts_with('|')
+            && !thematic(visible)
             && !block.is_match(visible)
             && !(visible.starts_with('{')
                 && read_djot_word_attributes(body, indent)
@@ -221,17 +224,18 @@ fn deep_quoted_item_attributes(
                 }
                 let token = format!("{attribute_prefix}{}\0", item_attributes.len());
                 item_attributes.push(wire);
-                before.insert(
-                    row,
-                    vec![
-                        format!("{prefix}{}{token}", " ".repeat(indent)),
-                        prefix.trim_end_matches([' ', '\t']).to_owned(),
-                    ],
-                );
+                let loose = lines[frame.attributes[0].0.saturating_sub(1)..row]
+                    .iter()
+                    .any(|line| quoted(line).1.trim_matches([' ', '\t']).is_empty());
+                let mut held = vec![format!("{prefix}{}{token}", " ".repeat(indent))];
+                if loose {
+                    held.push(prefix.trim_end_matches([' ', '\t']).to_owned());
+                }
+                before.insert(row, held);
                 for (owner_depth, owners) in frames.iter().chain(std::iter::once((&depth, &stack)))
                 {
                     for owner in owners {
-                        if *owner_depth > depth {
+                        if !loose || *owner_depth > depth {
                             continue;
                         }
                         let rest = &prefix[prefix_ends[*owner_depth]..];
@@ -339,7 +343,7 @@ fn quoted_list_attribute_layout(
     }
     let lines: Vec<_> = source.split('\n').collect();
     if !lines.iter().any(|line| {
-        line.starts_with('>') && {
+        (line.starts_with('>') || quoted(line).0 > 0) && {
             let body = quoted(line).1;
             body.starts_with([' ', '\t']) && body.trim_start().starts_with('{')
         }
@@ -353,7 +357,7 @@ fn quoted_list_attribute_layout(
     let depths: Vec<_> = lines
         .iter()
         .map(|line| {
-            if line.starts_with('>') {
+            if quoted(line).0 > 0 {
                 quoted(line).0
             } else {
                 0
@@ -411,8 +415,8 @@ fn quoted_list_attribute_layout(
             continue;
         }
         if depth == 0
-            || !lines[n].starts_with('>')
-            || masks[n].as_bytes().first() != Some(&b'>')
+            || quoted(lines[n]).0 == 0
+            || masks[n].as_bytes().get(lines[n].find('>').unwrap_or(0)) != Some(&b'>')
             || (n > 0
                 && !lines[n - 1].trim().is_empty()
                 && quoted(lines[n - 1]).0 == 0
@@ -459,6 +463,7 @@ fn quoted_list_attribute_layout(
             list_marker.is_match(text)
         });
         if has_list_attributes {
+            let mut returned = Vec::new();
             let normalized = blocks_with_slot_inner(
                 &bodies.join("\n"),
                 None,
@@ -466,13 +471,20 @@ fn quoted_list_attribute_layout(
                 attribute_prefix,
                 item_attributes,
                 source.contains("\\|"),
-                None,
+                Some(&mut returned),
             );
-            result.extend(
-                normalized
-                    .split('\n')
-                    .map(|body| format!("{}{}", "> ".repeat(depth), body)),
-            );
+            let prefix = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*")
+                .unwrap()
+                .find(lines[start])
+                .unwrap()
+                .as_str();
+            result.extend(normalized.split('\n').map(|body| format!("{prefix}{body}")));
+            if n < lines.len() {
+                let returned_depth = depths[n].min(depth.saturating_sub(1));
+                for attributes in returned {
+                    result.push(format!("{}{attributes}", "> ".repeat(returned_depth)));
+                }
+            }
         } else {
             result.push(lines[start].to_owned());
             n = start + 1;
@@ -646,6 +658,14 @@ fn quoted_list_boundaries<'a>(
         let text = &remainder[raw_indent..];
         let visible = masked.get(prefix.len() + raw_indent..).unwrap_or("");
 
+        if let Some(caps) = cached_regex!(r"^\x00DJOTITEMATTR\x00(?:[0-9]+\x00)?(B?)[0-9]+\x00$")
+            .unwrap()
+            .captures(text)
+        {
+            paragraph = false;
+            previous_blank = &caps[1] == "B";
+            continue;
+        }
         if previous_blank && !line.trim_matches([' ', '\t']).is_empty() && !text.is_empty() {
             if depth > quote_depth
                 && !paragraph
@@ -983,6 +1003,8 @@ fn quoted_list_boundaries<'a>(
                     }))
                 || thematic(visible)
                 || visible.starts_with(":::")
+                || visible.starts_with('|')
+                || rows[row_index]
                 || heading.is_match(visible));
         } else if reference.is_match(text)
             || heading.is_match(visible)
@@ -1280,6 +1302,8 @@ pub(super) fn note_blocks(
                         && fenced != line
                         && code.is_match(&caps[2][djot_content_start(&caps[2])..])
             });
+        let mut returned_note_attributes = Vec::new();
+        let mut returned_scope: Option<(usize, usize)> = None;
         while let Some(note) = notes.last() {
             if fenced != line && (held_code.is_some() || !code.is_match(text)) {
                 break;
@@ -1306,22 +1330,15 @@ pub(super) fn note_blocks(
                 let mut closed = notes.pop().unwrap();
                 let returned =
                     normalize_note_body(&mut closed, empty_note, attribute_prefix, item_attributes);
-                for attributes in returned {
-                    let prefix = &line[..djot_content_start(line)];
-                    if let Some(parent) = notes.last_mut() {
-                        let host = ends.get(parent.depth.wrapping_sub(1)).copied().unwrap_or(0);
-                        let prefix = &prefix[host..];
-                        let padding = prefix
-                            .bytes()
-                            .take_while(|b| matches!(b, b' ' | b'\t'))
-                            .count();
-                        parent.body.push(format!(
-                            "{}{attributes}",
-                            &prefix[padding.min(parent.column)..]
-                        ));
-                    } else {
-                        main.push(format!("{prefix}{attributes}"));
-                    }
+                returned_note_attributes.extend(returned);
+                if !returned_note_attributes.is_empty() {
+                    returned_scope = Some(match returned_scope {
+                        Some((depth, column)) if depth < closed.depth => (depth, column),
+                        Some((depth, column)) if depth == closed.depth => {
+                            (depth, column.min(closed.column))
+                        }
+                        _ => (closed.depth, closed.column),
+                    });
                 }
                 if let Some(parent) = notes.last_mut() {
                     if (closed.blank || !closed.paragraph)
@@ -1349,6 +1366,31 @@ pub(super) fn note_blocks(
                 completed.push(closed);
             } else {
                 break;
+            }
+        }
+        if let Some((scope_depth, scope_column)) = returned_scope {
+            let end = ends.get(scope_depth.wrapping_sub(1)).copied().unwrap_or(0);
+            let padding = columns
+                .get(scope_depth)
+                .copied()
+                .unwrap_or(indent)
+                .min(scope_column);
+            let prefix = format!("{}{}", &line[..end], " ".repeat(padding));
+            for attributes in returned_note_attributes {
+                if let Some(parent) = notes.last_mut() {
+                    let host = ends.get(parent.depth.wrapping_sub(1)).copied().unwrap_or(0);
+                    let prefix = &prefix[host..];
+                    let padding = prefix
+                        .bytes()
+                        .take_while(|b| matches!(b, b' ' | b'\t'))
+                        .count();
+                    parent.body.push(format!(
+                        "{}{attributes}",
+                        &prefix[padding.min(parent.column)..]
+                    ));
+                } else {
+                    main.push(format!("{prefix}{attributes}"));
+                }
             }
         }
         if let Some(caps) = head {
@@ -1811,6 +1853,7 @@ fn blocks_with_slot_inner(
     let mut quote_attribute_depth = None;
     let mut moved_quote_attributes = None;
     let mut pending_item_attributes: Vec<(usize, usize, String)> = Vec::new();
+    let mut pending_root_attributes: Vec<(usize, String)> = Vec::new();
     for (n, raw) in lines.iter().enumerate() {
         if track_quote_owners && n > 0 {
             let (depth, body) = quoted(lines[n - 1]);
@@ -1847,7 +1890,8 @@ fn blocks_with_slot_inner(
         let (indent, indent_bytes) = leading_indent(raw);
         let text = &raw[indent_bytes..];
         let masked_visible = masks[n].get(indent_bytes..).unwrap_or("");
-        let carried_block = !pending_item_attributes.is_empty()
+        let carried_block = (!pending_item_attributes.is_empty()
+            || marker.is_match(masked_visible))
             && marker.captures(text).is_some_and(|item| {
                 let mut body = &text[item.get(0).unwrap().end()..];
                 if matches!(item[1].as_bytes()[0], b'-' | b'*' | b'+') {
@@ -1864,6 +1908,9 @@ fn blocks_with_slot_inner(
         let attribute_only = visible.starts_with('{')
             && read_djot_word_attributes(text, 0)
                 .is_some_and(|(end, _)| end == text.trim_end().len());
+        if !raw.trim_matches([' ', '\t']).is_empty() && !attribute_only {
+            pending_root_attributes.clear();
+        }
         if !pending_item_attributes.is_empty()
             && !raw.trim().is_empty()
             && (!attribute_only || !lists.iter().any(|list| indent > list.source))
@@ -1984,6 +2031,19 @@ fn blocks_with_slot_inner(
         } else {
             format!("{}{text}", " ".repeat(target_indent))
         };
+        if !attribute_prefix.is_empty() && text.starts_with(attribute_prefix) {
+            let suffix = &text[attribute_prefix.len()..];
+            let index = suffix.strip_prefix('B').unwrap_or(suffix);
+            if index
+                .strip_suffix('\0')
+                .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+            {
+                result.push(display.clone());
+                paragraph = false;
+                previous_blank = suffix.starts_with('B');
+                continue;
+            }
+        }
         if raw.trim_matches([' ', '\t']).is_empty() {
             quote_paragraph_depth = None;
             paragraph = false;
@@ -2137,8 +2197,10 @@ fn blocks_with_slot_inner(
                             && !rows[n]
                             && !content.starts_with(['>', ':', '`', '~', '{'])
                     }))
-                && !block_body.starts_with(":::"))
-            .then_some(depth.max(quote_paragraph_depth.unwrap_or(depth)));
+                && !block_body.starts_with(":::")
+                && !thematic(block_body)
+                && !rows[n])
+                .then_some(depth.max(quote_paragraph_depth.unwrap_or(depth)));
             quote_paragraph_item_column = if quote_paragraph_depth.is_some() {
                 if marker.is_match(block_body) {
                     Some((depth, leading_indent(body).0))
@@ -2524,6 +2586,11 @@ fn blocks_with_slot_inner(
         } else {
             let attribute = text.starts_with('{')
                 && read_djot_word_attributes(text, 0).is_some_and(|(end, _)| end == text.len());
+            if attribute_only && !paragraph && !lists.iter().any(|list| indent > list.source) {
+                if let Some((_, wire)) = read_djot_word_attributes(text, 0) {
+                    pending_root_attributes.push((result.len(), wire));
+                }
+            }
             if attribute_only && !paragraph {
                 if let Some(list) = lists.last_mut().filter(|list| indent > list.source) {
                     if let Some((_, wire)) = read_djot_word_attributes(text, 0) {
@@ -2537,7 +2604,8 @@ fn blocks_with_slot_inner(
                                             .and_then(|row| result.get(row))
                                             .map_or("", String::as_str),
                                     );
-                            if previous_blank
+                            if !attribute_prefix.is_empty()
+                                && previous_blank
                                 && !held_loose
                                 && !result[list.start].contains(&format!("{attribute_prefix}B"))
                             {
@@ -2579,6 +2647,10 @@ fn blocks_with_slot_inner(
     }
     if let Some(returned) = returned_attributes {
         for (_, row, attrs) in pending_item_attributes {
+            result[row].clear();
+            returned.push(attrs);
+        }
+        for (row, attrs) in pending_root_attributes {
             result[row].clear();
             returned.push(attrs);
         }
