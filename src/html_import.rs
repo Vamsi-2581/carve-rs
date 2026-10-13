@@ -8531,8 +8531,9 @@ fn dom_text_is_layout_only(node: &Handle) -> bool {
 }
 
 fn collapse(s: &str) -> String {
+    let collapsible = |ch| is_layout_space(ch) && ch != '\t';
     let value = s
-        .split(is_layout_space)
+        .split(collapsible)
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
@@ -8545,17 +8546,9 @@ fn collapse(s: &str) -> String {
     }
     format!(
         "{}{}{}",
-        if s.starts_with(is_layout_space) {
-            " "
-        } else {
-            ""
-        },
+        if s.starts_with(collapsible) { " " } else { "" },
         value,
-        if s.ends_with(is_layout_space) {
-            " "
-        } else {
-            ""
-        }
+        if s.ends_with(collapsible) { " " } else { "" }
     )
 }
 

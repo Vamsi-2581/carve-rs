@@ -114,13 +114,13 @@ fn a_content_space_inside_a_line_is_not_normalized_either() {
 }
 
 #[test]
-fn ascii_layout_still_collapses_the_way_html_reads_it() {
+fn spaces_and_line_terminators_collapse_while_literal_tabs_stay() {
     // The control that keeps the fix from becoming "preserve all whitespace".
     // A line terminator is folded into the same run an HTML parser folds it
     // into, and a run of them is one space.
     assert_eq!(imported("<p>a\nb</p>").0, "a b\n");
     assert_eq!(imported("<p>a  b</p>").0, "a b\n");
-    assert_eq!(imported("<p>a\t\tb</p>").0, "a b\n");
+    assert_eq!(imported("<p>a\t\tb</p>").0, "a\t\tb\n");
 }
 
 #[test]

@@ -2023,3 +2023,6 @@ mod spec_wave_parity;
 
 #[path = "../wave7_quoted_term.rs"]
 mod wave7_quoted_term;
+
+#[path = "../wave7_html_tabs.rs"]
+mod wave7_html_tabs;
