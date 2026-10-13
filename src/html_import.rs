@@ -2108,7 +2108,7 @@ impl<'a> Importer<'a> {
             return None;
         }
         Self::carrier(pre, crate::roundtrip::LABEL)
-            .filter(|label| !label.is_empty() && !label.contains([']', '\r', '\n']))
+            .filter(|label| !label.contains([']', '\r', '\n']))
     }
 
     /// The `<table data-carve-col-widths>` separator row, comma-joined.

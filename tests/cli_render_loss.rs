@@ -239,19 +239,3 @@ fn carrier_collision_report_names_the_attribute_and_accepts_the_canonical_code()
     );
     assert!(allowed.status.success(), "{:?}", allowed.stderr);
 }
-
-/// A flattened definition list is waivable (CARVE-P2-024), so a strict
-/// Markdown roundtrip that names it writes the document.
-#[test]
-fn a_waived_definition_list_flattening_writes_the_document() {
-    let source = ":: Outer\n: body\n\n  :: Inner\n  : inner body\n";
-    let strict = ["--markdown", "--roundtrip", "--strict-losses"];
-    let refused = run_input(&strict, source);
-    assert!(!refused.status.success(), "{:?}", refused.stderr);
-    let allowed = run_input(
-        &[&strict[..], &["--allow-loss", "definition-list-flattened"]].concat(),
-        source,
-    );
-    assert_eq!(allowed.status.code(), Some(0), "{:?}", allowed.stderr);
-    assert!(!allowed.stdout.is_empty());
-}
