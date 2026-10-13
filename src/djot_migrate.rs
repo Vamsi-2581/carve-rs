@@ -151,7 +151,7 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         &empty_note,
     );
     let folded = fold_heading_continuations(&table_pipes);
-    let collapsed = cached_regex!(r"(!?\[([^\[\]\n]*)\])\[\]").unwrap();
+    let collapsed = cached_regex!(r"(!?\[([^\[\]]*)\])\[\]").unwrap();
     let mut collapsed_mask = mask_code_and_destinations(&folded).into_bytes();
     let mut at = 0;
     while at < folded.len() {
@@ -199,12 +199,43 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         })
         .map(|caps| caps[1].to_string())
         .collect();
+    let mut collapsed_image_lines: Option<Vec<ImageLineOwner>> = None;
+    let mut collapsed_image_line = 0;
+    let collapsed_blank = cached_regex!(r"\n[ \t]*\n").unwrap();
+    let collapsed_space = cached_regex!(r"[ \t\r\n]+").unwrap();
     let folded = collapsed.replace_all(&folded, |caps: &regex::Captures<'_>| {
-        if collapsed_mask.as_bytes()[caps.get(0).unwrap().start()] == caps[0].as_bytes()[0]
-            && !(caps[2].starts_with('^') && caps[2].len() > 1)
-            && definitions.contains(&caps[2])
+        let at = caps.get(0).unwrap().start();
+        if collapsed_mask.as_bytes()[at] != caps[0].as_bytes()[0]
+            || caps[2].starts_with('^') && caps[2].len() > 1
         {
-            format!("{}[{}]", &caps[1], &caps[2])
+            return caps[0].to_string();
+        }
+        let mut key = caps[2].to_owned();
+        if key.contains('\n') {
+            if collapsed_blank.is_match(&key) || is_escaped(folded.as_bytes(), at) {
+                return caps[0].to_string();
+            }
+            let lines = collapsed_image_lines
+                .get_or_insert_with(|| image_line_owners(&folded, &collapsed_mask).1);
+            while lines[collapsed_image_line].0 <= at {
+                collapsed_image_line += 1;
+            }
+            let owner = lines[collapsed_image_line];
+            let (normalized, _, valid) = image_alt_layout(&key, owner.1, owner.2, owner.3, owner.4);
+            if caps[1].starts_with('!') && !valid {
+                return caps[0].to_string();
+            }
+            key = collapsed_space
+                .replace_all(
+                    normalized
+                        .replace("\\\n", "\n")
+                        .trim_matches([' ', '\t', '\r', '\n']),
+                    " ",
+                )
+                .into_owned();
+        }
+        if definitions.contains(&key) {
+            format!("{}[{key}]", &caps[1])
         } else {
             caps[0].to_string()
         }
@@ -264,11 +295,8 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         };
         let (protected_label, scalars, scalar_prefix) =
             protect_image_alt_scalars(&normalized_label);
-        let native = djot_to_carve(&format!(
-            "DJOTALT {} DJOTEND",
-            strip_image_alt_attributes(&protected_label)
-        ))
-        .replace("\0U\0", "\0");
+        let native =
+            djot_to_carve(&format!("DJOTALT {} DJOTEND", protected_label)).replace("\0U\0", "\0");
         let native = remove_inherited_attribute_markers(&native, &inherited);
         let mut document = crate::parse_with_options(&native, &options);
         use crate::include_walk::SubtreeVisitor;
@@ -889,6 +917,10 @@ struct ImageAltChildText {
 }
 
 impl crate::include_walk::SubtreeVisitor for ImageAltChildText {
+    fn attributes(&mut self, attrs: &mut Option<crate::ast::Attrs>, _inline: bool) {
+        *attrs = None;
+    }
+
     fn image(&mut self, image: &mut crate::ast::Image) {
         if image.src.is_empty() {
             image.ref_label = None;
@@ -919,32 +951,6 @@ impl crate::include_walk::SubtreeVisitor for ImageAltChildText {
             crate::include_walk::visit_inline_children(inline, self);
         }
     }
-}
-
-fn strip_image_alt_attributes(label: &str) -> String {
-    let mut mask = mask_code_and_destinations(label).into_bytes();
-    for value in cached_regex!(r"<[^<>\s]+>").unwrap().find_iter(label) {
-        if value.as_str().contains(':') || value.as_str().contains('@') {
-            mask[value.range()].fill(b' ');
-        }
-    }
-    let bytes = label.as_bytes();
-    let mut out = String::new();
-    let mut cursor = 0;
-    let mut at = 0;
-    while at < bytes.len() {
-        if bytes[at] == b'{' && mask[at] == b'{' && !is_escaped(bytes, at) {
-            if let Some((end, _)) = read_djot_word_attributes(label, at) {
-                out.push_str(&label[cursor..at]);
-                cursor = end;
-                at = end;
-                continue;
-            }
-        }
-        at += 1;
-    }
-    out.push_str(&label[cursor..]);
-    out
 }
 
 fn djot_attribute_context(source: &str, start: usize) -> (usize, Option<usize>, usize) {
