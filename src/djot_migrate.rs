@@ -1928,6 +1928,13 @@ fn convert_djot_block_markers(source: &str) -> String {
             });
             continue;
         }
+        if boundary
+            && authored.starts_with('{')
+            && read_djot_attributes(authored, 0, false, false)
+                .is_some_and(|(end, _)| authored[end..].trim().is_empty())
+        {
+            continue;
+        }
         let thematic_boundary = boundary
             || item_columns
                 .iter()
