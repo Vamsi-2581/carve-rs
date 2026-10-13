@@ -186,6 +186,7 @@ fn deep_quoted_item_attributes(
             if closed_nested {
                 let mut blank_row = row;
                 while blank_row > 0
+                    && quoted(lines[blank_row - 1]).0 == depth
                     && quoted(lines[blank_row - 1])
                         .1
                         .trim_matches([' ', '\t'])
@@ -313,7 +314,7 @@ fn deep_quoted_item_attributes(
                 }
             }
             if let Some(frame) = stack.last_mut() {
-                if indent <= frame.column {
+                if indent <= frame.column && !lazy {
                     stack.clear();
                 } else if let Some((end, wire)) = read_djot_word_attributes(body, indent) {
                     if end == body.trim_end_matches([' ', '\t', '\r']).len() {
