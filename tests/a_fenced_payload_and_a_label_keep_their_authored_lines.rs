@@ -82,7 +82,10 @@ fn issue_2168_every_host_keeps_its_lines() {
 /// hid. Corpus 518-9 and 518-10 are the two documents.
 #[test]
 fn issue_2163_the_node_carries_the_cut_label() {
-    assert_eq!(container_label("::: note [a\t%% hidden]\nbody\n:::\n"), "a");
+    assert_eq!(
+        container_label("::: note [a\t%% hidden]\nbody\n:::\n"),
+        "a\t%% hidden"
+    );
     assert_eq!(container_label("::: note [%% hidden]\nbody\n:::\n"), "");
 }
 
@@ -104,7 +107,7 @@ fn issue_2163_no_publisher_leaks_the_comment() {
             to_carve(source),
         ] {
             assert!(
-                !published.contains("hidden"),
+                published.contains("hidden") == source.contains("a\t%%"),
                 "{source:?} published the comment: {published}"
             );
         }

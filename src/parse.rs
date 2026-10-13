@@ -15568,11 +15568,11 @@ fn label_without_trailing_comment<'a>(label: &'a str, options: &Options<'_>) -> 
         if bytes[i] != b'%' || bytes.get(i + 1) != Some(&b'%') {
             continue;
         }
-        if !(i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+        if !(i == 0 || bytes[i - 1] == b' ') {
             continue;
         }
         if trailing_comment_content(&label[i + 2..]) == content {
-            return label[..i].trim_end_matches([' ', '\t']);
+            return label[..i].trim_end_matches(' ');
         }
     }
     label
@@ -23037,17 +23037,14 @@ fn parse_inline_context_with_pairs(
         let run_start = comment_run.map_or(0, |open| open + 1);
         if c == b'%'
             && bytes.get(i + 1) == Some(&b'%')
-            && (i == run_start
-                || bytes[i - 1] == b' '
-                || bytes[i - 1] == b'\t'
-                || bytes[i - 1] == b'\n')
+            && (i == run_start || bytes[i - 1] == b' ' || bytes[i - 1] == b'\n')
         {
             // Popping from the END keeps the buffer equal to the source it
             // started at - `flush_text` measures the span as
             // `start .. start + buf.len()`, so a shorter buffer is a shorter
             // span, not a wrong one. Clearing `buf_placeable` here refused a
             // position for every line ending in a `%%` comment.
-            while buf.ends_with(' ') || buf.ends_with('\t') {
+            while buf.ends_with(' ') {
                 buf.pop();
             }
             let comment_start = i;

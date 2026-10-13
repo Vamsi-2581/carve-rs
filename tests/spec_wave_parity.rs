@@ -30,3 +30,10 @@ fn typography_uses_one_flank_class() {
         assert_eq!(carve::to_html(&format!("x{flank}\"q\"")), format!("<p>x{rendered}“q”</p>"));
     }
 }
+
+#[test]
+fn a_tab_before_a_trailing_comment_stays_content() {
+    corpus_category("518-");
+    corpus_category("516-");
+    assert_eq!(carve::to_html("a\t %% c"), "<p>a\t</p>");
+}

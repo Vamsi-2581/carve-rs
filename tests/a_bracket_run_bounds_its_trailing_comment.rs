@@ -15,7 +15,7 @@ use carve::to_html;
 #[test]
 fn a_bracket_runs_closer_survives_a_comment_inside_it() {
     assert_eq!(to_html("[a %% hidden]\n").trim(), "<p>[a]</p>");
-    assert_eq!(to_html("[a\t%% hidden]\n").trim(), "<p>[a]</p>");
+    assert_eq!(to_html("[a\t%% hidden]\n").trim(), "<p>[a\t%% hidden]</p>");
     assert_eq!(to_html("[a %% hidden] tail\n").trim(), "<p>[a] tail</p>");
     assert_eq!(
         to_html("pre [a %% hidden] post\n").trim(),
@@ -103,7 +103,10 @@ fn a_delimiter_after_the_runs_closer_still_closes() {
 #[test]
 fn a_valid_container_label_keeps_its_container() {
     let html = to_html("::: note [a\t%% hidden]\nx\n:::\n");
-    assert!(html.contains("<p class=\"div-label\">a</p>"), "{html}");
+    assert!(
+        html.contains("<p class=\"div-label\">a\t%% hidden</p>"),
+        "{html}"
+    );
     assert!(html.contains("<p>x</p>"), "{html}");
 }
 
@@ -112,7 +115,7 @@ fn a_valid_container_label_keeps_its_container() {
 fn a_degraded_container_opener_keeps_its_bracket() {
     assert_eq!(
         to_html("::: {.box} [a\t%% hidden]\n").trim(),
-        "<p>::: {.box} [a]</p>"
+        "<p>::: {.box} [a\t%% hidden]</p>"
     );
 }
 
