@@ -475,15 +475,25 @@ fn quoted_list_attribute_layout(
                             .unwrap_or(0),
                 ));
         if lazy_quote {
-            let literal_empty = quoted(lines[n]).1.trim().is_empty()
-                && comment_continues_paragraph(
-                    source,
-                    starts[n]
-                        + lines[n][..lines[n].len() - quoted(lines[n]).1.len()]
-                            .rfind('>')
-                            .unwrap_or(0),
-                );
             let parent_depth = depths[n - 1];
+            let mut opening = 0;
+            for _ in 0..parent_depth {
+                let rest = &lines[n][opening..];
+                opening += rest.len() - rest.trim_start_matches([' ', '\t']).len() + 1;
+                if lines[n]
+                    .as_bytes()
+                    .get(opening)
+                    .is_some_and(|byte| *byte == b' ' || *byte == b'\t')
+                {
+                    opening += 1;
+                }
+            }
+            opening += lines[n][opening..].len()
+                - lines[n][opening..].trim_start_matches([' ', '\t']).len();
+            let literal_empty = previous_body.starts_with('|')
+                && quoted(lines[n]).1.trim().is_empty()
+                && masks[n].as_bytes().get(opening) == Some(&b'>')
+                && comment_continues_paragraph(source, starts[n] + opening);
             while n < lines.len() && depths[n] >= depth {
                 let mut line = lines[n].to_owned();
                 if literal_empty {
@@ -500,7 +510,9 @@ fn quoted_list_attribute_layout(
                         }
                     }
                     at += line[at..].len() - line[at..].trim_start_matches([' ', '\t']).len();
-                    line.insert(at, '\\');
+                    if masks[n].as_bytes().get(at) == Some(&b'>') {
+                        line.insert(at, '\\');
+                    }
                 }
                 result.push(line);
                 n += 1;
