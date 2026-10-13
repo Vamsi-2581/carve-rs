@@ -11594,7 +11594,11 @@ fn collect_blockquote_body(
                     literal_quote_body = None;
                     para_open = ParaOpen::Closed;
                 } else {
-                    para_open = if comment_run.is_some() { ParaOpen::Closed } else { ParaOpen::from_line("x", false) };
+                    para_open = if comment_run.is_some() {
+                        ParaOpen::Closed
+                    } else {
+                        ParaOpen::from_line("x", false)
+                    };
                 }
                 opaque_tail = false;
                 table = TableRun::default();
