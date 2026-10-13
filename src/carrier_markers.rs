@@ -997,6 +997,25 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         if let Some(opener) = reverse_pairs.get(&index) {
             invalid.insert(*opener);
         }
+        let pair_closer = pairs
+            .get(&index)
+            .copied()
+            .or_else(|| reverse_pairs.contains_key(&index).then_some(index));
+        if let Some(closer) = pair_closer {
+            let mut caption_line = payloads[closer].line + 1;
+            while caption_line < lines.len()
+                && strip_host_prefix(lines[caption_line], &payloads[closer].host).is_empty()
+            {
+                caption_line += 1;
+            }
+            if let Some((caption_index, _)) = payloads.iter().enumerate().find(|(_, found)| {
+                found.line == caption_line
+                    && found.host == payloads[closer].host
+                    && found.payload.starts_with("^ ")
+            }) {
+                invalid.insert(caption_index);
+            }
+        }
         let message = if let Some(closer) = pairs.get(&index) {
             invalid.insert(*closer);
             "Dropped carrier marker pair with an invalid opener"
