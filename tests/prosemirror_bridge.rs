@@ -1627,7 +1627,8 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // Corpus 364-2, 482-5 and 558-3 enter the strict set. Corpus 510,
     // 557-4 and 82-5 leave it as the new ownership rules retain soft breaks
     // that ProseMirror reports as degraded.
-    const STRICT: usize = 1827;
+    // Spec ab887d86 adds 576, 576-2 and 577. All three round-trip strictly.
+    const STRICT: usize = 1830;
     const LOSSY: usize = 574;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
