@@ -4367,6 +4367,15 @@ fn render_inline_after(
         }
         InlineNode::Footnote(f) => {
             if let (Some(number), Some(ref_id)) = (f.number, &f.ref_id) {
+                if state.link_depth > 0 {
+                    out.push_str("<sup id=\"");
+                    write_escaped_attr(out, ref_id);
+                    out.push('"');
+                    out.push_str(&render_attrs_without_id_for(&f.attrs, "sup"));
+                    // The reference keeps its back-link target inside the link text.
+                    write!(out, ">{number}</sup>").unwrap();
+                    return;
+                }
                 out.push_str("<a id=\"");
                 write_escaped_attr(out, ref_id);
                 write!(out, "\" href=\"#fn{number}\" role=\"doc-noteref\"").unwrap();

@@ -2017,3 +2017,6 @@ mod agreed_comment_retention;
 
 #[path = "../line_block_fence_writer.rs"]
 mod line_block_fence_writer;
+
+#[path = "../spec_wave_parity.rs"]
+mod spec_wave_parity;
