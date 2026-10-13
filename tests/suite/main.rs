@@ -328,6 +328,8 @@ mod a_figures_target_keeps_its_own_attributes;
 mod a_flag_shaped_hyphen_run_is_literal;
 #[path = "../a_flatten_preserves_the_boundary_it_dissolves.rs"]
 mod a_flatten_preserves_the_boundary_it_dissolves;
+#[path = "../a_flush_left_description_ends_a_quoted_term.rs"]
+mod a_flush_left_description_ends_a_quoted_term;
 #[path = "../a_flush_left_opener_ends_a_description_body.rs"]
 mod a_flush_left_opener_ends_a_description_body;
 #[path = "../a_folded_lazy_line_leaves_the_container_open.rs"]

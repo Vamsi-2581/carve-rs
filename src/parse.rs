@@ -11968,6 +11968,15 @@ fn collect_blockquote_body(
         //
         // Every line that is NOT a definition marker is framed so its
         // indentation cannot re-open a block on re-parse (carve-rs#1538).
+        // A flush-left `: ` ends an open term (CARVE-P2-028), and a lazy line
+        // opens no block inside the quote, so the quote ends there and the line
+        // is read where it stands.
+        if indent_columns(line) == 0 && strip_definition_marker(line).is_some() {
+            open_entry.advance(&inner.lines);
+            if open_entry.half == Some(DefHalf::Term) {
+                break;
+            }
+        }
         if comment_run.is_some()
             && (!comment_run
                 .is_some_and(|(_, _, at)| nested_replay.literal_comment_openers.contains(&at))
