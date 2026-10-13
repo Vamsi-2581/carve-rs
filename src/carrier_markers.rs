@@ -245,14 +245,6 @@ fn carrier_set_closers(payloads: &[String]) -> Option<Vec<bool>> {
         let closer = carrier_is_bare_fence(payload) && open.last() == Some(&width);
         closers.push(closer);
         if width == 0 {
-            if !(payload.is_empty()
-                || payload == ":"
-                || payload.starts_with(":: ")
-                || payload.starts_with("^ ")
-                || (payload.starts_with('{') && payload.ends_with('}')))
-            {
-                return None;
-            }
             continue;
         }
         if closer {
@@ -675,6 +667,7 @@ pub(crate) struct CarrierLift {
     /// A set that does not balance records no structure, so nothing is lifted
     /// and the reader is told.
     pub(crate) damaged: bool,
+    pub(crate) dropped: Vec<(usize, String)>,
 }
 
 /// Lift every carrier marker line out of the source, leaving a placeholder.
@@ -697,6 +690,7 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         slots: Vec::new(),
         token: String::new(),
         damaged,
+        dropped: Vec::new(),
     };
     if !markdown.contains(CARRIER_PREFIX) {
         return none(markdown, false);
@@ -718,6 +712,65 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
     for (marker, closer) in payloads.iter_mut().zip(closers) {
         marker.closer = closer;
     }
+    let mut pairs = std::collections::HashMap::new();
+    let mut open = Vec::new();
+    for (index, marker) in payloads.iter().enumerate() {
+        if carrier_fence_width(&marker.payload) == 0 {
+            continue;
+        }
+        if marker.closer {
+            pairs.insert(open.pop().unwrap(), index);
+        } else {
+            open.push(index);
+        }
+    }
+    let mut invalid = std::collections::HashSet::new();
+    let mut notices = Vec::new();
+    for (index, marker) in payloads.iter().enumerate() {
+        if invalid.contains(&index) {
+            continue;
+        }
+        let payload = &marker.payload;
+        let width = carrier_fence_width(payload);
+        let valid = if width > 0 && !marker.closer {
+            let closer = &payloads[*pairs.get(&index).unwrap()].payload;
+            let tree = crate::parse::parse(&format!("{payload}\n{closer}\n"));
+            tree.children.len() == 1 && !matches!(tree.children[0], BlockNode::Paragraph(_))
+        } else if payload.starts_with('{') && payload.ends_with('}') {
+            let tree = crate::parse::parse(&format!("{payload}\nx\n"));
+            matches!(tree.children.first(), Some(BlockNode::Paragraph(paragraph)) if paragraph.attrs.is_some())
+        } else {
+            width > 0
+                || payload.starts_with("^ ")
+                || payload.starts_with(":: ")
+                || payload == ":"
+                || payload.is_empty()
+        };
+        if valid {
+            continue;
+        }
+        invalid.insert(index);
+        let message = if let Some(closer) = pairs.get(&index) {
+            invalid.insert(*closer);
+            "Dropped carrier marker pair with an invalid opener"
+        } else {
+            "Dropped carrier marker with an invalid payload"
+        };
+        notices.push((
+            marker.line + 1,
+            format!(
+                "{message}: {}",
+                lines[marker.line]
+                    .strip_prefix(&marker.host)
+                    .unwrap_or(lines[marker.line])
+            ),
+        ));
+    }
+    payloads = payloads
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, marker)| (!invalid.contains(&index)).then_some(marker))
+        .collect();
     let dropped = validate_markers(&normalized, &lines, &payloads);
     if dropped.is_none() {
         return none(markdown, true);
@@ -793,6 +846,7 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         slots,
         token,
         damaged: false,
+        dropped: notices,
     }
 }
 

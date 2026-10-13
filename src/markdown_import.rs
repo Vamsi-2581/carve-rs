@@ -43,6 +43,7 @@ pub(crate) enum MarkdownLossKind {
     RawSpanWhitespaceTrimmed,
     /// PART 11 §10s: a carrier marker set that records no structure.
     CarrierMarkersDamaged,
+    CarrierMarkerDropped,
     RawCodeFallback,
 }
 
@@ -191,6 +192,11 @@ pub(crate) fn markdown_to_carve_with_losses(
     let mut code_lines = Vec::new();
     let (mut document, mut losses, notices) =
         markdown_to_ast_with_code_lines(&lift.source, Some(&mut code_lines), Some(&lift.token))?;
+    losses.extend(lift.dropped.iter().map(|(line, message)| MarkdownImportLoss {
+        message: message.clone(),
+        line: Some(*line),
+        kind: MarkdownLossKind::CarrierMarkerDropped,
+    }));
     if lift.damaged {
         losses.push(MarkdownImportLoss {
             message: CARRIER_MARKERS_DAMAGED.to_owned(),
