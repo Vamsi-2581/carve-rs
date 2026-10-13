@@ -921,3 +921,37 @@ fn xref_contradictions_keep_an_ordinary_link_in_every_mode() {
         }
     }
 }
+
+#[test]
+fn markdown_reports_a_list_delimiter_forced_apart_from_the_list_above() {
+    for roundtrip in [false, true] {
+        let render = |source: &str| {
+            carve::with_render_loss_report(
+                carve::RenderTarget::Markdown,
+                CheckedRenderOptions::default(),
+                || {
+                    carve::render_markdown_with_options(
+                        &parse(source),
+                        &Options::default().with_roundtrip(roundtrip),
+                    )
+                    .unwrap()
+                },
+            )
+            .unwrap()
+        };
+        let result = render("a. one\n\n1. two\n");
+        assert!(result.value.ends_with("1) two\n"), "{}", result.value);
+        let changed: Vec<_> = result
+            .losses
+            .iter()
+            .filter(|loss| loss.code == "list-delimiter-changed")
+            .collect();
+        assert_eq!(changed.len(), 1, "{:?}", result.losses);
+        assert_eq!(changed[0].delim, Some('.'));
+        assert_eq!(changed[0].emitted_delim, Some(')'));
+        let single = render("1. one\n2. two\n");
+        assert!(single.losses.is_empty(), "{:?}", single.losses);
+        let apart = render("1. one\n\npara\n\n1. two\n");
+        assert!(apart.losses.is_empty(), "{:?}", apart.losses);
+    }
+}

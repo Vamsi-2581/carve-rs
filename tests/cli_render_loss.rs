@@ -119,6 +119,7 @@ fn allow_loss_offers_every_code_but_destination_denied() {
         "carrier-attribute-dropped",
         "definition-list-flattened",
         "list-style-dropped",
+        "list-delimiter-changed",
     ] {
         let accepted = run_input(&["--plain", "--allow-loss", code], "text\n");
         assert!(accepted.status.success(), "{code}: {:?}", accepted.stderr);
@@ -134,7 +135,7 @@ fn allow_loss_offers_every_code_but_destination_denied() {
         let stderr = String::from_utf8_lossy(&refused.stderr);
         assert_eq!(
             stderr.trim_end(),
-            "carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened, carrier-attribute-dropped, definition-list-flattened or list-style-dropped"
+            "carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened, carrier-attribute-dropped, definition-list-flattened, list-style-dropped or list-delimiter-changed"
         );
     }
     let help = run_input(&["--help"], "");
@@ -239,4 +240,32 @@ fn carrier_collision_report_names_the_attribute_and_accepts_the_canonical_code()
         "{data-char=\"_\"}\n***\n",
     );
     assert!(allowed.status.success(), "{:?}", allowed.stderr);
+}
+
+#[test]
+fn a_forced_list_delimiter_change_reports_both_delimiters() {
+    let output = run_input(
+        &["--markdown", "--report-losses", "-"],
+        "a. one\n\n1. two\n",
+    );
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(r#""code":"list-delimiter-changed","delim":".","emittedDelim":")""#),
+        "{stderr}"
+    );
+    let strict = |allowed: &[&str]| {
+        let mut args = vec![
+            "--markdown",
+            "--strict-losses",
+            "--allow-loss",
+            "list-style-dropped",
+        ];
+        for code in allowed {
+            args.extend(["--allow-loss", code]);
+        }
+        run_input(&args, "a. one\n\n1. two\n").status.success()
+    };
+    assert!(strict(&["list-delimiter-changed"]));
+    assert!(!strict(&[]));
 }

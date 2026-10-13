@@ -269,8 +269,11 @@ fn main() -> ExitCode {
                     allowed_render_losses.push("definition-list-flattened")
                 }
                 Some("list-style-dropped") => allowed_render_losses.push("list-style-dropped"),
+                Some("list-delimiter-changed") => {
+                    allowed_render_losses.push("list-delimiter-changed")
+                }
                 _ => {
-                    eprintln!("carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened, carrier-attribute-dropped, definition-list-flattened or list-style-dropped");
+                    eprintln!("carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened, carrier-attribute-dropped, definition-list-flattened, list-style-dropped or list-delimiter-changed");
                     return ExitCode::from(2);
                 }
             },
@@ -1186,9 +1189,11 @@ fn render_loss_json(losses: &[carve::RenderLoss], total: usize, truncated: bool)
         )).unwrap_or_default();
         let attribute_field = loss.attribute.as_ref().map(|attribute| format!(",\"attribute\":{}", json_string(attribute))).unwrap_or_default();
         let style_field = loss.style.map(|style| format!(",\"style\":{}", json_string(style))).unwrap_or_default();
+        let delim_field = loss.delim.map(|delim| format!(",\"delim\":{}", json_string(&delim.to_string()))).unwrap_or_default();
+        let emitted_field = loss.emitted_delim.map(|delim| format!(",\"emittedDelim\":{}", json_string(&delim.to_string()))).unwrap_or_default();
         let format_field = loss.format.as_ref().map(|format| format!(",\"format\":{}", json_string(format))).unwrap_or_default();
         format!(
-            "{{\"code\":{}{format_field}{attribute_field}{style_field},\"target\":{},\"nodeType\":{},\"message\":{}{pos}}}",
+            "{{\"code\":{}{format_field}{attribute_field}{style_field}{delim_field}{emitted_field},\"target\":{},\"nodeType\":{},\"message\":{}{pos}}}",
             json_string(loss.code), json_string(loss.target.as_str()),
             json_string(loss.node_type.as_str()), json_string(&loss.message),
         )
@@ -1749,7 +1754,8 @@ fn print_usage() {
          --report-losses FILE        write JSON loss report (`-` for stderr)\n  \
          --allow-loss CODE          accept raw-format-dropped, ruby-flattened,\n                              \
          editorial-comment-flattened, carrier-attribute-dropped\n                              \
-         definition-list-flattened, or list-style-dropped\n  \
+         definition-list-flattened, list-style-dropped,\n                              \
+         or list-delimiter-changed\n  \
          --max-render-losses N       bound detailed losses (default 100)\n\n\
          --include-root DIR          containment root for {{ path }} includes.\n                              \
          Defaults to the input file's directory; pass this to widen\n                              \

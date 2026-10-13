@@ -734,6 +734,9 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
                 }
                 _ => usual,
             };
+            if list.ordered && marker != usual {
+                crate::render_loss::record_list_delimiter_changed(usual, marker, list.pos.as_ref());
+            }
             let mut out = render_list(list, ctx, depth + 1, marker);
             if style_carrier {
                 let start = list.start.unwrap_or(1);
