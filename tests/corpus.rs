@@ -830,6 +830,7 @@ const IMPLEMENTED: &[&str] = &[
     "an-opener-past-a-hosted-container-s-column-opens-there",
     "a-titled-footnotes-marker-names-the-endnotes-section",
     "an-at-sign-before-a-space-and-a-doubled-delimiter-inside-bold-italic-are-text",
+    "a-closed-fence-at-a-marker-line-note-s-body-column-opens-in-the-note",
 ];
 
 // Spec-main categories tracked by separate implementation work. Keep them

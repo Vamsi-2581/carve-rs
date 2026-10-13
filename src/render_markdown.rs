@@ -1,5 +1,7 @@
 use crate::ast::*;
-use crate::carrier_markers::{carrier_line, spell_carrier_markers, CarrierMarkers};
+use crate::carrier_markers::{
+    carrier_line, carrier_line_at, spell_carrier_markers, CarrierMarkers,
+};
 use crate::extension::Options;
 use crate::parse::unwrap_nested_anchors;
 use crate::render_loss::DeniedSink;
@@ -536,13 +538,17 @@ fn nonempty_attributes(attrs: &Option<Attrs>) -> Option<String> {
 }
 
 fn inline_carrier(prefix: &str, nodes: &[InlineNode]) -> String {
+    inline_carrier_at(prefix, nodes, 1)
+}
+
+fn inline_carrier_at(prefix: &str, nodes: &[InlineNode], depth: usize) -> String {
     let mut doc = crate::parse::parse("");
     doc.children.push(BlockNode::Paragraph(Paragraph {
         children: nodes.to_vec(),
         ..Paragraph::default()
     }));
     let text = crate::render_carve::render_carve(&doc).expect("carrier inline source");
-    carrier_line(&format!("{prefix} {}", text.trim_end()))
+    carrier_line_at(&format!("{prefix} {}", text.trim_end()), depth)
 }
 
 fn caption_carrier(nodes: &[InlineNode], ctx: &MarkdownContext) -> String {
@@ -779,7 +785,7 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
         }
         BlockNode::Section(section) => render_blocks(&section.children, ctx, depth + 1),
         BlockNode::DefinitionList(list) => {
-            if ctx.roundtrip && (ctx.definition_depth > 0 || ctx.single_line_depth > 0) {
+            if ctx.roundtrip && ctx.single_line_depth > 0 {
                 crate::render_loss::record_definition_list_flattened(list.pos.as_ref());
             }
             render_definition_list(&list.items, ctx, depth + 1)
@@ -1273,13 +1279,14 @@ fn render_definition_list(
         crate::render_depth::record("markdown");
         return String::new();
     }
-    let carried = ctx.roundtrip && ctx.single_line_depth == 0 && ctx.definition_depth == 0;
+    let carried = ctx.roundtrip && ctx.single_line_depth == 0;
     ctx.definition_depth += 1;
+    let carrier_depth = ctx.definition_depth;
     let mut out = String::new();
     for item in items {
         for term in &item.terms {
             if carried {
-                out.push_str(&inline_carrier("::", term));
+                out.push_str(&inline_carrier_at("::", term, carrier_depth));
                 out.push('\n');
             }
             let term = render_wrapped_inlines(term, ctx, "**", "<strong>", "</strong>");
@@ -1291,14 +1298,14 @@ fn render_definition_list(
         }
         for definition in &item.definitions {
             if carried {
-                out.push_str(&carrier_line(":"));
+                out.push_str(&carrier_line_at(":", carrier_depth));
                 out.push('\n');
             }
             out.push_str(&render_blocks(definition, ctx, depth + 1));
         }
     }
     if carried {
-        out.push_str(&carrier_line(""));
+        out.push_str(&carrier_line_at("", carrier_depth));
         out.push_str("\n\n");
     }
     ctx.definition_depth -= 1;
