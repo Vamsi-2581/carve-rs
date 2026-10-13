@@ -145,3 +145,27 @@ fn multiline_keys_inside_list_quotes() {
     assert!(report.report.diagnostics.iter().any(|item| item.message
         == "An image alternative text with a blank line cannot be spelled in Carve."));
 }
+
+#[test]
+fn ordinary_explicit_reference_names_remain_authored() {
+    for label in ["api_v2", "Mark's blog"] {
+        for used in [false, true] {
+            let source = if used {
+                format!("[docs][{label}]\n\n[{label}]: https://example.com")
+            } else {
+                format!("[{label}]: https://example.com")
+            };
+            let report = carve::migrate_djot(&source);
+            assert!(
+                report.value.contains(&format!("[{label}]:")),
+                "{}",
+                report.value
+            );
+            assert!(
+                !report.value.contains("carve-djot-reference-"),
+                "{}",
+                report.value
+            );
+        }
+    }
+}

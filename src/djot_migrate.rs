@@ -127,10 +127,7 @@ fn convert_djot_document(
             .unwrap()
             .captures(&line[djot_content_start(line)..])
             .is_some_and(|caps| {
-                !caps[1].starts_with('^')
-                    && caps[1]
-                        .bytes()
-                        .any(|byte| b"_*`{~^\\[]|\"'<:".contains(&byte))
+                !caps[1].starts_with('^') && normalize::reference_key_needs_alias(&caps[1])
             })
     }) {
         std::borrow::Cow::Owned(normalize::literal_reference_keys(body))

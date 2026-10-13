@@ -3510,7 +3510,7 @@ fn reference_uses<'a>(source: &'a str, mask: &str) -> Vec<ReferenceUse<'a>> {
         line_depths.push((line_at, prefix.bytes().filter(|&byte| byte == b'>').count()));
         line_at += line.len();
     }
-    if line_depths.iter().any(|&(_, depth)| depth > 1) {
+    if line_depths.iter().any(|&(_, depth)| depth > 0) {
         let rows = djot_table_rows(source, mask);
         let literal = literal_quote_depths(source, mask, &rows);
         for (at, depth) in &mut line_depths {
@@ -3666,6 +3666,11 @@ pub(super) fn caret_references(
     references_impl(source, Some(accepted), false)
 }
 
+pub(super) fn reference_key_needs_alias(key: &str) -> bool {
+    key.bytes().any(|byte| b"`{^\\|[".contains(&byte))
+        || key.bytes().any(|byte| b"_*~\"'<:".contains(&byte)) && reference_label(key, "") != key
+}
+
 pub(super) fn literal_reference_keys(source: &str) -> String {
     references_impl(source, None, true)
 }
@@ -3727,7 +3732,7 @@ fn references_impl(
         if accepted.is_some_and(|decisions| !caret || !decisions.contains_key(&line_number)) {
             continue;
         }
-        if content_start > 0
+        if (content_start > 0 || aliases_only)
             && !valid_definition_lines
                 .get_or_insert_with(|| reference_definitions(source, &mask).1)
                 .contains(&line_number)
@@ -3959,8 +3964,7 @@ fn references_impl(
     let mut serial = 0;
     let mut aliases = HashMap::new();
     for key in &definition_keys {
-        if key.bytes().any(|byte| b"_*`{~^\\[]|\"'<:".contains(&byte)) && !aliases.contains_key(key)
-        {
+        if reference_key_needs_alias(key) && !aliases.contains_key(key) {
             aliases.insert(
                 key.clone(),
                 next_reference_alias(&mut occupied, &mut serial),
@@ -4455,7 +4459,6 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
         djot_destination_ranges(source, &destination_mask)
     });
     let reference_starts: HashSet<_> = references.iter().map(|reference| reference.start).collect();
-    let quote_prefix = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
     let mut line_offsets = Vec::new();
     let mut quote_depths = Vec::new();
     let mut layout_offset = 0;
@@ -4463,16 +4466,13 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
         line_offsets.push(layout_offset);
         layout_offset += line.len() + 1;
         quote_depths.push(
-            quote_prefix
-                .find(line)
-                .unwrap()
-                .as_str()
+            line[..djot_content_start(line)]
                 .bytes()
                 .filter(|&byte| byte == b'>')
                 .count(),
         );
     }
-    if quote_depths.iter().any(|&depth| depth > 1) {
+    if quote_depths.iter().any(|&depth| depth > 0) {
         let rows = djot_table_rows(source, &mask);
         let literal = literal_quote_depths(source, &mask, &rows);
         for (line, at) in line_offsets.iter().enumerate() {
