@@ -64,28 +64,7 @@ use json::Value;
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[];
 
 /// Exact HTML corrections pending in the shared vectors, retired when the pin agrees.
-const AHEAD_OF_PIN: &[(&str, &str, &str)] = &[
-    (
-        "i01-padding-is-a-run-of-whitespace",
-        "html",
-        r#""<p>body</p>\n<p>{{\tc.crv\t}}</p>""#,
-    ),
-    (
-        "i01-section-after-a-tab",
-        "html",
-        r#""<p>{{ child\t<span class=\"tag\"><strong>#pick</strong></span> }}</p>""#,
-    ),
-    (
-        "i01-section-after-a-tab",
-        "warnings",
-        r#"[{"rule":"include-unresolved"}]"#,
-    ),
-    (
-        "i01-section-after-a-tab",
-        "dependencies",
-        r#"[{"id":"child\t","resolved":false}]"#,
-    ),
-];
+const AHEAD_OF_PIN: &[(&str, &str, &str)] = &[];
 
 // ---------------------------------------------------------------------------
 // Vector location

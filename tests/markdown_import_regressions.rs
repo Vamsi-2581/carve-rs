@@ -85,18 +85,18 @@ fn task_markers_take_precedence_over_reference_links() {
     // renders nothing, so it may go out or stay.
     assert_eq!(
         markdown_to_carve("- [x] done\n\n[x]: /u \"Title\"\n"),
-        "- [x] done\n"
+        "- [x] done\n\n[x]: /u \"Title\"\n"
     );
     assert_eq!(markdown_to_carve("- [x] done\n"), "- [x] done\n");
     assert_eq!(
         markdown_to_carve("- [x]\tdone\n\n[x]: /u\n"),
-        "- [x] done\n"
+        "- [x] done\n\n[x]: /u\n"
     );
     // The ordered form keeps the marker as text (carve-rs#1886), which is the
     // same reading spelled where the writer has no box to put it.
     assert_eq!(
         markdown_to_carve("1. [x] done\n\n[x]: /u\n"),
-        "1. [x] done\n"
+        "1. [x] done\n\n[x]: /u\n"
     );
 }
 

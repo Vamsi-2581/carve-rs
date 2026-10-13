@@ -78,14 +78,13 @@ fn container_verse_definitions_are_literal_and_do_not_register() {
 }
 
 #[test]
-fn a_definition_after_the_quote_ends_registers() {
-    for source in [
-        "> ::: |\n> verse\n\n[r]: /target\n\n[t][r]\n",
-        "> ::: |\n> ```\n> verse\nlazy\n> [r]: /target\n\n[t][r]\n",
-    ] {
-        let html = carve::to_html(source);
-        assert!(html.contains("href=\"/target\""), "{source:?}: {html}");
-    }
+fn a_definition_registers_after_the_quote_ends_but_not_inside_lazy_code() {
+    let source = "> ::: |\n> verse\n\n[r]: /target\n\n[t][r]\n";
+    assert!(carve::to_html(source).contains("href=\"/target\""));
+    let source = "> ::: |\n> ```\n> verse\nlazy\n> [r]: /target\n\n[t][r]\n";
+    let html = carve::to_html(source);
+    assert!(!html.contains("href=\"/target\""), "{html}");
+    assert!(html.contains("[r]: /target"), "{html}");
 }
 
 #[test]

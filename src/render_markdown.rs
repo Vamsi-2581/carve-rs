@@ -143,6 +143,33 @@ fn render_markdown_once(
     id_opts: crate::extension::HeadingIdOptions,
     roundtrip: bool,
 ) -> String {
+    INLINE_CARRIER_PATTERN.with(|pattern| {
+        *pattern.borrow_mut() = None;
+    });
+    if roundtrip {
+        let authored = crate::ast_json::to_json(doc);
+        let mut nonce = 0;
+        let prefix = loop {
+            let prefix = format!("§carve-inline-{nonce}§");
+            if !authored.contains(&prefix) {
+                break prefix;
+            }
+            nonce += 1;
+        };
+        INLINE_CARRIER_PATTERN.with(|pattern| {
+            *pattern.borrow_mut() = Some(
+                regex::Regex::new(&format!(
+                    "{}(<!--[\\s\\S]*?-->){}",
+                    regex::escape(&prefix),
+                    regex::escape(&prefix)
+                ))
+                .unwrap(),
+            );
+        });
+        INLINE_CARRIER_PREFIX.with(|current| {
+            *current.borrow_mut() = prefix;
+        });
+    }
     INSERTED.with(|counts| counts.set([0; CARRIER_COUNT]));
     SEEN.with(|counts| counts.set([0; CARRIER_COUNT]));
     IN_LINK_TEXT.with(|d| d.set(0));
@@ -184,7 +211,9 @@ fn render_markdown_once(
         walk_headings(body, 0, true, &mut heading_pass);
     }
 
+    let referenced_links = referenced_link_labels(doc);
     let mut ctx = MarkdownContext {
+        referenced_links,
         suppress_automatic_abbreviation: false,
         heading_slugs,
         list_depth: 0,
@@ -202,6 +231,13 @@ fn render_markdown_once(
     let out = render_blocks(&doc.children, &mut ctx, 0);
     let footnotes = render_footnote_defs(doc, &mut ctx);
     let body = normalize(&format!("{out}{footnotes}"));
+    let body = INLINE_CARRIER_PATTERN.with(|pattern| {
+        pattern
+            .borrow()
+            .as_ref()
+            .map(|pattern| pattern.replace_all(&body, "$1").into_owned())
+            .unwrap_or(body)
+    });
     match render_frontmatter(doc) {
         None => body,
         // A document that is only frontmatter has no body to separate it from,
@@ -249,7 +285,53 @@ fn render_frontmatter(doc: &Document) -> Option<String> {
     Some(out)
 }
 
+fn referenced_link_labels(doc: &Document) -> HashSet<String> {
+    use crate::include_walk::{visit_block_children, visit_inline_children, SubtreeVisitor};
+    struct Labels(HashSet<String>);
+    impl SubtreeVisitor for Labels {
+        fn blocks(&mut self, blocks: &mut Vec<BlockNode>) {
+            for block in blocks {
+                visit_block_children(block, self);
+            }
+        }
+        fn inlines(&mut self, inlines: &mut Vec<InlineNode>) {
+            for inline in inlines {
+                if let InlineNode::Link(link) = inline {
+                    if !link.href.is_empty() {
+                        if let Some(label) = &link.ref_label {
+                            self.0.insert(crate::parse::label_key(label));
+                        }
+                    }
+                }
+                visit_inline_children(inline, self);
+            }
+        }
+        fn image(&mut self, image: &mut Image) {
+            if !image.src.is_empty() {
+                if let Some(label) = &image.ref_label {
+                    self.0.insert(crate::parse::label_key(label));
+                }
+            }
+        }
+    }
+    if !doc
+        .children
+        .iter()
+        .any(|block| matches!(block, BlockNode::LinkReferenceDefinition(_)))
+    {
+        return HashSet::new();
+    }
+    let mut labels = Labels(HashSet::new());
+    let mut document = doc.clone();
+    labels.blocks(&mut document.children);
+    for body in document.footnote_defs.values_mut() {
+        labels.blocks(body);
+    }
+    labels.0
+}
+
 struct MarkdownContext {
+    referenced_links: HashSet<String>,
     /// Set while rendering a span that carries an authored `abbr`.
     ///
     /// PART 9 section 10 and carve#1127: the authored value OUTRANKS automatic
@@ -354,12 +436,12 @@ fn render_wrapped_inlines(
     let inner = render_recorded_inlines(nodes, ctx, 0, Some(owner));
     ctx.delimiter_ancestors.pop();
     let parts = ctx.rendered_children.remove(&owner);
-    let core = inner.trim();
+    let (marked_lead, marked_core, marked_trail) = inline_padding(&inner, char::is_whitespace);
+    let visible_core = visible_inline(&marked_core);
+    let core = visible_core.as_ref();
     let rendered =
         if !core.is_empty() && nested_edge_is_invalid(core, delimiter, nodes, parts.as_ref()) {
-            let lead = &inner[..inner.len() - inner.trim_start().len()];
-            let trail = &inner[inner.trim_end().len()..];
-            format!("{lead}{open_tag}{core}{close_tag}{trail}")
+            format!("{marked_lead}{open_tag}{marked_core}{close_tag}{marked_trail}")
         } else {
             pad_outside(inner, delimiter, open_tag, close_tag)
         };
@@ -478,7 +560,29 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
     }
     match node {
         // Renders nothing, same as carve-js and carve-php on this target.
-        BlockNode::LinkReferenceDefinition(_) | BlockNode::CitationDefinition(_) => String::new(),
+        BlockNode::LinkReferenceDefinition(definition) => {
+            if ctx
+                .referenced_links
+                .contains(&crate::parse::label_key(&definition.label))
+            {
+                return String::new();
+            }
+            let destination = neutralize_char_refs(
+                &strip_control_chars(&definition.href)
+                    .replace('\\', "\\\\")
+                    .replace('(', "\\(")
+                    .replace(')', "\\)")
+                    .replace('<', "\\<")
+                    .replace('>', "\\>"),
+            );
+            let title = definition
+                .title
+                .as_ref()
+                .map(|title| format!(" \"{}\"", escape_md_title(title)))
+                .unwrap_or_default();
+            format!("[{}]: {destination}{title}\n\n", definition.label)
+        }
+        BlockNode::CitationDefinition(_) => String::new(),
         // No `{#id}` suffix: GFM has no heading-id syntax, and a link reaches
         // the heading through its slug instead (PART 11 §11).
         BlockNode::Heading(heading) => {
@@ -731,6 +835,25 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
 /// opener (§8a M1c, §8d, §8g). The paragraph is one string here, so a marker
 /// split across inline nodes is seen whole.
 fn protect_paragraph_list_markers(text: &str) -> String {
+    if !inline_marker_ranges(text).is_empty() {
+        let mut code_fence = 0;
+        return text
+            .split('\n')
+            .map(|line| {
+                let visible = visible_inline(line);
+                let inside_code = code_fence != 0;
+                code_fence = code_span_state_after(&visible, code_fence);
+                if inside_code {
+                    return line.to_owned();
+                }
+                let core = inline_padding(line, |ch| ch == ' ' || ch == '\t').1;
+                let visible = visible_inline(&core);
+                let protected = protect_paragraph_list_markers(&visible);
+                restore_inline_change(&core, &visible, &protected)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     let lines: Vec<&str> = text.split('\n').collect();
     let last = lines.len() - 1;
     let mut output = String::with_capacity(text.len());
@@ -1338,7 +1461,10 @@ fn render_table(node: &Table, ctx: &mut MarkdownContext) -> String {
                     None => crate::render_plain::flatten_cell_inlines(&cell.children, true),
                 };
                 ctx.single_line_depth += 1;
+                let roundtrip = ctx.roundtrip;
+                ctx.roundtrip = false;
                 let content = trim_non_nbsp(&render_block_inlines(&inlines, ctx)).to_string();
+                ctx.roundtrip = roundtrip;
                 ctx.single_line_depth -= 1;
                 escape_cell_pipes(&content)
             })
@@ -1670,6 +1796,21 @@ fn pad_outside_on_its_own_line(
 /// which is how a hard break at the edge arrives - falls back to inline HTML,
 /// the way this renderer already spells underline, sub, super and highlight.
 fn pad_outside(inner: String, delimiter: &str, open_tag: &str, close_tag: &str) -> String {
+    if inline_marker_ranges(&inner).is_empty() {
+        return pad_outside_plain(inner, delimiter, open_tag, close_tag);
+    }
+    let (lead, core, trail) = inline_padding(&inner, char::is_whitespace);
+    let visible = visible_inline(&core);
+    if visible.is_empty() {
+        return core;
+    }
+    if ends_escaped(&visible) || content_grows_the_run(&visible, delimiter) {
+        return format!("{open_tag}{inner}{close_tag}");
+    }
+    format!("{lead}{delimiter}{core}{delimiter}{trail}")
+}
+
+fn pad_outside_plain(inner: String, delimiter: &str, open_tag: &str, close_tag: &str) -> String {
     // The class stays Rust's `White_Space` rather than narrowing to
     // CommonMark 2.1. carve-js and carve-php can state the narrow class
     // because they strip U+000B, U+2028 and U+2029 as controls; this engine
@@ -1824,7 +1965,8 @@ fn render_recorded_inlines(
         parts.push(render_inline(node, ctx, depth));
     }
     let has_content = |part: &str| {
-        part.bytes()
+        visible_inline(part)
+            .bytes()
             .any(|byte| !matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
     };
     for i in (0..parts.len()).rev() {
@@ -2093,11 +2235,16 @@ fn reflank_runs(nodes: &[InlineNode], parts: &mut [String], ctx: &MarkdownContex
 }
 
 fn neighbour_before(parts: &[String], i: usize) -> Option<char> {
-    parts[..i].iter().rev().find_map(|p| p.chars().next_back())
+    parts[..i]
+        .iter()
+        .rev()
+        .find_map(|p| visible_inline(p).chars().next_back())
 }
 
 fn neighbour_after(parts: &[String], i: usize) -> Option<char> {
-    parts[i + 1..].iter().find_map(|p| p.chars().next())
+    parts[i + 1..]
+        .iter()
+        .find_map(|p| visible_inline(p).chars().next())
 }
 
 /// The characters this writer spells a delimiter run with. A run of anything
@@ -2246,7 +2393,158 @@ fn render_attributed_emphasis(
     Some(format!("{open}{attrs}>{extra}{inner}{close}"))
 }
 
+thread_local! {
+    static INLINE_CARRIER_PATTERN: std::cell::RefCell<Option<regex::Regex>> = const { std::cell::RefCell::new(None) };
+    static INLINE_CARRIER_PREFIX: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+fn inline_carrier_line(payload: &str) -> String {
+    INLINE_CARRIER_PREFIX.with(|prefix| {
+        let prefix = prefix.borrow();
+        format!("{prefix}{}{prefix}", carrier_line(payload))
+    })
+}
+
+fn inline_marker_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    INLINE_CARRIER_PATTERN.with(|pattern| {
+        pattern
+            .borrow()
+            .as_ref()
+            .map(|pattern| pattern.find_iter(text).map(|found| found.range()).collect())
+            .unwrap_or_default()
+    })
+}
+
+fn visible_inline(text: &str) -> std::borrow::Cow<'_, str> {
+    INLINE_CARRIER_PATTERN.with(|pattern| match pattern.borrow().as_ref() {
+        Some(pattern) => pattern.replace_all(text, ""),
+        None => std::borrow::Cow::Borrowed(text),
+    })
+}
+
+fn inline_padding(text: &str, space: impl Fn(char) -> bool) -> (String, String, String) {
+    let visible = visible_inline(text);
+    let start = visible.len() - visible.trim_start_matches(&space).len();
+    let end = visible.trim_end_matches(&space).len().max(start);
+    let mut core = String::new();
+    let mut cursor = 0;
+    let mut position = 0;
+    for range in inline_marker_ranges(text) {
+        let chunk = &text[cursor..range.start];
+        let from = start.saturating_sub(position).min(chunk.len());
+        let to = end.saturating_sub(position).min(chunk.len()).max(from);
+        core.push_str(&chunk[from..to]);
+        core.push_str(&text[range.clone()]);
+        position += chunk.len();
+        cursor = range.end;
+    }
+    let chunk = &text[cursor..];
+    let from = start.saturating_sub(position).min(chunk.len());
+    let to = end.saturating_sub(position).min(chunk.len()).max(from);
+    core.push_str(&chunk[from..to]);
+    (visible[..start].to_owned(), core, visible[end..].to_owned())
+}
+
+fn restore_inline_change(marked: &str, before: &str, after: &str) -> String {
+    if before == after {
+        return marked.to_owned();
+    }
+    let start = before
+        .chars()
+        .zip(after.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
+    let suffix = before[start..]
+        .chars()
+        .rev()
+        .zip(after[start..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
+    let end = before.len() - suffix;
+    let ranges = inline_marker_ranges(marked);
+    let offset = |position: usize| {
+        let mut at = position;
+        let mut removed = 0;
+        for range in &ranges {
+            if range.start - removed > position {
+                break;
+            }
+            at += range.len();
+            removed += range.len();
+        }
+        at
+    };
+    let from = offset(start);
+    let to = offset(end);
+    let mut out = marked[..from].to_owned();
+    for range in ranges
+        .iter()
+        .filter(|range| range.start >= from && range.end <= to)
+    {
+        out.push_str(&marked[range.clone()]);
+    }
+    out.push_str(&after[start..after.len() - suffix]);
+    out.push_str(&marked[to..]);
+    out
+}
+
 fn render_inline(node: &InlineNode, ctx: &mut MarkdownContext, depth: usize) -> String {
+    let body = render_inline_body(node, ctx, depth);
+    if !ctx.roundtrip {
+        return body;
+    }
+    let attributes = |attrs: &Option<Attrs>| {
+        let spelled = crate::render_carve::render_carrier_attrs(attrs);
+        if spelled.is_empty() {
+            "{}".to_owned()
+        } else {
+            spelled
+        }
+    };
+    match node {
+        InlineNode::Link(link) if ctx.link_depth == 0 && !link.href.is_empty() => {
+            let attrs = attributes(&link.attrs);
+            if attrs == "{}" {
+                body
+            } else {
+                format!("{body}{}", inline_carrier_line(&attrs))
+            }
+        }
+        InlineNode::Image(image) if !image.src.is_empty() => {
+            let attrs = attributes(&image.attrs);
+            if attrs == "{}" {
+                body
+            } else {
+                format!("{body}{}", inline_carrier_line(&attrs))
+            }
+        }
+        InlineNode::Span(span) => format!(
+            "{}{body}{}",
+            inline_carrier_line("["),
+            inline_carrier_line(&format!("]{}", attributes(&span.attrs)))
+        ),
+        InlineNode::CrossRef(reference) if ctx.link_depth == 0 && body.starts_with('[') => {
+            let mut document = crate::parse::parse("x");
+            if let BlockNode::Paragraph(paragraph) = &mut document.children[0] {
+                paragraph.children = vec![InlineNode::CrossRef(CrossRef {
+                    target: reference.target.clone(),
+                    href: None,
+                    pos: None,
+                })];
+            }
+            let payload = crate::render_carve::render_carve(&document).unwrap_or_default();
+            format!(
+                "{}{body}",
+                inline_carrier_line(payload.trim_end_matches('\n'))
+            )
+        }
+        _ => body,
+    }
+}
+
+fn render_inline_body(node: &InlineNode, ctx: &mut MarkdownContext, depth: usize) -> String {
     if depth > MAX_RENDER_DEPTH {
         crate::render_depth::record("markdown");
         return String::new();
@@ -3674,12 +3972,26 @@ fn resolve_narrowed_escapes(text: &str) -> String {
     let mut slots = Vec::new();
     const NO_SLOT: u8 = u8::MAX;
     const _: () = assert!(CARRIER_COUNT < u8::MAX as usize);
-    for token in
-        carrier_tokens(text, &carriers).filter(|token| token.slot != Some(C_PAYLOAD_BOUNDARY))
+    let mut markers = std::collections::BTreeMap::<usize, String>::new();
+    let mut cursor = 0;
+    for range in inline_marker_ranges(text)
+        .into_iter()
+        .chain(std::iter::once(text.len()..text.len()))
     {
-        line.push(token.character);
-        raw_chars.push(token.raw.chars().next().unwrap());
-        slots.push(token.slot.map_or(NO_SLOT, |slot| slot as u8));
+        for token in carrier_tokens(&text[cursor..range.start], &carriers)
+            .filter(|token| token.slot != Some(C_PAYLOAD_BOUNDARY))
+        {
+            line.push(token.character);
+            raw_chars.push(token.raw.chars().next().unwrap());
+            slots.push(token.slot.map_or(NO_SLOT, |slot| slot as u8));
+        }
+        if !range.is_empty() {
+            markers
+                .entry(line.len())
+                .or_default()
+                .push_str(&text[range.clone()]);
+        }
+        cursor = range.end;
     }
     let pairs = underscores_that_could_pair(&line, &slots);
     let mut out = String::with_capacity(text.len());
@@ -3693,6 +4005,9 @@ fn resolve_narrowed_escapes(text: &str) -> String {
     // computed once when a line opens and read in O(1) after that.
     let mut content_start = content_position(&line, 0);
     for (i, (&raw, &slot)) in raw_chars.iter().zip(&slots).enumerate() {
+        if let Some(marker) = markers.get(&i) {
+            out.push_str(marker);
+        }
         if raw == '\n' {
             content_start = content_position(&line, i + 1);
             out.push(raw);
@@ -3749,6 +4064,9 @@ fn resolve_narrowed_escapes(text: &str) -> String {
             Some((ch, false)) => out.push(ch),
             None => out.push(raw),
         }
+    }
+    if let Some(marker) = markers.get(&line.len()) {
+        out.push_str(marker);
     }
     out
 }
@@ -3953,7 +4271,7 @@ fn flatten_heading_text(text: &str) -> String {
     let layout = |c: char| c == ' ' || c == '\t' || c == '\r';
 
     text.split('\n')
-        .map(|part| part.trim_matches(layout))
+        .map(|part| inline_padding(part, layout).1)
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")

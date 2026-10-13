@@ -8131,7 +8131,7 @@ pub(crate) fn strip_footnote_definition_attributes(input: &str) -> DjotFootnoteA
                 comments.insert(serial);
                 lines[n - 1] = format!(
                     "{}\0DJOTNOTEATTR\x00{serial}\0",
-                    " ".repeat(list_column.unwrap())
+                    " ".repeat(note_column.unwrap())
                 );
                 serial += 1;
             }

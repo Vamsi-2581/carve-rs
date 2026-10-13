@@ -43,6 +43,7 @@ pub(crate) enum MarkdownLossKind {
     RawSpanWhitespaceTrimmed,
     /// PART 11 §10s: a carrier marker set that records no structure.
     CarrierMarkersDamaged,
+    CarrierMarkerDropped,
     RawCodeFallback,
 }
 
@@ -187,10 +188,72 @@ pub(crate) fn markdown_to_carve_with_losses(
     // conversion and written back as the Carve line it is afterwards, so the
     // Markdown reading in between never sees a comment it would carry across as
     // raw HTML.
-    let lift = crate::carrier_markers::lift_carrier_markers(markdown);
+    markdown_to_carve_with_carriers(markdown, true)
+}
+
+fn markdown_to_carve_with_carriers(
+    markdown: &str,
+    enabled: bool,
+) -> Result<(String, Vec<MarkdownImportLoss>, Vec<FrontmatterNotice>), crate::RenderCarveError> {
+    let inline = if enabled {
+        crate::inline_carriers::InlineCarriers::prepare(markdown)
+    } else {
+        crate::inline_carriers::InlineCarriers::plain(markdown)
+    };
+    let lift = if enabled {
+        crate::carrier_markers::lift_carrier_markers(&inline.source)
+    } else {
+        let mut lift = crate::carrier_markers::lift_carrier_markers("");
+        lift.source = markdown.to_owned();
+        lift
+    };
+    if enabled && lift.damaged {
+        let (value, mut losses, notices) = markdown_to_carve_with_carriers(markdown, false)?;
+        losses.push(MarkdownImportLoss {
+            message: CARRIER_MARKERS_DAMAGED.to_owned(),
+            line: None,
+            kind: MarkdownLossKind::CarrierMarkersDamaged,
+        });
+        return Ok((value, losses, notices));
+    }
+    let finish = |value: String,
+                  mut losses: Vec<MarkdownImportLoss>,
+                  notices: Vec<FrontmatterNotice>| {
+        let source = crate::carrier_markers::restore_carrier_markers(&value, &lift);
+        let (restored, dropped) = inline.restore(&source);
+        if let Some(value) = restored {
+            losses.extend(
+                dropped
+                    .into_iter()
+                    .map(|(line, message)| MarkdownImportLoss {
+                        message,
+                        line: Some(line),
+                        kind: MarkdownLossKind::CarrierMarkersDamaged,
+                    }),
+            );
+            Ok((value, losses, notices))
+        } else {
+            let (value, mut losses, notices) = markdown_to_carve_with_carriers(markdown, false)?;
+            losses.push(MarkdownImportLoss {
+                message: CARRIER_MARKERS_DAMAGED.to_owned(),
+                line: None,
+                kind: MarkdownLossKind::CarrierMarkersDamaged,
+            });
+            Ok((value, losses, notices))
+        }
+    };
     let mut code_lines = Vec::new();
     let (mut document, mut losses, notices) =
         markdown_to_ast_with_code_lines(&lift.source, Some(&mut code_lines), Some(&lift.token))?;
+    losses.extend(
+        lift.dropped
+            .iter()
+            .map(|(line, message)| MarkdownImportLoss {
+                message: message.clone(),
+                line: Some(*line),
+                kind: MarkdownLossKind::CarrierMarkerDropped,
+            }),
+    );
     if lift.damaged {
         losses.push(MarkdownImportLoss {
             message: CARRIER_MARKERS_DAMAGED.to_owned(),
@@ -228,11 +291,7 @@ pub(crate) fn markdown_to_carve_with_losses(
             if expected_code.is_empty()
                 || expected_code == crate::parse::parse(&value).markdown_code_values() =>
         {
-            Ok((
-                crate::carrier_markers::restore_carrier_markers(&value, &lift),
-                losses,
-                notices,
-            ))
+            finish(value, losses, notices)
         }
         Ok(_) | Err(crate::RenderCarveError::SourceUnspellable(_)) => {
             losses.extend(preserve_html_code_for_writing(
@@ -266,11 +325,7 @@ pub(crate) fn markdown_to_carve_with_losses(
                     ),
                 ));
             }
-            Ok((
-                crate::carrier_markers::restore_carrier_markers(&value, &lift),
-                losses,
-                notices,
-            ))
+            finish(value, losses, notices)
         }
         Err(error) => Err(error),
     }

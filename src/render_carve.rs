@@ -5481,6 +5481,10 @@ fn refuse_attributes_on_sigil(attrs: &Option<Attrs>, node_type: &'static str) {
     }
 }
 
+pub(crate) fn render_carrier_attrs(attrs: &Option<Attrs>) -> String {
+    render_attrs_with_markers(attrs, &['>'], false)
+}
+
 pub(crate) fn render_attrs(attrs: &Option<Attrs>) -> String {
     render_attrs_with_markers(attrs, &[], false)
 }
@@ -6843,7 +6847,7 @@ fn escape_destination_escapes(text: &str) -> String {
     out
 }
 
-fn escape_destination(text: &str) -> String {
+pub(crate) fn escape_destination(text: &str) -> String {
     // Almost every destination holds neither a parenthesis nor a backslash, so
     // there is nothing for the scan to misread and nothing to mark. Skipping
     // the walk keeps that case free of the set entirely.

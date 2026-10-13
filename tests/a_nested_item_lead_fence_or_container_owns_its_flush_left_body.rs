@@ -117,29 +117,29 @@ fn a_trailing_sibling_marker_ends_the_fence_and_opens_an_outer_item() {
     );
 }
 
-// ---- #1548: a nested-item lead colon container is item text ----
+// A nested marker-line colon opener opens even without an indented body.
 
 #[test]
-fn a_nested_lead_div_with_a_flush_left_body_is_item_text() {
+fn a_nested_lead_div_with_a_flush_left_body_opens_an_empty_container() {
     assert_eq!(
         flat("- - ::: d\nbody\n:::\n"),
-        "<ul> <li> <ul> <li>::: d body</li> </ul> </li> </ul> <div> </div>",
+        "<ul> <li> <ul> <li> <div class=\"d\"> </div> </li> </ul> </li> </ul> <p>body</p> <div> </div>",
     );
 }
 
 #[test]
-fn a_nested_lead_div_without_a_closer_is_item_text() {
+fn a_nested_lead_div_without_a_closer_opens_an_empty_container() {
     assert_eq!(
         flat("- - ::: d\nbody\n"),
-        "<ul> <li> <ul> <li>::: d body</li> </ul> </li> </ul>",
+        "<ul> <li> <ul> <li> <div class=\"d\"> </div> </li> </ul> </li> </ul> <p>body</p>",
     );
 }
 
 #[test]
-fn a_nested_lead_admonition_with_a_flush_left_body_is_item_text() {
+fn a_nested_lead_admonition_with_a_flush_left_body_opens_an_empty_container() {
     assert_eq!(
         flat("- - ::: note\nbody\n:::\n"),
-        "<ul> <li> <ul> <li>::: note body</li> </ul> </li> </ul> <div> </div>",
+        "<ul> <li> <ul> <li> <aside class=\"admonition note\" aria-label=\"Note\"> </aside> </li> </ul> </li> </ul> <p>body</p> <div> </div>",
     );
 }
 
@@ -170,7 +170,7 @@ fn a_single_level_lead_fence_is_unchanged() {
 fn a_single_level_lead_div_is_unchanged() {
     assert_eq!(
         flat("- ::: d\nbody\n:::\n"),
-        "<ul> <li>::: d body</li> </ul> <div> </div>",
+        "<ul> <li> <div class=\"d\"> </div> </li> </ul> <p>body</p> <div> </div>",
     );
 }
 

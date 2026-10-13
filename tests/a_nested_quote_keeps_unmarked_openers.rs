@@ -136,9 +136,13 @@ fn a_nested_quote_and_a_colon_host_keep_the_same_fold() {
 }
 
 #[test]
-fn a_comment_fence_below_the_definition_column_stays_outside() {
+fn a_comment_fence_below_the_definition_column_retains_the_body() {
     use carve::ast::BlockNode;
     let doc = carve::parse(":: t\n: > q\n %%%\n secret\n %%%\n");
     assert!(matches!(&doc.children[0], BlockNode::DefinitionList(_)));
-    assert!(matches!(&doc.children[1], BlockNode::Comment(comment) if comment.block));
+    assert_eq!(doc.children.len(), 1);
+    assert_eq!(
+        carve::to_html(":: t\n: > q\n %%%\n secret\n %%%\n"),
+        "<dl>\n  <dt>t</dt>\n  <dd>\n    <blockquote><p>q</p></blockquote>\n  </dd>\n</dl>"
+    );
 }

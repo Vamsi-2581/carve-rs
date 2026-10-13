@@ -115,6 +115,8 @@ fn reserved(name: &str) -> bool {
         "generated-id",
         "id-slot",
         "tight",
+        "xref",
+        "caption-number",
     ]
     .iter()
     .any(|suffix| name == format!("data-carve-{suffix}") || name == format!("data-djot-{suffix}"))
@@ -586,7 +588,11 @@ fn shared_markdown_container_carriers_restore_ast_fields() {
         }
         let exported = report.value;
         for fragment in required_rows(fixture, "carrierFragments") {
-            assert!(exported.contains(fragment.as_str().unwrap()));
+            assert!(
+                exported.contains(fragment.as_str().unwrap()),
+                "{}: {exported:?}",
+                fixture["id"]
+            );
         }
         let imported = migrate_markdown(&exported);
         assert!(
@@ -680,6 +686,53 @@ fn shared_acceptance_cases_have_distinct_ids_and_assertions() {
                     .is_some_and(|rows| !rows.is_empty())
                     || row["attribute"].is_string()
             );
+        }
+    }
+}
+
+#[test]
+fn xref_contradictions_keep_an_ordinary_link_in_every_mode() {
+    for prefix in ["data-carve", "data-djot"] {
+        for other in ["ref=\"r\"", "autolink", "footnote-label=\"n\""] {
+            let source =
+                format!("<p><a href=\"#target\" {prefix}-xref {prefix}-{other}>target</a></p>");
+            for import_mode in [
+                HtmlImportMode::Safe,
+                HtmlImportMode::Semantic,
+                HtmlImportMode::Roundtrip,
+            ] {
+                let imported = html_to_ast(
+                    &source,
+                    &HtmlImportOptions {
+                        mode: import_mode,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let tree: Value = serde_json::from_str(&to_json(&imported.value)).unwrap();
+                assert!(
+                    !node_list(&tree)
+                        .iter()
+                        .any(|node| node["type"] == "heading_ref"),
+                    "{source}: {tree}"
+                );
+                assert!(
+                    node_list(&tree)
+                        .iter()
+                        .any(|node| node["type"] == "link" && node["href"] == "#target"),
+                    "{source}: {tree}"
+                );
+                assert!(
+                    imported
+                        .report
+                        .diagnostics
+                        .iter()
+                        .any(|row| row.code.as_str() == "attribute-dropped"),
+                    "{source}: {:?}",
+                    imported.report
+                );
+                no_reserved(&tree);
+            }
         }
     }
 }

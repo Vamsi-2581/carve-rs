@@ -62,8 +62,13 @@ pub(crate) const SRC: &str = "data-carve-src";
 /// The document's abbreviation definitions, one per line (`<template>`).
 pub(crate) const ABBREVIATIONS: &str = "data-carve-abbreviations";
 
+/// Presence: a resolved cross-reference anchor.
+pub(crate) const XREF: &str = "data-carve-xref";
+/// Presence: a caption number's text-only span.
+pub(crate) const CAPTION_NUMBER: &str = "data-carve-caption-number";
+
 /// Every name a reader consumes: the §13a inventory plus [`SRC`], which no writer emits.
-pub(crate) const CARRIERS: [&str; 16] = [
+pub(crate) const CARRIERS: [&str; 18] = [
     MARKER,
     CHAR,
     EXPLICIT_ID,
@@ -80,6 +85,8 @@ pub(crate) const CARRIERS: [&str; 16] = [
     TIGHT,
     SRC,
     ABBREVIATIONS,
+    XREF,
+    CAPTION_NUMBER,
 ];
 
 /// The canonical §13a name an attribute spells, or `None` for a name outside

@@ -1623,8 +1623,12 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // Spec bd667aef adds 54 documents: 39 strict and 15 with existing losses.
     // Corpus 455, 455-2 and 455-3 move from strict to reported lossy when the
     // unfinished nested fence releases their flush-left body and closer.
-    const STRICT: usize = 1810;
-    const LOSSY: usize = 566;
+    // Spec 0df7a782 adds 25 documents: 17 strict and eight with existing losses.
+    // Corpus 364-2, 482-5 and 558-3 enter the strict set. Corpus 510,
+    // 557-4 and 82-5 leave it as the new ownership rules retain soft breaks
+    // that ProseMirror reports as degraded.
+    const STRICT: usize = 1827;
+    const LOSSY: usize = 574;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in

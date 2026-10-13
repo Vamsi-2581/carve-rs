@@ -818,6 +818,16 @@ const IMPLEMENTED: &[&str] = &[
     "a-quoted-item-that-ends-on-a-block-past-its-column-holds-no-paragraph",
     "a-tab-inside-a-line-is-content-in-a-label-and-after-a-definition-marker",
     "a-tab-is-content-in-a-heading-key-and-in-a-cross-reference-id",
+    "a-closed-fence-in-a-quoted-sub-item-after-a-lazy-line-leaves-no-paragraph",
+    "a-description-marker-followed-by-a-no-break-space-has-content",
+    "a-footnote-reference-in-link-text-keeps-its-id-on-the-sup",
+    "a-head-row-alignment-marker-sets-the-whole-column",
+    "a-line-block-takes-a-lazy-line-whatever-its-last-payload-line",
+    "a-quoted-term-takes-a-lazy-line",
+    "a-shifted-fence-in-a-quoted-container-s-body-stores-no-continuation-claim",
+    "an-at-column-comment-retains-nothing",
+    "an-opener-past-a-hosted-container-s-column-interrupts-its-open-paragraph",
+    "an-opener-past-a-hosted-container-s-column-opens-there",
 ];
 
 // Spec-main categories tracked by separate implementation work. Keep them
