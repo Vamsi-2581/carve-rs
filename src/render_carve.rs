@@ -4294,13 +4294,18 @@ fn render_inline_body(
                     "{}{}",
                     guard_code_lines(
                         session,
-                        &render_code_with_unclosed(
-                            &value,
-                            may_run_to_end
-                                && ctx.table_cell_depth == 0
-                                && render_inline_attrs(&code.attrs, ctx).is_empty(),
-                            ctx.in_term,
-                            line_block_closer_in(&value, ctx),
+                        &with_verbatim_wraps(
+                            &code.cell_wraps,
+                            ctx.table_cell_depth > 0,
+                            "code",
+                            || render_code_with_unclosed(
+                                &value,
+                                may_run_to_end
+                                    && ctx.table_cell_depth == 0
+                                    && render_inline_attrs(&code.attrs, ctx).is_empty(),
+                                ctx.in_term,
+                                line_block_closer_in(&value, ctx),
+                            )
                         ),
                         ctx,
                         "code",
@@ -4355,11 +4360,13 @@ fn render_inline_body(
             if math.display { "$$" } else { "$" },
             guard_code_lines(
                 session,
-                &render_code(
-                    &spell_verse_empty_lines(&math.content, ctx.line_block_depth > 0),
-                    ctx,
-                    "math",
-                ),
+                &with_verbatim_wraps(&math.cell_wraps, ctx.table_cell_depth > 0, "math", || {
+                    render_code(
+                        &spell_verse_empty_lines(&math.content, ctx.line_block_depth > 0),
+                        ctx,
+                        "math",
+                    )
+                }),
                 ctx,
                 "math",
             ),
@@ -4382,13 +4389,20 @@ fn render_inline_body(
             }
             let verbatim = if raw.format.eq_ignore_ascii_case("html") {
                 let fence = code_span_fence(&content);
-                if verbatim_needs_padding(&content) {
-                    format!("{fence} {content} {fence}")
-                } else {
-                    format!("{fence}{content}{fence}")
-                }
+                let pad = verbatim_needs_padding(&content);
+                with_verbatim_wraps(
+                    &raw.cell_wraps,
+                    ctx.table_cell_depth > 0,
+                    "raw_inline",
+                    || spell_verbatim(&fence, &content, pad),
+                )
             } else {
-                render_code(&content, ctx, "raw_inline")
+                with_verbatim_wraps(
+                    &raw.cell_wraps,
+                    ctx.table_cell_depth > 0,
+                    "raw_inline",
+                    || render_code(&content, ctx, "raw_inline"),
+                )
             };
             format!(
                 "{}{{={}}}",
@@ -5414,6 +5428,85 @@ fn line_block_closer_in(content: &str, ctx: &CarveContext) -> bool {
         })
 }
 
+thread_local! {
+    /// The `cellWraps` of the verbatim span being written inside a table cell.
+    static VERBATIM_WRAPS: std::cell::RefCell<Option<(Vec<crate::ast::VerbatimCellWrap>, &'static str)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Hands a verbatim span's joins to the writer for the duration of `write`.
+fn with_verbatim_wraps<T>(
+    wraps: &Option<Vec<crate::ast::VerbatimCellWrap>>,
+    in_cell: bool,
+    node_type: &'static str,
+    write: impl FnOnce() -> T,
+) -> T {
+    let pending = wraps
+        .as_ref()
+        .filter(|_| in_cell)
+        .map(|wraps| (wraps.clone(), node_type));
+    let outer = VERBATIM_WRAPS.with(|slot| slot.replace(pending));
+    let written = write();
+    VERBATIM_WRAPS.with(|slot| slot.replace(outer));
+    written
+}
+
+/// Writes a verbatim span, turning each joining space a `cellWraps` entry
+/// names into the marker the table writer cuts the row at. The pad is decided
+/// on the joined value; an entry at a padding boundary (carve#3138) forces the
+/// pad and marks that pad space instead.
+fn spell_verbatim(fence: &str, content: &str, needs_pad: bool) -> String {
+    let pending = VERBATIM_WRAPS.with(|slot| slot.borrow_mut().take());
+    let Some((wraps, node_type)) = pending else {
+        return if needs_pad {
+            format!("{fence} {content} {fence}")
+        } else {
+            format!("{fence}{content}{fence}")
+        };
+    };
+    let marker = |wrap: &crate::ast::VerbatimCellWrap| {
+        format!("\u{2}{},{}\u{3}", wrap.row.unwrap_or(0), wrap.line)
+    };
+    let mut chars: Vec<String> = content.chars().map(String::from).collect();
+    let len = chars.len();
+    let (mut lead, mut tail) = (None, None);
+    let mut previous = None;
+    for (index, wrap) in wraps.iter().enumerate() {
+        let names_space = chars.get(wrap.offset).map(String::as_str) == Some(" ");
+        if previous.is_some_and(|at| wrap.offset <= at) {
+            crate::render_carve_error::record_unspellable(
+                node_type,
+                "a cellWraps offset does not name a joining space in ascending order",
+            );
+            return format!("{fence}{content}{fence}");
+        }
+        if wrap.offset == 0 && index == 0 && !names_space && len > 0 {
+            lead = Some(marker(wrap));
+        } else if wrap.offset == len && len > 0 && index + 1 == wraps.len() {
+            tail = Some(marker(wrap));
+        } else if names_space {
+            chars[wrap.offset] = marker(wrap);
+        } else {
+            crate::render_carve_error::record_unspellable(
+                node_type,
+                "a cellWraps offset does not name a joining space in ascending order",
+            );
+            return format!("{fence}{content}{fence}");
+        }
+        previous = Some(wrap.offset);
+    }
+    let body = chars.concat();
+    if needs_pad || lead.is_some() || tail.is_some() {
+        format!(
+            "{fence}{}{body}{}{fence}",
+            lead.as_deref().unwrap_or(" "),
+            tail.as_deref().unwrap_or(" ")
+        )
+    } else {
+        format!("{fence}{body}{fence}")
+    }
+}
+
 fn render_code(content: &str, ctx: &CarveContext, node_type: &'static str) -> String {
     if line_block_closer_in(content, ctx) {
         crate::render_carve_error::record_unspellable(
@@ -5505,11 +5598,7 @@ fn render_code_with_unclosed(
     } else {
         content
     };
-    if needs_pad {
-        format!("{fence} {content} {fence}")
-    } else {
-        format!("{fence}{content}{fence}")
-    }
+    spell_verbatim(&fence, content, needs_pad)
 }
 
 fn code_fence_info(lang: Option<&str>, title: Option<&str>, label: Option<&str>) -> String {

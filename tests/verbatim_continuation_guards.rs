@@ -142,6 +142,7 @@ fn definition_term_refusals_identify_the_verbatim_node() {
         (
             "raw_inline",
             carve::InlineNode::RawInline(carve::RawInline {
+                cell_wraps: None,
                 content: content.clone(),
                 format: "html".into(),
                 injected: false,
@@ -159,6 +160,7 @@ fn definition_term_refusals_identify_the_verbatim_node() {
         (
             "math",
             carve::InlineNode::Math(carve::Math {
+                cell_wraps: None,
                 content,
                 attrs: None,
                 display: false,
@@ -194,6 +196,7 @@ fn footnote_refusals_identify_the_verbatim_node() {
         (
             "code",
             carve::InlineNode::Code(carve::Code {
+                cell_wraps: None,
                 value: content.clone(),
                 attrs: None,
                 pos: None,
@@ -202,6 +205,7 @@ fn footnote_refusals_identify_the_verbatim_node() {
         (
             "raw_inline",
             carve::InlineNode::RawInline(carve::RawInline {
+                cell_wraps: None,
                 content: content.clone(),
                 format: "html".into(),
                 injected: false,
@@ -219,6 +223,7 @@ fn footnote_refusals_identify_the_verbatim_node() {
         (
             "math",
             carve::InlineNode::Math(carve::Math {
+                cell_wraps: None,
                 content,
                 attrs: None,
                 display: false,
@@ -283,11 +288,13 @@ fn nested_hosts_keep_exact_verbatim_payloads() {
             let content = format!("x\n{marker}");
             let nodes = [
                 carve::InlineNode::Code(carve::Code {
+                    cell_wraps: None,
                     value: content.clone(),
                     attrs: None,
                     pos: None,
                 }),
                 carve::InlineNode::RawInline(carve::RawInline {
+                    cell_wraps: None,
                     content: content.clone(),
                     format: "html".into(),
                     injected: false,
@@ -299,6 +306,7 @@ fn nested_hosts_keep_exact_verbatim_payloads() {
                     pos: None,
                 }),
                 carve::InlineNode::Math(carve::Math {
+                    cell_wraps: None,
                     content,
                     attrs: None,
                     display: false,
@@ -353,6 +361,7 @@ fn identical_guard_text_in_a_quote_does_not_steal_the_footnote_refusal_type() {
             panic!("expected quoted paragraph");
         };
         quoted.children = vec![carve::InlineNode::Code(carve::Code {
+            cell_wraps: None,
             value: "x\n> m".into(),
             attrs: None,
             pos: None,
@@ -361,6 +370,7 @@ fn identical_guard_text_in_a_quote_does_not_steal_the_footnote_refusal_type() {
             panic!("expected tail paragraph");
         };
         tail.children = vec![carve::InlineNode::Math(carve::Math {
+            cell_wraps: None,
             content: format!("x\n{continuation}"),
             attrs: None,
             display: false,
@@ -407,6 +417,7 @@ fn a_gap_definition_keeps_guard_types_in_output_order() {
         panic!("expected tail paragraph");
     };
     tail.children = vec![carve::InlineNode::Code(carve::Code {
+        cell_wraps: None,
         value: "x\n> m".into(),
         attrs: None,
         pos: None,
@@ -420,6 +431,7 @@ fn a_gap_definition_keeps_guard_types_in_output_order() {
         panic!("expected quoted paragraph");
     };
     paragraph.children = vec![carve::InlineNode::Math(carve::Math {
+        cell_wraps: None,
         content: "x\n> m".into(),
         attrs: None,
         display: false,

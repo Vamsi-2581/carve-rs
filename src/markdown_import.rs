@@ -560,6 +560,7 @@ fn preserve_html_code_for_writing(
                         self.kept_lines.pop();
                         self.losses.push(MarkdownImportLoss { message: "Preserved a code payload as raw HTML; targets and profiles that escape or omit raw HTML change its code structure and content".into(), line: source_line, kind: MarkdownLossKind::RawCodeFallback });
                         *node = InlineNode::RawInline(RawInline {
+                            cell_wraps: None,
                             format: "html".into(),
                             content: body,
                             injected: false,
@@ -625,6 +626,7 @@ fn preserve_code_text_at_depth(nodes: &mut Vec<InlineNode>, code_depth: usize) {
             .replace('>', "&gt;")
             .replace('\n', "<!---->&#10;<!---->");
         *node = InlineNode::RawInline(RawInline {
+            cell_wraps: None,
             format: "html".into(),
             content: html,
             injected: false,
@@ -1951,6 +1953,7 @@ impl Builder {
     fn raw_inline(&mut self, content: String) {
         self.report_raw_span_trailing_whitespace(&content);
         self.inline(InlineNode::RawInline(RawInline {
+            cell_wraps: None,
             format: "html".to_string(),
             content,
             injected: false,

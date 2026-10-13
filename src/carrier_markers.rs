@@ -673,6 +673,7 @@ fn math_source(content: &str) -> Option<String> {
     doc.children
         .push(BlockNode::Paragraph(crate::ast::Paragraph {
             children: vec![crate::ast::InlineNode::Math(crate::ast::Math {
+                cell_wraps: None,
                 attrs: None,
                 display: true,
                 content: code.content.clone(),

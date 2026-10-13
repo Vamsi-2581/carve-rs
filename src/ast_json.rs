@@ -2330,6 +2330,7 @@ fn write_inline_leaf(out: &mut String, node: &InlineNode) {
         InlineNode::Code(n) => {
             let mut w = typed(out, "code");
             w.field("value", |out| write_string(out, &n.value));
+            write_cell_wraps_field(&mut w, &n.cell_wraps);
             write_attrs_field(&mut w, &n.attrs);
             write_pos_field(&mut w, &n.pos);
             w.finish();
@@ -2347,6 +2348,7 @@ fn write_inline_leaf(out: &mut String, node: &InlineNode) {
             let mut w = typed(out, "math");
             w.field("display", |out| write_bool(out, n.display));
             w.field("content", |out| write_string(out, &n.content));
+            write_cell_wraps_field(&mut w, &n.cell_wraps);
             if let Some(label) = &n.label {
                 w.field("label", |out| write_string(out, label));
             }
@@ -2361,6 +2363,7 @@ fn write_inline_leaf(out: &mut String, node: &InlineNode) {
             let mut w = typed(out, "raw_inline");
             w.field("format", |out| write_string(out, &n.format));
             w.field("content", |out| write_string(out, &n.content));
+            write_cell_wraps_field(&mut w, &n.cell_wraps);
             write_pos_field(&mut w, &n.pos);
             w.finish();
         }
@@ -2610,6 +2613,48 @@ fn write_citation(out: &mut String, n: &Citation) {
         w.field("mode", |out| write_string(out, "integral"));
     }
     w.finish();
+}
+
+fn write_cell_wraps_field(w: &mut Writer<'_>, wraps: &Option<Vec<VerbatimCellWrap>>) {
+    let Some(wraps) = wraps else { return };
+    w.field("cellWraps", |out| {
+        write_array(out, wraps, |out, wrap| {
+            let mut w = Writer::new(out);
+            w.field("offset", |out| write_usize(out, wrap.offset));
+            w.field("line", |out| write_usize(out, wrap.line));
+            if let Some(row) = wrap.row {
+                w.field("row", |out| write_usize(out, row));
+            }
+            w.finish();
+        })
+    });
+}
+
+fn decode_cell_wraps(
+    obj: &Map<String, Json>,
+    node_type: &str,
+) -> Result<Option<Vec<VerbatimCellWrap>>, AstJsonError> {
+    let Some(value) = obj.get("cellWraps") else {
+        return Ok(None);
+    };
+    let context = format!("{node_type}.cellWraps");
+    value
+        .expect_array(&context)?
+        .iter()
+        .map(|entry| {
+            let entry = entry.expect_object(&context)?;
+            Ok(VerbatimCellWrap {
+                offset: required_usize(entry, &context, "offset")?,
+                line: positive_usize(
+                    Some(required_usize(entry, &context, "line")?),
+                    &format!("{context}.line"),
+                )?
+                .unwrap_or(1),
+                row: positive_usize(optional_usize(entry, "row")?, &format!("{context}.row"))?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 fn typed<'a>(out: &'a mut String, ty: &str) -> Writer<'a> {
@@ -3531,6 +3576,7 @@ fn decode_inline(value: &Json) -> Result<InlineNode, AstJsonError> {
             }))
         }
         "code" => Ok(InlineNode::Code(Code {
+            cell_wraps: decode_cell_wraps(obj, "code")?,
             value: required_string(obj, "code", "value")?.to_string(),
             attrs: optional_attrs(obj)?,
             pos: optional_pos(obj, "code")?,
@@ -3621,6 +3667,7 @@ fn decode_inline(value: &Json) -> Result<InlineNode, AstJsonError> {
                 }
             }
             Ok(InlineNode::Math(Math {
+                cell_wraps: decode_cell_wraps(obj, "math")?,
                 attrs: optional_attrs(obj)?,
                 display,
                 content: required_string(obj, "math", "content")?.to_string(),
@@ -3630,6 +3677,7 @@ fn decode_inline(value: &Json) -> Result<InlineNode, AstJsonError> {
             }))
         }
         "raw_inline" => Ok(InlineNode::RawInline(RawInline {
+            cell_wraps: decode_cell_wraps(obj, "raw_inline")?,
             format: required_string(obj, "raw_inline", "format")?.to_string(),
             content: required_string(obj, "raw_inline", "content")?.to_string(),
             // An ingested node is AUTHORED content: `injected` is a render-time

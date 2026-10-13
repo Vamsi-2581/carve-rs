@@ -845,6 +845,9 @@ const IMPLEMENTED: &[&str] = &[
     "a-link-definition-or-an-attribute-line-past-a-box-s-column-opens-on-its-authored-base",
     // CARVE-P9-082: an explicitly delimited row of blank cells is a table row.
     "an-explicitly-delimited-row-of-blank-cells-is-a-table",
+    // carve#3139, arrived with the bump to carve dc8e6905.
+    "a-closed-fence-in-a-nested-child-leaves-no-paragraph-open",
+    "a-code-line-left-of-an-authored-base-fence-opener-is-measured-from-that-base",
 ];
 
 // Spec-main categories tracked by separate implementation work. Keep them

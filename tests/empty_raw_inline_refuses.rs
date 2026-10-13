@@ -12,6 +12,7 @@ fn an_empty_raw_inline_refuses_instead_of_emitting_a_different_tree() {
         footnote_def_pos: BTreeMap::new(),
         children: vec![BlockNode::Paragraph(Paragraph {
             children: vec![InlineNode::RawInline(RawInline {
+                cell_wraps: None,
                 format: "html".into(),
                 content: String::new(),
                 injected: false,
