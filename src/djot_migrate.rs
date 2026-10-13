@@ -28,10 +28,18 @@
 macro_rules! cached_regex {
     ($pattern:literal) => {{
         static COMPILED: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        Ok::<&'static regex::Regex, regex::Error>(
-            COMPILED.get_or_init(|| regex::Regex::new($pattern).unwrap()),
-        )
+        Ok::<&'static regex::Regex, regex::Error>($crate::djot_migrate::cached_djot_regex(
+            &COMPILED, $pattern,
+        ))
     }};
+}
+
+#[inline]
+pub(crate) fn cached_djot_regex(
+    cache: &'static std::sync::OnceLock<regex::Regex>,
+    pattern: &'static str,
+) -> &'static regex::Regex {
+    cache.get_or_init(|| regex::Regex::new(pattern).unwrap())
 }
 
 #[path = "djot_emphasis.rs"]
@@ -1231,9 +1239,9 @@ fn escape_djot_table_attribute_boundaries(source: &str) -> std::borrow::Cow<'_, 
             let physical_end = source[line_start..]
                 .find('\n')
                 .map_or(source.len(), |offset| line_start + offset);
-            if !rejected_rows.contains_key(&line) {
+            if let std::collections::hash_map::Entry::Vacant(entry) = rejected_rows.entry(line) {
                 let offset = line_start + djot_content_start(&source[line_start..physical_end]);
-                rejected_rows.insert(line, offset);
+                entry.insert(offset);
                 row_offsets.push(offset);
             }
         }
@@ -1247,8 +1255,9 @@ fn escape_djot_table_attribute_boundaries(source: &str) -> std::borrow::Cow<'_, 
                 }
             }
         }
-        if crosses_cell && first_pipe.is_some() && !rejected_rows.contains_key(&line) {
-            let first_pipe = first_pipe.unwrap();
+        if let Some(first_pipe) =
+            first_pipe.filter(|_| crosses_cell && !rejected_rows.contains_key(&line))
+        {
             let mut open = None;
             let mut width = 0;
             let mut inner = at + 1;

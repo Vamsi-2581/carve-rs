@@ -2501,7 +2501,7 @@ fn references_impl(source: &str, accepted: Option<&HashMap<usize, ReferenceDecis
         if caret
             && c[1].len() > 1
             && matches!(
-                line[content_start..].as_bytes().get(c[1].len() + 3),
+                line.as_bytes()[content_start..].get(c[1].len() + 3),
                 None | Some(b' ' | b'\t' | b'\r' | b'\n')
             )
         {
