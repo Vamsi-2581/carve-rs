@@ -253,3 +253,18 @@ fn unused_markdown_reference_fields_do_not_become_visible_text() {
         assert_eq!(tree(&imported.value), tree(expected), "{source}");
     }
 }
+
+#[test]
+fn a_definition_a_link_consumed_writes_no_line() {
+    let imported = migrate_markdown("[ref]: https://example.org \"Title\"\n\nSee [ref].");
+    assert_eq!(
+        imported.value,
+        "See [ref](https://example.org \"Title\").\n"
+    );
+
+    let imported = migrate_markdown("[ref]: /u\n[unused]: /v\n\nSee [REF][] and ![x][ref].\n");
+    assert_eq!(
+        imported.value,
+        "See [REF](/u) and ![x](/u).\n\n[unused]: /v\n"
+    );
+}
