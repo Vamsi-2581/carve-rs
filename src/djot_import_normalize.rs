@@ -153,7 +153,7 @@ fn deep_quoted_item_attributes(
             literal_depth = None;
         }
         if depth > previous_depth && previous_paragraph && !ends_item {
-            literal_depth = Some(previous_depth);
+            literal_depth.get_or_insert(previous_depth);
         }
         frames.retain(|level, _| *level <= depth);
         if depth > previous_depth {
