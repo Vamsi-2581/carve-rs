@@ -17690,7 +17690,30 @@ fn collect_indented_block_mapped_with_columns(
                             literal_code_closes_cursor(cur, floor, column, open)
                         }))
             });
-            if may_track_code {
+            // An unclosed run below a descendant's open paragraph is lazy text
+            // there, not a fence of this body (CARVE-P0-014).
+            let lazy_in_descendant = fence.is_none()
+                && indent == strip_cols
+                && nested_item_columns
+                    .last()
+                    .is_some_and(|&(_, column)| indent < column)
+                && cur.pos > 0
+                && line_starts_paragraph(innermost_marker_content(trim_ascii_start(
+                    cur.lines.at(cur.pos - 1),
+                )))
+                && detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
+                    !cur.has_code_closer_after(cur.pos + 1, open.fence_char, open.fence_len)
+                        || !item_body_fence_has_closer(
+                            cur.lines.range(cur.pos + 1..cur.lines.len()),
+                            open,
+                            strip_cols,
+                            |line, _| {
+                                detect_list_marker_full(line)
+                                    .is_some_and(|marker| marker.indent <= parent_indent)
+                            },
+                        )
+                });
+            if may_track_code && !lazy_in_descendant {
                 let tracked = if literal_colon.is_some() {
                     trim_ascii_start(fence_line)
                 } else {
