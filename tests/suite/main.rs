@@ -2041,3 +2041,6 @@ mod wave7_2607;
 
 #[path = "../wave7_2608.rs"]
 mod wave7_2608;
+
+#[path = "../wave7_2609.rs"]
+mod wave7_2609;

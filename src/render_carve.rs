@@ -7262,7 +7262,7 @@ fn first_boundary(node: &InlineNode) -> Option<char> {
 fn needs_comment_space(emitted: &str) -> bool {
     match emitted.chars().next_back() {
         None => false,
-        Some(last) => last != '\n' && !last.is_whitespace(),
+        Some(last) => last != '\n' && last != ' ',
     }
 }
 
