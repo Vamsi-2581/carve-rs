@@ -141,7 +141,7 @@ fn references_after_container_exit_keep_their_urls() {
         assert!(!converted.contains("carve-djot-note"));
     }
     let source = "[r]:http://e/\n\n[x][r]\n";
-    assert!(!carve::to_html(&carve::djot_to_carve(source)).contains("href=\"http://e/\""));
+    assert!(carve::to_html(&carve::djot_to_carve(source)).contains("href=\"http://e/\""));
 }
 
 #[test]

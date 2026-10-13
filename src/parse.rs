@@ -15506,6 +15506,11 @@ fn trailing_marker_line_content(body: &str) -> Option<String> {
     Some(marker.content.to_string())
 }
 
+#[cfg(test)]
+thread_local! {
+    static PARAGRAPH_BODY_PROBES: Cell<usize> = const { Cell::new(0) };
+}
+
 /// PART 1 S4's one question, asked of a container's WHOLE body: does the last
 /// block leave a paragraph open?
 ///
@@ -15527,6 +15532,42 @@ fn body_ends_with_open_paragraph(body: &str, options: &Options<'_>) -> bool {
     {
         return false;
     }
+    // Resolve one-line quote/list chains from their terminal content. A full
+    // probe at every prefix otherwise repeats the same nested parses.
+    if options.extensions.is_empty() && !body.contains(['\n', '\r']) {
+        let mut content = body;
+        let mut containers = 0;
+        loop {
+            if let Some(rest) = strip_blockquote_prefix(content) {
+                content = rest;
+            } else if let Some(marker) = detect_list_marker_full(content) {
+                content = marker.content;
+            } else {
+                break;
+            }
+            containers += 1;
+        }
+        if NESTING_DEPTH.with(|depth| depth.get() + containers + 1 < MAX_NESTING_DEPTH)
+            && (containers > 0 && is_blank_line(content)
+                || detect_heading(content).is_some()
+                || detect_thematic_break(content)
+                || detect_fence_open(content).is_some()
+                || is_table_start(content)
+                || is_flush_line_comment(content)
+                || detect_comment_fence_line(content).is_some()
+                || parse_standalone_attrs(content).is_some()
+                || detect_container_open(content).is_some())
+        {
+            return false;
+        }
+        if line_starts_paragraph(content)
+            && NESTING_DEPTH.with(|depth| depth.get() + containers + 1 < MAX_NESTING_DEPTH)
+        {
+            return true;
+        }
+    }
+    #[cfg(test)]
+    PARAGRAPH_BODY_PROBES.with(|count| count.set(count.get() + 1));
     let blocks = probe_blocks(body, options);
     block_ends_with_open_paragraph(blocks.last(), colon_fences_left_open(body), false)
 }
@@ -31709,6 +31750,90 @@ mod nested_list_ladder_work {
                 );
             }
             previous = Some((depth, work));
+        }
+    }
+}
+
+#[cfg(test)]
+mod single_line_open_paragraph_probes {
+    use super::*;
+
+    #[test]
+    fn deep_single_line_lists_do_not_reparse_their_prefix_chains() {
+        for depth in [8, 16, 32] {
+            for terminal in [
+                "a",
+                "*a*",
+                "`a`",
+                "é",
+                "[a](url)",
+                "# h",
+                "",
+                "%% c",
+                "{.x}",
+                "::: note",
+                "[a]: url",
+                "[^a]: body",
+                "   ",
+            ] {
+                PARAGRAPH_BODY_PROBES.with(|count| count.set(0));
+                let source = format!("{}{terminal}\n", "- > ".repeat(depth));
+                let html = crate::to_html(&source);
+                assert_eq!(html.matches("<ul>").count(), depth);
+                assert_eq!(html.matches("<blockquote>").count(), depth);
+                assert_eq!(
+                    PARAGRAPH_BODY_PROBES.with(Cell::get),
+                    0,
+                    "{depth}: {terminal}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prefix_chains_match_block_verdicts() {
+        let options = Options::default();
+        for terminal in [
+            "a",
+            "a *b*",
+            "a `b`",
+            "a {+b+}",
+            "a [b](url)",
+            "*a*",
+            "`a`",
+            "é",
+            "^ caption",
+            "<tag>",
+            "[a](url)",
+            "[^a]",
+            "[^a]: body",
+            "# h",
+            "---",
+            "```",
+            "::: note",
+            "%% c",
+            "| a |",
+            "{.x}",
+            "",
+            "[a]: url",
+            "   ",
+            "%%% note",
+            ":: term",
+        ] {
+            for prefix in ["", "- ", "> ", "- > - > ", "> - > - "] {
+                let body = format!("{prefix}{terminal}");
+                let blocks = probe_blocks(&body, &options);
+                let expected = block_ends_with_open_paragraph(
+                    blocks.last(),
+                    colon_fences_left_open(&body),
+                    false,
+                );
+                assert_eq!(
+                    body_ends_with_open_paragraph(&format!("{prefix}{terminal}"), &options),
+                    expected,
+                    "{prefix}{terminal}"
+                );
+            }
         }
     }
 }

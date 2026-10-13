@@ -1922,6 +1922,8 @@ mod raw_html_carriers_follow_the_import_trust_mode;
 
 #[path = "../a_closed_colon_in_a_quoted_item_releases_ownership.rs"]
 mod a_closed_colon_in_a_quoted_item_releases_ownership;
+#[path = "../djot_quoted_list_boundaries.rs"]
+mod djot_quoted_list_boundaries;
 #[path = "../markdown_image_alt_text.rs"]
 mod markdown_image_alt_text;
 #[path = "../markdown_nested_emphasis.rs"]
@@ -2085,3 +2087,6 @@ mod wave7_description_openers;
 
 #[path = "../a_continuation_on_a_span_marker_joins_its_origin.rs"]
 mod a_continuation_on_a_span_marker_joins_its_origin;
+
+#[path = "../djot_image_quote_child_text.rs"]
+mod djot_image_quote_child_text;

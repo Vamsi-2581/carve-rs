@@ -23,10 +23,12 @@ fn kind_bit(kind: u8) -> u8 {
         b'~' => 4,
         b'^' => 8,
         b'=' => 16,
+        b'\'' => 32,
+        b'"' => 64,
         _ => unreachable!(),
     }
 }
-fn clear(openers: &mut [Vec<(usize, usize, bool)>; 8], from: usize) {
+fn clear(openers: &mut [Vec<(usize, usize, bool)>; 12], from: usize) {
     for stack in openers {
         while stack.last().is_some_and(|opener| opener.0 >= from) {
             stack.pop();
@@ -35,7 +37,15 @@ fn clear(openers: &mut [Vec<(usize, usize, bool)>; 8], from: usize) {
 }
 
 pub(super) fn convert(source: &str, mask: &str, convert_plain: impl Fn(&str) -> String) -> String {
-    process(source, mask, convert_plain, None, &mut Vec::new())
+    process(source, mask, convert_plain, None, &mut Vec::new(), false)
+}
+
+pub(super) fn convert_image_child(
+    source: &str,
+    mask: &str,
+    convert_plain: impl Fn(&str) -> String,
+) -> String {
+    process(source, mask, convert_plain, None, &mut Vec::new(), true)
 }
 
 pub(super) fn paired_openers(source: &str, mask: &str) -> HashMap<usize, usize> {
@@ -46,6 +56,7 @@ pub(super) fn paired_openers(source: &str, mask: &str) -> HashMap<usize, usize> 
         str::to_string,
         Some(&mut paired),
         &mut Vec::new(),
+        false,
     );
     paired
 }
@@ -56,7 +67,7 @@ pub(super) fn convert_with_losses(
     convert_plain: impl Fn(&str) -> String,
     losses: &mut Vec<usize>,
 ) -> String {
-    process(source, mask, convert_plain, None, losses)
+    process(source, mask, convert_plain, None, losses, false)
 }
 
 fn process(
@@ -65,6 +76,7 @@ fn process(
     convert_plain: impl Fn(&str) -> String,
     mut paired: Option<&mut HashMap<usize, usize>>,
     losses: &mut Vec<usize>,
+    omit_quote_delimiters: bool,
 ) -> String {
     let bytes = source.as_bytes();
     let mut mask = mask.as_bytes().to_vec();
@@ -280,7 +292,8 @@ fn process(
         }
         at += 1;
     }
-    let mut openers: [Vec<(usize, usize, bool)>; 8] = std::array::from_fn(|_| Vec::new());
+    let mut openers: [Vec<(usize, usize, bool)>; 12] = std::array::from_fn(|_| Vec::new());
+    let mut omitted_quote_braces = HashSet::new();
     let mut pairs = Vec::<Pair>::new();
     let mut structural = HashSet::new();
     let mut brackets = Vec::new();
@@ -415,7 +428,7 @@ fn process(
             i += 1;
             continue;
         }
-        if ch != b'_' && ch != b'*' && !b"~^".contains(&ch) {
+        if !b"_*~^".contains(&ch) && !(omit_quote_delimiters && b"\"'".contains(&ch)) {
             i += 1;
             continue;
         }
@@ -450,11 +463,21 @@ fn process(
             && mask[i - 1] == b'{'
             && !super::is_escaped(bytes, i - 1);
         let forced_close = bytes.get(i + 1) == Some(&b'}');
+        if omit_quote_delimiters && matches!(ch, b'"' | b'\'') {
+            if forced_open {
+                omitted_quote_braces.insert(i - 1);
+            }
+            if forced_close && !forced_open {
+                omitted_quote_braces.insert(i + 1);
+            }
+        }
+        let single_quote_opens = ch != b'\'' || i == 0 || b" \t\r\n\"'-([".contains(&bytes[i - 1]);
         let can_open = forced_open
             || (!forced_close
                 && bytes
                     .get(i + 1)
-                    .is_some_and(|byte| !b" \t\r\n".contains(byte)));
+                    .is_some_and(|byte| !b" \t\r\n".contains(byte))
+                && single_quote_opens);
         let can_close =
             !forced_open && (forced_close || (i > 0 && !b" \t\r\n".contains(&bytes[i - 1])));
         let marker = match ch {
@@ -462,9 +485,11 @@ fn process(
             b'*' => 1,
             b'~' => 2,
             b'^' => 3,
+            b'\'' => 4,
+            b'"' => 5,
             _ => unreachable!(),
         };
-        let key = marker + usize::from(forced_close) * 4;
+        let key = marker + usize::from(forced_close) * 6;
         if let Some((start, end, forced)) = openers[key].last().copied().filter(|opener| {
             can_close
                 && opener.1 < i
@@ -495,7 +520,7 @@ fn process(
             }
             i += if forced_close { 2 } else { 1 };
         } else if can_open {
-            let key = marker + usize::from(forced_open) * 4;
+            let key = marker + usize::from(forced_open) * 6;
             openers[key].push((i - usize::from(forced_open), i + 1, forced_open));
             i += 1;
         } else {
@@ -811,6 +836,8 @@ fn process(
         valid_braces: &valid_braces,
         valid_brace_closers: &valid_brace_closers,
         literal_dashes: &literal_dashes,
+        omitted_quote_braces: &omitted_quote_braces,
+        omit_quote_delimiters,
         literal_prefix,
         literals: RefCell::new(Vec::new()),
         rendered: RefCell::new(HashMap::new()),
@@ -866,6 +893,8 @@ struct Renderer<'a> {
     valid_braces: &'a HashSet<usize>,
     valid_brace_closers: &'a HashSet<usize>,
     literal_dashes: &'a HashSet<usize>,
+    omitted_quote_braces: &'a HashSet<usize>,
+    omit_quote_delimiters: bool,
     literal_prefix: String,
     literals: RefCell<Vec<String>>,
     rendered: RefCell<HashMap<usize, String>>,
@@ -876,6 +905,10 @@ impl Renderer<'_> {
         let mut out = Vec::new();
         let mut i = start;
         while i < end {
+            if self.omitted_quote_braces.contains(&i) {
+                i += 1;
+                continue;
+            }
             if let Some((attribute_end, wire)) = self
                 .attributes
                 .get(&i)
@@ -965,6 +998,9 @@ impl Renderer<'_> {
                 .iter()
                 .any(|child| self.pairs[*child].kinds & bit != 0);
         let content = self.body(pair.open_end, pair.close, &pair.children, outer | bit);
+        if matches!(pair.kind, b'"' | b'\'') {
+            return content;
+        }
         let delimiter = match pair.kind {
             b'_' => '/',
             b'~' => ',',
@@ -974,7 +1010,8 @@ impl Renderer<'_> {
         };
         let bytes = self.source.as_bytes();
         let word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
-        let forced = b"~^".contains(&pair.kind)
+        let forced = self.omit_quote_delimiters
+            || b"~^".contains(&pair.kind)
             || pair.forced
             || scope
             || content.starts_with('\0')

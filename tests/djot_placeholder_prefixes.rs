@@ -7,6 +7,7 @@ fn user_placeholders_survive_namespace_selection() {
         "\0DJOTEMPTYTERM\0",
         "\0DJOTALT\0",
         "\0DJOTLITERAL\0",
+        "\0DJOTITEMATTR\0",
     ] {
         let tokens = [
             format!("{base}0\0{}1\0", &base[1..]),
@@ -98,13 +99,19 @@ fn nul_characters_in_imported_data_are_restored() {
         "[a]{key=\"x\0y\"}",
         "<x:a\0b>",
     ] {
-        assert_eq!(carve::djot_to_carve(source), source);
+        assert_eq!(
+            carve::djot_to_carve(source),
+            format!(
+                "{}{source}",
+                if source.starts_with("![") { "{%%}" } else { "" }
+            )
+        );
     }
 }
 
 #[test]
 fn original_nul_is_restored_before_flattening_a_formatted_image_label() {
-    assert_eq!(carve::djot_to_carve("![*a*\0](x)"), "![a\u{FFFD}](x)");
+    assert_eq!(carve::djot_to_carve("![*a*\0](x)"), "{%%}![a\u{FFFD}](x)");
 }
 
 #[test]
