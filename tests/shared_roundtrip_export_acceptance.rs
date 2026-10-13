@@ -632,10 +632,6 @@ fn shared_markdown_import_negative_rows_match_their_contract() {
         {
             continue;
         }
-        // Tracked by carve-rs#2644; the row arrived with the spec pin move.
-        if fixture["id"] == "dropped-figure-pair-takes-its-caption-marker" {
-            continue;
-        }
         let imported = migrate_markdown(fixture["markdown"].as_str().unwrap());
         let imported_ast = ast(&imported.value);
         if let Some(code) = fixture["expectedDiagnostic"]["code"].as_str() {
