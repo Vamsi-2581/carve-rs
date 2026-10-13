@@ -17680,7 +17680,30 @@ fn collect_indented_block_mapped_with_columns(
         if comment_fence.is_none() {
             comment_fence_strip = None;
         }
-        let (mut sliced, consumed, synthetic) = slice_columns_mapped(payload_line, stripped, true);
+        let (sliced, consumed, synthetic) = slice_columns_mapped(payload_line, stripped, true);
+        // A tab left in a closer's indent after the slice would expand from the
+        // body's column 0, not its source column, and land the closer below
+        // its opener. Its columns are measured in the source (carve#3141).
+        let (sliced, consumed, synthetic) = match *fence {
+            Some(open)
+                if literal_colon.is_none()
+                    && stripped < indent
+                    && indent <= open.content_col
+                    && sliced[..sliced.len() - trim_ascii_start(&sliced).len()].contains('\t')
+                    && is_fence_close(trim_ascii_start(payload_line), open) =>
+            {
+                let lead = payload_line.len() - trim_ascii_start(payload_line).len();
+                let mut columns = " ".repeat(indent - stripped);
+                columns.push_str(&payload_line[lead..]);
+                (
+                    columns,
+                    payload_line[..lead].chars().count(),
+                    indent - stripped,
+                )
+            }
+            _ => (sliced, consumed, synthetic),
+        };
+        let mut sliced = sliced;
         if marker_colon_retained_para && indent < strip_cols {
             sliced = trim_ascii_start(&sliced).to_string();
         }
