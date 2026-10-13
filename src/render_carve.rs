@@ -2195,29 +2195,7 @@ fn render_block_body(session: &RenderSession, node: &BlockNode, ctx: &mut CarveC
             {
                 return String::new();
             }
-            // PART 12 §10 gave this a node precisely so the writer can put the
-            // line back. Before that there was nowhere to write it from, which is
-            // why every resolved reference was INLINED instead (carve-rs#631).
-            let title = def
-                .title
-                .as_ref()
-                .map(|t| format!(" \"{}\"", escape_quoted(t)))
-                .unwrap_or_default();
-            let attrs = render_attrs(&def.attrs);
-            let attrs = if attrs.is_empty() {
-                String::new()
-            } else {
-                format!(" {attrs}")
-            };
-            // The href is re-escaped the way the inline tail's is: the reader
-            // resolves the three destination escapes, so writing the resolved
-            // value bare would hand back a line whose parentheses no longer
-            // balance.
-            format!(
-                "[{}]: {}{title}{attrs}",
-                def.label,
-                escape_destination_escapes(&def.href)
-            )
+            render_link_reference_definition(def)
         }
         BlockNode::Heading(heading) => {
             // A heading is SINGLE-LINE (PART 2), so its text must not contain a
@@ -7554,4 +7532,30 @@ mod raw_html_fence_tests {
             );
         }
     }
+}
+
+pub(crate) fn render_link_reference_definition(def: &LinkReferenceDefinition) -> String {
+    // PART 12 §10 gave this a node precisely so the writer can put the
+    // line back. Before that there was nowhere to write it from, which is
+    // why every resolved reference was INLINED instead (carve-rs#631).
+    let title = def
+        .title
+        .as_ref()
+        .map(|t| format!(" \"{}\"", escape_quoted(t)))
+        .unwrap_or_default();
+    let attrs = render_attrs(&def.attrs);
+    let attrs = if attrs.is_empty() {
+        String::new()
+    } else {
+        format!(" {attrs}")
+    };
+    // The href is re-escaped the way the inline tail's is: the reader
+    // resolves the three destination escapes, so writing the resolved
+    // value bare would hand back a line whose parentheses no longer
+    // balance.
+    format!(
+        "[{}]: {}{title}{attrs}",
+        def.label,
+        escape_destination_escapes(&def.href)
+    )
 }

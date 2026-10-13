@@ -2026,3 +2026,6 @@ mod wave7_quoted_term;
 
 #[path = "../wave7_html_tabs.rs"]
 mod wave7_html_tabs;
+
+#[path = "../wave7_unused_references.rs"]
+mod wave7_unused_references;
