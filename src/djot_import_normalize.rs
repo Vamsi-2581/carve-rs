@@ -173,10 +173,28 @@ fn deep_quoted_item_attributes(
             continue;
         }
         let mut stack = frames.remove(&depth).unwrap_or_default();
-        while stack.last().is_some_and(|frame| frame.column > indent) {
+        let lazy = depth == prior_depth
+            && prior_paragraph
+            && previous_paragraph
+            && !marker.is_match(visible);
+        let mut closed_nested = false;
+        while !lazy && stack.last().is_some_and(|frame| frame.column > indent) {
             stack.pop();
+            closed_nested = true;
         }
         if let Some(item) = marker.captures(visible) {
+            if closed_nested {
+                let mut blank_row = row;
+                while blank_row > 0
+                    && quoted(lines[blank_row - 1])
+                        .1
+                        .trim_matches([' ', '\t'])
+                        .is_empty()
+                {
+                    blank_row -= 1;
+                    removed[blank_row] = true;
+                }
+            }
             if depth == prior_depth
                 && prior_paragraph
                 && stack.last().map_or(true, |frame| indent > frame.column)
@@ -197,6 +215,9 @@ fn deep_quoted_item_attributes(
             let mut kind = djot_list_kind(&item[1]);
             if ["-", "*", "+"].contains(&&item[1]) && task.is_match(&text[item[0].len()..]) {
                 kind.push_str(":task");
+            }
+            if let Some(owner) = stack.last_mut().filter(|owner| indent > owner.column) {
+                owner.attributes.clear();
             }
             let frame = stack.last();
             let same = frame
@@ -235,7 +256,10 @@ fn deep_quoted_item_attributes(
                 for (owner_depth, owners) in frames.iter().chain(std::iter::once((&depth, &stack)))
                 {
                     for owner in owners {
-                        if !loose || *owner_depth > depth {
+                        if !loose
+                            || *owner_depth > depth
+                            || *owner_depth == depth && owner.column != frame.column
+                        {
                             continue;
                         }
                         let rest = &prefix[prefix_ends[*owner_depth]..];
@@ -309,7 +333,7 @@ fn deep_quoted_item_attributes(
         } else {
             if let Some(frame) = stack.last_mut() {
                 frame.attributes.clear();
-                if indent <= frame.column {
+                if indent <= frame.column && !lazy {
                     stack.clear();
                 }
             }
@@ -481,8 +505,18 @@ fn quoted_list_attribute_layout(
             result.extend(normalized.split('\n').map(|body| format!("{prefix}{body}")));
             if n < lines.len() {
                 let returned_depth = depths[n].min(depth.saturating_sub(1));
+                let mut parent_end = 0;
+                for _ in 0..returned_depth {
+                    parent_end += cached_regex!(r"^[ \t]*>(?:[ \t]|$)")
+                        .unwrap()
+                        .find(&prefix[parent_end..])
+                        .unwrap()
+                        .end();
+                }
+                parent_end += prefix[parent_end..].len()
+                    - prefix[parent_end..].trim_start_matches([' ', '\t']).len();
                 for attributes in returned {
-                    result.push(format!("{}{attributes}", "> ".repeat(returned_depth)));
+                    result.push(format!("{}{attributes}", &prefix[..parent_end]));
                 }
             }
         } else {
@@ -1369,13 +1403,17 @@ pub(super) fn note_blocks(
             }
         }
         if let Some((scope_depth, scope_column)) = returned_scope {
+            let scope_depth = scope_depth.min(depth);
             let end = ends.get(scope_depth.wrapping_sub(1)).copied().unwrap_or(0);
             let padding = columns
                 .get(scope_depth)
                 .copied()
                 .unwrap_or(indent)
                 .min(scope_column);
-            let prefix = format!("{}{}", &line[..end], " ".repeat(padding));
+            let mut prefix = format!("{}{}", &line[..end], " ".repeat(padding));
+            if prefix.ends_with('>') {
+                prefix.push(' ');
+            }
             for attributes in returned_note_attributes {
                 if let Some(parent) = notes.last_mut() {
                     let host = ends.get(parent.depth.wrapping_sub(1)).copied().unwrap_or(0);
@@ -2189,6 +2227,14 @@ fn blocks_with_slot_inner(
                 && (!marker.is_match(block_body)
                     || marker.find(block_body).is_some_and(|item| {
                         let content = block_body[item.end()..].trim_start();
+                        let content = if block_body.starts_with(['-', '*', '+']) {
+                            cached_regex!(r"^\[[ xX]\][ \t]+")
+                                .unwrap()
+                                .find(content)
+                                .map_or(content, |task| &content[task.end()..])
+                        } else {
+                            content
+                        };
                         !content.is_empty()
                             && content.trim_end_matches([' ', '\t']) != "+"
                             && !heading.is_match(content)
@@ -2374,10 +2420,6 @@ fn blocks_with_slot_inner(
             if separate && result.last().is_some_and(|line| !line.is_empty()) {
                 result.push(String::new());
             }
-            let list_start = top
-                .as_ref()
-                .filter(|_| !nested && !separate)
-                .map_or(result.len(), |list| list.start);
             let marker_end = item.get(2).unwrap().end();
             let marker_body = item.get(0).unwrap().end();
             let payload_start = if matches!(item[1].as_bytes()[0], b'-' | b'*' | b'+') {
@@ -2441,6 +2483,10 @@ fn blocks_with_slot_inner(
             {
                 result.push(String::new());
             }
+            let list_start = top
+                .as_ref()
+                .filter(|_| !nested && !separate)
+                .map_or(result.len(), |list| list.start);
             result.push(format!("{}{payload}", " ".repeat(target)));
             lists.push(List {
                 source: indent,
