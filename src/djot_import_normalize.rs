@@ -105,6 +105,11 @@ fn deep_quoted_item_attributes(
     let lines: Vec<_> = source.split('\n').collect();
     let mask = mask_code_and_destinations(source);
     let masks: Vec<_> = mask.split('\n').collect();
+    let table_rows = if source.contains('|') {
+        djot_table_rows(source, &mask)
+    } else {
+        vec![false; lines.len()]
+    };
     let marker = cached_regex!(r"^([-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
     let block = cached_regex!(
         r"^(?:[-*+][ \t]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]|#{1,6}(?:[ \t]|$)|:{3,}|[`~]{3,}|\[(?:\^)?[^\]\n]*\]:)"
@@ -134,14 +139,32 @@ fn deep_quoted_item_attributes(
         let visible = &masks[row][prefix_end + indent..];
         let at = offset + prefix_end + indent;
         offset += line.len() + 1;
+        let opening_column = if depth > previous_depth {
+            let rest = &prefix[prefix_ends[previous_depth]..];
+            rest.len() - rest.trim_start_matches([' ', '\t']).len()
+        } else {
+            0
+        };
+        let ends_item = text.is_empty()
+            && masks[row].as_bytes().get(prefix.rfind('>').unwrap_or(0)) == Some(&b'>')
+            && frames
+                .get(&previous_depth)
+                .is_some_and(|owners| owners.iter().any(|owner| owner.column >= opening_column));
         if literal_depth.is_some_and(|held| depth <= held) {
             literal_depth = None;
         }
-        if depth > previous_depth && previous_paragraph {
+        if depth > previous_depth && previous_paragraph && !ends_item {
             literal_depth = Some(previous_depth);
         }
         frames.retain(|level, _| *level <= depth);
         if depth > previous_depth {
+            if (text.is_empty() || !previous_paragraph)
+                && masks[row].as_bytes().get(prefix.rfind('>').unwrap_or(0)) == Some(&b'>')
+            {
+                if let Some(owners) = frames.get_mut(&previous_depth) {
+                    owners.retain(|owner| owner.column < opening_column);
+                }
+            }
             if let Some(owner) = frames
                 .get_mut(&previous_depth)
                 .and_then(|stack| stack.last_mut())
@@ -153,7 +176,10 @@ fn deep_quoted_item_attributes(
         let prior_paragraph = previous_paragraph;
         previous_depth = depth;
         previous_paragraph = !text.is_empty()
-            && !visible.starts_with('|')
+            && !cached_regex!(r"^(?:`{3,}|~{3,})[ \t]*=?[A-Za-z0-9_+#.-]*[ \t]*$")
+                .unwrap()
+                .is_match(text)
+            && !table_rows[row]
             && !thematic(visible)
             && !block.is_match(visible)
             && !(visible.starts_with('{')
@@ -375,6 +401,16 @@ fn quoted_list_attribute_layout(
     }) {
         return source.to_owned();
     }
+    let _paragraph_cache = ParagraphCacheScope::new(source);
+    let mut source_offset = 0;
+    let starts: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            let start = source_offset;
+            source_offset += line.len() + 1;
+            start
+        })
+        .collect();
     let list_marker = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
     let prior_block = cached_regex!(r"^(?:#{1,6}(?:[ \t]|$)|:{3,}|[`~]{3,}|\[[^\]]+\]:)").unwrap();
     let mask = mask_code_and_destinations(source);
@@ -425,13 +461,20 @@ fn quoted_list_attribute_layout(
             .map_or("", |row| quoted(lines[row]).1.trim_start());
         let lazy_quote = depth > 0
             && n > 0
-            && !previous_body.is_empty()
             && depths[n - 1] < depth
-            && !prior_block.is_match(previous_body)
-            && !list_marker.is_match(previous_body)
-            && !thematic(previous_body)
-            && !read_djot_word_attributes(previous_body, 0)
-                .is_some_and(|(end, _)| end == previous_body.trim_end().len());
+            && ((!previous_body.is_empty()
+                && !prior_block.is_match(previous_body)
+                && !list_marker.is_match(previous_body)
+                && !thematic(previous_body)
+                && !read_djot_word_attributes(previous_body, 0)
+                    .is_some_and(|(end, _)| end == previous_body.trim_end().len()))
+                || comment_continues_paragraph(
+                    source,
+                    starts[n]
+                        + lines[n][..lines[n].len() - quoted(lines[n]).1.len()]
+                            .rfind('>')
+                            .unwrap_or(0),
+                ));
         if lazy_quote {
             while n < lines.len() && depths[n] >= depth {
                 result.push(lines[n].to_owned());
