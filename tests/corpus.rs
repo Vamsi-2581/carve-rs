@@ -835,6 +835,13 @@ const IMPLEMENTED: &[&str] = &[
     "a-closed-fence-at-a-marker-line-note-s-body-column-opens-in-the-note",
     "a-span-never-covers-another-cell",
     "a-quote-or-a-term-at-a-marker-line-note-s-body-column-opens-in-the-note",
+    "a-comment-between-a-heading-and-a-colon-fence-leaves-the-fence-an-opener",
+    "a-comment-in-a-marker-line-note-changes-nothing",
+    "a-comment-closes-a-marker-line-note-s-paragraph-and-an-unclosed-fence-below-it-opens-in-the-note",
+    "a-fence-past-the-column-after-an-attribute-line-opens-on-its-authored-base",
+    "a-footnote-definition-past-a-box-s-column-is-hoisted",
+    "a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in",
+    "a-link-definition-or-an-attribute-line-past-a-box-s-column-opens-on-its-authored-base",
 ];
 
 // Spec-main categories tracked by separate implementation work. Keep them
@@ -914,7 +921,76 @@ const AHEAD_OF_PIN: &[(&str, &str, &str)] = &[];
 /// Empty again. Its three entries were corpus 519's first three documents, and
 /// carve-rs#2170 made them match, so the `assert_ne!` in `check_pair` is what
 /// removed them.
-const BEHIND_ON_PAIR: &[(&str, &str, &str)] = &[];
+const BEHIND_ON_PAIR: &[(&str, &str, &str)] = &[
+    (
+        "581-a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in",
+        "carve-rs#2642",
+        r#"<blockquote>
+  <ul>
+    <li>
+      <div class="box">
+        <ul>
+          <li>
+            <div class="line-block">
+              <p><code></code></p>
+            </div>
+          </li>
+        </ul>
+        <p><code>
+:::bad
+:::</code></p>
+      </div>
+    </li>
+  </ul>
+</blockquote>
+<ul>
+  <li>tail</li>
+</ul>"#,
+    ),
+    (
+        "581-a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in-3",
+        "carve-rs#2642",
+        r#"<blockquote>
+  <ul>
+    <li>
+      <div class="box">
+        <ul>
+          <li>
+            <div class="line-block">
+              <p><code></code></p>
+            </div>
+          </li>
+        </ul>
+        <p><code>
+:::
+:::bad
+:::</code></p>
+      </div>
+    </li>
+  </ul>
+</blockquote>
+<ul>
+  <li>tail</li>
+</ul>"#,
+    ),
+    (
+        "581-a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in-4",
+        "carve-rs#2642",
+        r#"<blockquote>
+  <ul>
+    <li>a
+      <ul>
+        <li>child</li>
+      </ul>
+      <code></code>
+      <code>
+~~~</code>
+    </li>
+  </ul>
+</blockquote>
+<p>after</p>"#,
+    ),
+];
 
 fn check_pair(slug: &str) {
     let slug = &resolve_slug(slug);
