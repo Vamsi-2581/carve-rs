@@ -183,7 +183,8 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
             .unwrap();
     let definition_boundary =
         cached_regex!(r"^(?:#{1,6} |`{3,}|~{3,}|:{3,}|\{[ \t.#A-Za-z}%]|\[[^\]]*\]:)").unwrap();
-    let definitions: std::collections::HashSet<String> = definitions_regex
+    let collapsed_space = cached_regex!(r"[ \t\r\n]+").unwrap();
+    let definitions: HashMap<String, String> = definitions_regex
         .captures_iter(&folded)
         .filter(|caps| {
             let start = caps.get(0).unwrap().start();
@@ -197,22 +198,31 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
             collapsed_mask.as_bytes()[start + caps[0].find('[').unwrap()] == b'['
                 && (previous.is_empty() || definition_boundary.is_match(previous))
         })
-        .map(|caps| caps[1].to_string())
+        .map(|caps| {
+            (
+                collapsed_space
+                    .replace_all(caps[1].trim_matches([' ', '\t', '\r', '\n']), " ")
+                    .into_owned(),
+                caps[1].to_owned(),
+            )
+        })
         .collect();
+    let mut child_text_cache = HashMap::<String, String>::new();
     let mut collapsed_image_lines: Option<Vec<ImageLineOwner>> = None;
     let mut collapsed_image_line = 0;
     let collapsed_blank = cached_regex!(r"\n[ \t]*\n").unwrap();
-    let collapsed_space = cached_regex!(r"[ \t\r\n]+").unwrap();
     let folded = collapsed.replace_all(&folded, |caps: &regex::Captures<'_>| {
         let at = caps.get(0).unwrap().start();
         if collapsed_mask.as_bytes()[at] != caps[0].as_bytes()[0]
+            || collapsed_mask.as_bytes()[at + caps[0].len() - 3] != b']'
             || caps[2].starts_with('^') && caps[2].len() > 1
         {
             return caps[0].to_string();
         }
         let mut key = caps[2].to_owned();
         if key.contains('\n') {
-            if collapsed_blank.is_match(&key) || is_escaped(folded.as_bytes(), at) {
+            let bracket_at = at + usize::from(caps[1].starts_with('!'));
+            if collapsed_blank.is_match(&key) || is_escaped(folded.as_bytes(), bracket_at) {
                 return caps[0].to_string();
             }
             let lines = collapsed_image_lines
@@ -222,20 +232,22 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
             }
             let owner = lines[collapsed_image_line];
             let (normalized, _, valid) = image_alt_layout(&key, owner.1, owner.2, owner.3, owner.4);
-            if caps[1].starts_with('!') && !valid {
+            if !valid {
                 return caps[0].to_string();
             }
             key = collapsed_space
                 .replace_all(
-                    normalized
-                        .replace("\\\n", "\n")
+                    child_text_cache
+                        .entry(normalized.clone())
+                        .or_insert_with(|| djot_image_label_child_text(&normalized, &inherited))
                         .trim_matches([' ', '\t', '\r', '\n']),
                     " ",
                 )
                 .into_owned();
         }
-        if definitions.contains(&key) {
-            format!("{}[{key}]", &caps[1])
+        let key = collapsed_space.replace_all(key.trim_matches([' ', '\t', '\r', '\n']), " ");
+        if let Some(definition) = definitions.get(key.as_ref()) {
+            format!("{}[{definition}]", &caps[1])
         } else {
             caps[0].to_string()
         }
@@ -289,48 +301,10 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
             alts.push(alt.clone());
             return format!("{paragraph}![{alt_prefix}{}\0]", alts.len() - 1);
         }
-        let options = crate::Options {
-            smart_typography: crate::SmartTypographyMode::Source,
-            ..crate::Options::default()
-        };
-        let (protected_label, scalars, scalar_prefix) =
-            protect_image_alt_scalars(&normalized_label);
-        let native =
-            djot_to_carve(&format!("DJOTALT {} DJOTEND", protected_label)).replace("\0U\0", "\0");
-        let native = remove_inherited_attribute_markers(&native, &inherited);
-        let mut document = crate::parse_with_options(&native, &options);
-        use crate::include_walk::SubtreeVisitor;
-        ImageAltChildText {
-            preserve_breaks: label.contains('\n'),
-        }
-        .blocks(&mut document.children);
-        let plain = crate::render_plain_text_with_options(&document, &options).unwrap_or_default();
-        let plain = plain
-            .trim_end_matches('\n')
-            .strip_prefix("DJOTALT")
-            .unwrap_or("");
-        let plain = plain.strip_prefix(' ').unwrap_or(plain);
-        let plain = plain.strip_suffix("DJOTEND").unwrap_or("");
-        let plain = plain.strip_suffix(' ').unwrap_or(plain);
-        let plain = if scalars.is_empty() {
-            std::borrow::Cow::Borrowed(plain)
-        } else {
-            cached_regex!(r"DJOTALTSCALAR([0-9]+)Z([0-9]+)Z")
-                .unwrap()
-                .replace_all(plain, |caps: &regex::Captures<'_>| {
-                    if caps[0].starts_with(&scalar_prefix) {
-                        caps[2]
-                            .parse::<usize>()
-                            .ok()
-                            .and_then(|at| scalars.get(at))
-                            .cloned()
-                            .unwrap_or_else(|| caps[0].to_string())
-                    } else {
-                        caps[0].to_string()
-                    }
-                })
-        };
-        let plain = crate::render_carve::escape_image_alt(&plain, in_table);
+        let plain = child_text_cache
+            .entry(normalized_label.clone())
+            .or_insert_with(|| djot_image_label_child_text(&normalized_label, &inherited));
+        let plain = crate::render_carve::escape_image_alt(plain, in_table);
         let mut alt = String::new();
         for (index, line) in plain.split('\n').enumerate() {
             if index > 0 {
@@ -552,6 +526,50 @@ impl ImageBoundaryIndex {
     }
 }
 
+fn djot_image_label_child_text(label: &str, inherited: &HashSet<String>) -> String {
+    let options = crate::Options {
+        smart_typography: crate::SmartTypographyMode::Source,
+        ..crate::Options::default()
+    };
+    let (protected_label, scalars, scalar_prefix) = protect_image_alt_scalars(label);
+    let native =
+        djot_to_carve(&format!("DJOTALT {} DJOTEND", protected_label)).replace("\0U\0", "\0");
+    let native = remove_inherited_attribute_markers(&native, inherited);
+    let mut document = crate::parse_with_options(&native, &options);
+    use crate::include_walk::SubtreeVisitor;
+    ImageAltChildText {
+        preserve_breaks: label.contains('\n'),
+    }
+    .blocks(&mut document.children);
+    let plain = crate::render_plain_text_with_options(&document, &options).unwrap_or_default();
+    let plain = plain
+        .trim_end_matches('\n')
+        .strip_prefix("DJOTALT")
+        .unwrap_or("");
+    let plain = plain.strip_prefix(' ').unwrap_or(plain);
+    let plain = plain.strip_suffix("DJOTEND").unwrap_or("");
+    let plain = plain.strip_suffix(' ').unwrap_or(plain);
+    let plain = if scalars.is_empty() {
+        std::borrow::Cow::Borrowed(plain)
+    } else {
+        cached_regex!(r"DJOTALTSCALAR([0-9]+)Z([0-9]+)Z")
+            .unwrap()
+            .replace_all(plain, |caps: &regex::Captures<'_>| {
+                if caps[0].starts_with(&scalar_prefix) {
+                    caps[2]
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|at| scalars.get(at))
+                        .cloned()
+                        .unwrap_or_else(|| caps[0].to_string())
+                } else {
+                    caps[0].to_string()
+                }
+            })
+    };
+    plain.into_owned()
+}
+
 fn replace_image_labels(
     source: &str,
     mask: &str,
@@ -630,23 +648,32 @@ fn image_line_owners(source: &str, mask: &str) -> (HashSet<usize>, Vec<ImageLine
     let mut image_blank = false;
     let mut image_divs: Vec<(usize, usize, usize)> = Vec::new();
     let image_owner_marker = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+").unwrap();
+    let owner_quote = cached_regex!(r"^[ \t]*>(?:[ \t]|$)").unwrap();
     for line in source.split('\n') {
         let content_start = djot_content_start(line);
         image_starts.insert(image_offset + content_start);
         let (depth, body) = quoted(line);
         let text = body.trim_start_matches([' ', '\t']);
         let indent = body.len() - text.len();
+        let mut item_body = line;
+        for _ in 0..image_item_quote {
+            let Some(prefix) = owner_quote.find(item_body) else {
+                break;
+            };
+            item_body = &item_body[prefix.end()..];
+        }
+        let owner_indent = item_body.len() - item_body.trim_start_matches([' ', '\t']).len();
         if image_owner_marker.is_match(text) {
             image_item_column = indent + 1;
             image_item_quote = depth;
         } else if !text.is_empty()
             && (depth < image_item_quote
+                || image_blank && owner_indent < image_item_column
                 || depth == image_item_quote
                     && indent < image_item_column
-                    && (image_blank
-                        || cached_regex!(r"^(?:#{1,6} |:{3,}|[-*+] |\{|\|)")
-                            .unwrap()
-                            .is_match(text)))
+                    && cached_regex!(r"^(?:#{1,6} |:{3,}|[-*+] |\{|\|)")
+                        .unwrap()
+                        .is_match(text))
         {
             image_item_column = 0;
         }
@@ -936,6 +963,13 @@ impl crate::include_walk::SubtreeVisitor for ImageAltChildText {
 
     fn inlines(&mut self, inlines: &mut Vec<crate::ast::InlineNode>) {
         for inline in inlines {
+            if matches!(
+                inline,
+                crate::ast::InlineNode::NonBreakingSpace(_) | crate::ast::InlineNode::Footnote(_)
+            ) {
+                *inline = crate::ast::InlineNode::Text("".into());
+                continue;
+            }
             if let crate::ast::InlineNode::Link(link) = inline {
                 if link.href.is_empty() {
                     link.ref_label = None;
@@ -5272,6 +5306,10 @@ mod tests {
     #[test]
     fn image_reference_child_text() {
         let alt = cached_regex!(r#"<img\b[^>]*\balt="([^"]*)""#).unwrap();
+        let href = cached_regex!(r#"<a\b[^>]*\bhref="([^"]*)""#).unwrap();
+        let code = cached_regex!(r"(?s)<code\b[^>]*>(.*?)</code>").unwrap();
+        let tags = cached_regex!(r"<[^>]*>").unwrap();
+        let space = cached_regex!(r"\s+").unwrap();
         for fixture in [
             include_str!("../tests/fixtures/djot-image-reference-child-text.json"),
             include_str!("../tests/fixtures/djot-image-reference-hard-breaks.json"),
@@ -5281,10 +5319,37 @@ mod tests {
                 let source = case["source"].as_str().unwrap();
                 let imported = djot_to_carve(source);
                 let html = crate::to_html(&imported);
-                let actual = alt.captures(&html).map(|capture| capture[1].to_owned());
+                let actual = alt
+                    .captures(&html)
+                    .map(|capture| capture[1].replace("&apos;", "'"));
+                if let Some(expected) = case.get("text") {
+                    let text = tags.replace_all(&html, "");
+                    let text = space.replace_all(&text, " ");
+                    assert_eq!(Some(text.trim()), expected.as_str(), "{source}\n{imported}");
+                }
+                if let Some(expected) = case.get("code") {
+                    let actual_code = code.captures(&html).map(|capture| capture[1].to_owned());
+                    assert_eq!(
+                        actual_code.as_deref(),
+                        expected.as_str(),
+                        "{source}\n{imported}"
+                    );
+                }
+                if let Some(expected) = case.get("href") {
+                    let actual_href = href.captures(&html).map(|capture| capture[1].to_owned());
+                    assert_eq!(
+                        actual_href.as_deref(),
+                        expected.as_str(),
+                        "{}\n{source}\n{imported}",
+                        case["name"]
+                    );
+                }
                 assert_eq!(
                     actual.as_deref(),
-                    case["alt"].as_str(),
+                    case["alt"]
+                        .as_str()
+                        .map(|text| text.replace("&apos;", "'"))
+                        .as_deref(),
                     "{}\n{source}\n{imported}",
                     case["name"]
                 );
