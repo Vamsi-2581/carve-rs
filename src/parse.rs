@@ -7596,6 +7596,7 @@ fn rebase_body_blocks(
     let quote_lines = std::cell::OnceCell::new();
     let mut i = 0usize;
     let mut nested_columns: Vec<usize> = Vec::new();
+    let mut nested_list_marker_bases: Vec<Option<usize>> = Vec::new();
     let mut descendant_code: Option<(FenceOpen, usize)> = None;
     let mut orphaned_code: Option<(FenceOpen, usize)> = None;
     let mut after_blank = false;
@@ -7683,6 +7684,11 @@ fn rebase_body_blocks(
             // post-blank block at or past that column remains the child's.
             if let Some(column) = marker_content_col(&lines[i]) {
                 nested_columns.push(column);
+                nested_list_marker_bases.push(
+                    detect_list_marker_full(&lines[i])
+                        .filter(|_| base > 0)
+                        .map(|_| base),
+                );
             }
             paragraph_open = !is_line_comment_any_column(&lines[i]);
             block_at_minimum = !paragraph_open && source.reached.get(i).copied().unwrap_or(false);
@@ -7693,7 +7699,21 @@ fn rebase_body_blocks(
             i += 1;
             continue;
         }
-        if !include_sublists && paragraph_open && base > 0 && item_block_opener(&local_at_base) {
+        // A closed fence short of the child column belongs to the outer item.
+        // Only an unclosed run remains lazy text of the child's paragraph.
+        let closed_fence_below_descendant = nested_columns.last().is_some_and(|col| base < *col)
+            && nested_list_marker_bases.last() == Some(&Some(base))
+            && detect_fence_open(&local_at_base).is_some_and(|open| {
+                code_columns
+                    .get_or_init(|| BodyCodeColumns::new(&lines))
+                    .closes_after(i, base, open)
+            });
+        if !include_sublists
+            && paragraph_open
+            && base > 0
+            && item_block_opener(&local_at_base)
+            && !closed_fence_below_descendant
+        {
             i += 1;
             continue;
         }
@@ -7761,6 +7781,7 @@ fn rebase_body_blocks(
         }
         while nested_columns.last().is_some_and(|column| base < *column) {
             nested_columns.pop();
+            nested_list_marker_bases.pop();
         }
         if let Some(column) = marker_content_col_at(&lines[i], base)
             .filter(|_| !(absorbed_note_marker && paragraph_open && !after_blank))
@@ -7781,6 +7802,7 @@ fn rebase_body_blocks(
                             .as_ref()
                             .is_some_and(|marker| line_starts_paragraph(marker.content)));
                 nested_columns.push(column);
+                nested_list_marker_bases.push(marker.as_ref().filter(|_| base > 0).map(|_| base));
                 after_blank = false;
                 block_at_minimum = false;
                 i += 1;
@@ -7791,6 +7813,7 @@ fn rebase_body_blocks(
         if !(absorbed_note_marker && bare_description && !term_boundary) {
             if let Some(column) = definition_body_content_col(&lines[i]) {
                 nested_columns.push(column);
+                nested_list_marker_bases.push(None);
             }
         }
         // AN OVER-INDENTED NESTED NOTE DEFINITION KEEPS ITS AUTHORED COLUMN.
@@ -10925,9 +10948,26 @@ impl NestedFenceReplay {
                     || detect_line_block_open(trim_ascii_start(text)).is_some()
                     || detect_hardbreaks_block_open(trim_ascii_start(text)).is_some()
                     || detect_quote_block_open(trim_ascii_start(text)).is_some());
+            // Replay the same handoff before an unquoted line asks whether
+            // the quoted list left a paragraph open.
             let lazy_paragraph = here.para
                 && !starts_sibling
                 && !hosted_colon_opener
+                && !(here
+                    .hosts
+                    .last()
+                    .is_some_and(|&(_, floor, _)| indent_columns(text) < floor)
+                    && detect_fence_open(trim_ascii_start(text)).is_some_and(|open| {
+                        indexed_code_closes(
+                            lines,
+                            at,
+                            level,
+                            indent_columns(text),
+                            None,
+                            open,
+                            &mut self.literal_code_lookup,
+                        )
+                    }))
                 && !match detect_fence_open(text) {
                     Some(open) => closer_ahead(lines, at, level, |line| is_fence_close(line, open)),
                     None => interrupts_paragraph_with_rest(text, &[]),
@@ -13665,7 +13705,18 @@ fn parse_list(
                         lazy_scope,
                         false,
                         |src, below| {
-                            collected_body_takes_the_lazy_line(&src.source, below, options)
+                            if !src.source.contains("```") && !src.source.contains("~~~") {
+                                return collected_body_takes_the_lazy_line(
+                                    &src.source,
+                                    below,
+                                    options,
+                                );
+                            }
+                            // The authored fence column must be rebased before
+                            // deciding whether a lazy line can follow it.
+                            let mut rebased = src.clone();
+                            rebase_overindented_blocks(&mut rebased, false, options);
+                            collected_body_takes_the_lazy_line(&rebased.source, below, options)
                         },
                         |cur| {
                             collect_indented_block_mapped_with_columns(
@@ -14572,6 +14623,14 @@ fn parse_list(
                 break;
             }
             if indent < content_col {
+                // A closed run at an ancestor's column interrupts this child.
+                if indent == base_indent
+                    && detect_fence_open(trim_ascii_start(next)).is_some_and(|open| {
+                        list_code_fence_closer_ahead(cur, open, content_col, base_indent)
+                    })
+                {
+                    break;
+                }
                 let next_owned = next.to_string();
                 if interrupts_lazy_continuation_as_container(cur, &next_owned) {
                     break;
