@@ -220,7 +220,11 @@ fn markdown_to_carve_with_carriers(
                   mut losses: Vec<MarkdownImportLoss>,
                   notices: Vec<FrontmatterNotice>| {
         let source = crate::carrier_markers::restore_carrier_markers(&value, &lift);
-        let (restored, dropped) = inline.restore(&source);
+        let source = crate::carrier_markers::restore_nested_list_styles(&source, &lift);
+        let (restored, dropped) = source
+            .as_deref()
+            .map(|source| inline.restore(source))
+            .unwrap_or((None, Vec::new()));
         if let Some(value) = restored {
             losses.extend(
                 dropped

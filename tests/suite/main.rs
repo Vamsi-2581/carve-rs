@@ -1911,6 +1911,8 @@ mod markdown_footnote_continuation;
 #[path = "../new_quote_definition_opacity.rs"]
 mod new_quote_definition_opacity;
 
+#[path = "../list_style_marker.rs"]
+mod list_style_marker;
 #[path = "../roundtrip_carriers_2.rs"]
 mod roundtrip_carriers_2;
 
