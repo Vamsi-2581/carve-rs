@@ -211,7 +211,18 @@ fn html_label_validation_precedence_and_attribute_placement() {
             mode,
             ..Default::default()
         };
-        for bad in ["", "bad]label", "line&#10;break", "line&#13;break"] {
+        let empty = carve::html_to_carve(
+            "<pre data-carve-label=\"\"><code>x\n</code></pre>",
+            &options,
+        )
+        .unwrap();
+        let carve::BlockNode::CodeBlock(code) = &carve::parse(&empty.value).children[0] else {
+            panic!("{}", empty.value);
+        };
+        assert_eq!(code.label.as_deref(), Some(""));
+        assert!(empty.report.diagnostics.is_empty());
+
+        for bad in ["bad]label", "line&#10;break", "line&#13;break"] {
             let html = format!("<pre data-carve-label=\"{bad}\"><code>x\n</code></pre>");
             let imported = carve::html_to_carve(&html, &options).unwrap();
             let carve::BlockNode::CodeBlock(code) = &carve::parse(&imported.value).children[0]
@@ -340,13 +351,13 @@ fn fence_titles_already_present_in_markdown_take_no_attribute_marker() {
 }
 
 #[test]
-fn definition_carriers_cover_only_the_outer_list_and_keep_its_attributes() {
+fn definition_carriers_keep_nested_lists_and_outer_attributes() {
     let options = Options::default().with_roundtrip(true);
     for (source, expected, restored) in [
         (
             ":: Carve\n: A markup language.\n  :: inner\n  : def\n",
-            "<!-- carve: :: Carve -->\n**Carve**\n\n<!-- carve: : -->\nA markup language.\n\n**inner**\n\ndef\n\n<!-- carve: -->\n",
-            ":: Carve\n: A markup language.\n\n  *inner*\n\n  def\n",
+            "<!-- carve: :: Carve -->\n**Carve**\n\n<!-- carve: : -->\nA markup language.\n\n<!-- carve:2 :: inner -->\n**inner**\n\n<!-- carve:2 : -->\ndef\n\n<!-- carve:2 -->\n\n<!-- carve: -->\n",
+            ":: Carve\n: A markup language.\n  :: inner\n  : def\n",
         ),
         (
             ":: Carve\n: A markup language.\n",

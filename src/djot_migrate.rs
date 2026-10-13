@@ -588,6 +588,7 @@ fn image_line_owners(source: &str, mask: &str) -> (HashSet<usize>, Vec<ImageLine
     let mut image_offset = 0;
     let mut image_item_column = 0;
     let mut image_item_quote = 0;
+    let mut image_blank = false;
     let mut image_divs: Vec<(usize, usize, usize)> = Vec::new();
     let image_owner_marker = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+").unwrap();
     for line in source.split('\n') {
@@ -603,12 +604,14 @@ fn image_line_owners(source: &str, mask: &str) -> (HashSet<usize>, Vec<ImageLine
             && (depth < image_item_quote
                 || depth == image_item_quote
                     && indent < image_item_column
-                    && cached_regex!(r"^(?:#{1,6} |:{3,}|[-*+] |\{|\|)")
-                        .unwrap()
-                        .is_match(text))
+                    && (image_blank
+                        || cached_regex!(r"^(?:#{1,6} |:{3,}|[-*+] |\{|\|)")
+                            .unwrap()
+                            .is_match(text)))
         {
             image_item_column = 0;
         }
+        image_blank = text.is_empty();
         if let Some(delimiter) = cached_regex!(r"^(:{3,})(?:[ \t]+\S.*)?[ \t]*$")
             .unwrap()
             .captures(&line[content_start..])

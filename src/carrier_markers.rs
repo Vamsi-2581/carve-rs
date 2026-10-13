@@ -8,6 +8,7 @@
 use crate::ast::{BlockNode, Document};
 
 pub(crate) const CARRIER_PREFIX: &str = "<!-- carve: ";
+const CARRIER_STEM: &str = "<!-- carve:";
 pub(crate) const CARRIER_SUFFIX: &str = " -->";
 
 /// A `-->` the payload carries becomes `--\>`; a backslash run already sitting
@@ -58,30 +59,58 @@ fn rewrite_terminator(payload: &str, unescape: bool) -> String {
 
 /// Write a payload into a marker line.
 pub(crate) fn carrier_line(payload: &str) -> String {
+    carrier_line_at(payload, 1)
+}
+
+/// Write a definition-list marker at its nesting depth.
+pub(crate) fn carrier_line_at(payload: &str, depth: usize) -> String {
+    let prefix = if depth == 1 {
+        CARRIER_PREFIX.to_owned()
+    } else {
+        format!("{CARRIER_STEM}{depth} ")
+    };
     if payload.is_empty() {
-        return "<!-- carve: -->".to_owned();
+        return format!("{prefix}-->");
     }
     format!(
-        "{CARRIER_PREFIX}{}{CARRIER_SUFFIX}",
+        "{prefix}{}{CARRIER_SUFFIX}",
         escape_carrier_payload(payload)
     )
 }
 
 /// The payload a marker line carries, or `None` when the line is not one.
 pub(crate) fn carrier_payload(line: &str) -> Option<String> {
-    if line == "<!-- carve: -->" {
-        return Some(String::new());
+    carrier_payload_at(line).map(|(payload, _)| payload)
+}
+
+fn carrier_payload_at(line: &str) -> Option<(String, usize)> {
+    fn payload(tail: &str) -> Option<&str> {
+        if tail == " -->" {
+            Some("")
+        } else {
+            tail.strip_prefix(' ')?.strip_suffix(CARRIER_SUFFIX)
+        }
     }
-    let inner = line
-        .strip_prefix(CARRIER_PREFIX)?
-        .strip_suffix(CARRIER_SUFFIX)?;
+
+    let rest = line.strip_prefix(CARRIER_STEM)?;
+    let (depth, inner) = if rest.starts_with(' ') {
+        (1, payload(rest)?)
+    } else {
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let depth = rest[..digits]
+            .parse::<usize>()
+            .ok()
+            .filter(|depth| *depth >= 2)?;
+        let inner = payload(&rest[digits..])?;
+        (depth, inner)
+    };
     // An unescaped `-->` inside would have ended the comment at that point, so
     // the line this engine is reading is not one this engine wrote.
     if inner.contains("-->") {
         return None;
     }
 
-    Some(unescape_carrier_payload(inner))
+    Some((unescape_carrier_payload(inner), depth))
 }
 
 /// The colon-fence width a payload opens or closes with, or 0 when the payload
@@ -505,7 +534,8 @@ fn validate_markers(
     let mut dropped = vec![false; lines.len()];
     let mut math = Vec::new();
     let mut fences: Vec<(usize, String)> = Vec::new();
-    let mut definitions: std::collections::BTreeSet<(Vec<usize>, usize)> = Default::default();
+    let mut definitions: std::collections::BTreeSet<(Vec<usize>, usize, usize)> =
+        Default::default();
     let mut starts = Vec::new();
     let mut offset = 0;
     for line in lines {
@@ -561,7 +591,12 @@ fn validate_markers(
                 ) {
                     return None;
                 }
-                let key = (parent, fences.len());
+                if marker.depth > 1
+                    && !definitions.contains(&(parent.clone(), fences.len(), marker.depth - 1))
+                {
+                    return None;
+                }
+                let key = (parent, fences.len(), marker.depth);
                 definitions.insert(key);
             } else {
                 if !matches!(
@@ -611,6 +646,7 @@ fn validate_markers(
                         line,
                         host: lines[line][..block.range.start - starts[line]].to_owned(),
                         payload: math_source(block.math.as_deref()?)?,
+                        depth: 1,
                         offset: block.range.start,
                         end: block.range.end,
                         closer: false,
@@ -618,7 +654,7 @@ fn validate_markers(
                 }
             }
         } else if payload == ":" {
-            if !definitions.contains(&(parent.clone(), fences.len())) {
+            if !definitions.contains(&(parent.clone(), fences.len(), marker.depth)) {
                 return None;
             }
             let empty_definition = next_marker.is_some_and(|next| {
@@ -639,7 +675,7 @@ fn validate_markers(
                 return None;
             }
         } else if payload.is_empty() {
-            if !definitions.remove(&(parent, fences.len())) {
+            if !definitions.remove(&(parent, fences.len(), marker.depth)) {
                 return None;
             }
         } else if marker.closer {
@@ -662,7 +698,7 @@ fn validate_markers(
 pub(crate) struct CarrierLift {
     pub(crate) source: String,
     /// Each lifted payload and whether it is a bare closer, in marker order.
-    slots: Vec<(String, bool)>,
+    slots: Vec<(String, bool, usize)>,
     pub(crate) token: String,
     /// A set that does not balance records no structure, so nothing is lifted
     /// and the reader is told.
@@ -692,7 +728,7 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         damaged,
         dropped: Vec::new(),
     };
-    if !markdown.contains(CARRIER_PREFIX) {
+    if !markdown.contains(CARRIER_STEM) {
         return none(markdown, false);
     }
     let normalized = if markdown.contains('\r') {
@@ -834,7 +870,7 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
             };
             skip_blank = false;
             host = found.host.clone();
-            slots.push((found.payload.clone(), closer));
+            slots.push((found.payload.clone(), closer, found.depth));
             continue;
         }
         let body = strip_host_prefix(line, &host);
@@ -868,6 +904,7 @@ struct FoundMarker {
     /// indentation included.
     host: String,
     payload: String,
+    depth: usize,
     offset: usize,
     end: usize,
     closer: bool,
@@ -892,10 +929,11 @@ fn parsed_carrier_markers(markdown: &str, lines: &[&str]) -> Vec<FoundMarker> {
     let take = |at: usize, text: &str| {
         let line = line_starts.partition_point(|start| *start <= at) - 1;
         let host = &lines[line][..at - line_starts[line]];
-        carrier_payload(text).map(|payload| FoundMarker {
+        carrier_payload_at(text).map(|(payload, depth)| FoundMarker {
             line,
             host: host.to_owned(),
             payload,
+            depth,
             offset: at,
             end: at + text.len(),
             closer: false,
@@ -997,8 +1035,12 @@ pub(crate) fn restore_carrier_markers(carve: &str, lift: &CarrierLift) -> String
                 .and_then(|index| index.parse::<usize>().ok())
                 .and_then(|index| lift.slots.get(index));
             match slot {
-                Some((payload, closer)) => RestoredLine {
-                    lead: lead.strip_suffix("%% ").unwrap_or(lead).to_owned(),
+                Some((payload, closer, depth)) => RestoredLine {
+                    lead: format!(
+                        "{}{}",
+                        lead.strip_suffix("%% ").unwrap_or(lead),
+                        "  ".repeat(depth.saturating_sub(1))
+                    ),
                     text: payload.clone(),
                     kind: Some(*closer),
                 },

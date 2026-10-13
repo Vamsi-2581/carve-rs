@@ -506,6 +506,7 @@ fn quoted_list_boundaries<'a>(
                 boundary = prefix.trim_end().to_owned();
             }
             paragraph = !(quote_body.is_empty()
+                || quote_body == "+"
                 || reference.is_match(quote_body)
                 || thematic(quote_body)
                 || quote_body.starts_with(":::")
@@ -1084,7 +1085,8 @@ pub(super) fn note_blocks(
     let mut unplaced = Vec::new();
     for note in completed {
         let body = normalize_djot_fences(&note.body.join("\n"));
-        let converted = blocks_with_slot(&body, None, Some(empty_note));
+        let converted =
+            super::convert_djot_block_markers(&blocks_with_slot(&body, None, Some(empty_note)));
         let mut lines = converted.split('\n');
         let mut definition = format!(
             "{}{}",
@@ -1750,7 +1752,8 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
                 ));
             }
             in_heading = heading.is_match(item_body);
-            paragraph = !in_quote
+            paragraph = item_body.trim() != "+"
+                && !in_quote
                 && !item_div
                 && !in_heading
                 && !reference.is_match(item_body)

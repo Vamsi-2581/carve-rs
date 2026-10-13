@@ -285,3 +285,28 @@ fn adjacent_footnotes_remain_footnotes_beside_caret_reference() {
     assert_eq!(html.matches("role=\"doc-noteref\"").count(), 2);
     assert!(!html.contains("carve-djot-reference"));
 }
+
+#[test]
+fn quoted_empty_items_keep_nested_blocks() {
+    for body in ["> b", "# h", "***", "::: box\n>   text\n>   :::"] {
+        let source = format!("> -\n>   {body}\n");
+        let expected = format!("> - +\n>   {body}\n");
+        let imported = carve::djot_to_carve(&source);
+        assert_eq!(
+            carve::to_html(&imported),
+            carve::to_html(&expected),
+            "{source:?}\n{imported}"
+        );
+    }
+}
+
+#[test]
+fn a_closed_list_does_not_own_a_later_image_label() {
+    let source = "- a\n\n![x\n- b](u)\n";
+    let imported = carve::djot_to_carve(source);
+    assert_eq!(
+        carve::to_html(&imported),
+        carve::to_html("- a\n\n{%%}![x\n\\- b](u)\n"),
+        "{imported}"
+    );
+}
