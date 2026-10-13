@@ -703,11 +703,17 @@ fn markdown_list_style_loss_names_each_dropped_style() {
                 },
             )
             .unwrap();
-            assert_eq!(result.value, expected);
-            assert_eq!(result.losses.len(), 1);
-            assert_eq!(result.losses[0].code, "list-style-dropped");
-            assert_eq!(result.losses[0].style, Some(style));
-            assert!(result.losses[0].pos.is_none());
+            if roundtrip {
+                let first = source.split_whitespace().next().unwrap();
+                assert_eq!(result.value, format!("<!-- carve: {first} -->\n{expected}"));
+                assert!(result.losses.is_empty());
+            } else {
+                assert_eq!(result.value, expected);
+                assert_eq!(result.losses.len(), 1);
+                assert_eq!(result.losses[0].code, "list-style-dropped");
+                assert_eq!(result.losses[0].style, Some(style));
+                assert!(result.losses[0].pos.is_none());
+            }
         }
     }
 }
