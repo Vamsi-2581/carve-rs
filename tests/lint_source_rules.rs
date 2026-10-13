@@ -332,16 +332,14 @@ fn a_fence_below_a_comment_in_a_marker_line_note_is_not_a_list_warning() {
             .collect();
         assert!(warnings.is_empty(), "{source:?}: {warnings:?}");
     }
-    for source in [
-        "- [^n]: text\n\n    - child\n\n      %% c\n        ```\n        code\n        ```\nafter [^n]\n",
-    ] {
-        assert!(
-            lint_carve(source)
-                .iter()
-                .any(|warning| warning.rule == "list-item-block-overindented"),
-            "{source:?}"
-        );
-    }
+    let source =
+        "- [^n]: text\n\n    - child\n\n      %% c\n        ```\n        code\n        ```\nafter [^n]\n";
+    assert!(
+        lint_carve(source)
+            .iter()
+            .any(|warning| warning.rule == "list-item-block-overindented"),
+        "{source:?}"
+    );
 }
 
 #[test]
