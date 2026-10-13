@@ -607,6 +607,7 @@ const IMPLEMENTED: &[&str] = &[
     "below-a-definition-body-s-column-an-invisible-line-folds-as-text",
     "a-colon-followed-by-only-whitespace-is-not-a-description",
     "a-leading-continuation-marker-in-a-footnote-body-or-a-quote-is-text",
+    "a-block-quote-and-a-footnote-body-take-the-first-block-form",
     "an-empty-description-body-claims-no-line-below-column-0",
     "an-empty-description-body-is-written-with-the-empty-sentinel",
     "the-continuation-marker-s-column-gate-reaches-every-container",
@@ -921,62 +922,10 @@ const AHEAD_OF_PIN: &[(&str, &str, &str)] = &[];
 /// Empty again. Its three entries were corpus 519's first three documents, and
 /// carve-rs#2170 made them match, so the `assert_ne!` in `check_pair` is what
 /// removed them.
-const BEHIND_ON_PAIR: &[(&str, &str, &str)] = &[
-    (
-        "581-a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in",
-        "carve-rs#2642",
-        r#"<blockquote>
-  <ul>
-    <li>
-      <div class="box">
-        <ul>
-          <li>
-            <div class="line-block">
-              <p><code></code></p>
-            </div>
-          </li>
-        </ul>
-        <p><code>
-:::bad
-:::</code></p>
-      </div>
-    </li>
-  </ul>
-</blockquote>
-<ul>
-  <li>tail</li>
-</ul>"#,
-    ),
-    (
-        "581-a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in-3",
-        "carve-rs#2642",
-        r#"<blockquote>
-  <ul>
-    <li>
-      <div class="box">
-        <ul>
-          <li>
-            <div class="line-block">
-              <p><code></code></p>
-            </div>
-          </li>
-        </ul>
-        <p><code>
-:::
-:::bad
-:::</code></p>
-      </div>
-    </li>
-  </ul>
-</blockquote>
-<ul>
-  <li>tail</li>
-</ul>"#,
-    ),
-    (
-        "581-a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in-4",
-        "carve-rs#2642",
-        r#"<blockquote>
+const BEHIND_ON_PAIR: &[(&str, &str, &str)] = &[(
+    "581-a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in-4",
+    "carve-rs#2642",
+    r#"<blockquote>
   <ul>
     <li>a
       <ul>
@@ -989,8 +938,7 @@ const BEHIND_ON_PAIR: &[(&str, &str, &str)] = &[
   </ul>
 </blockquote>
 <p>after</p>"#,
-    ),
-];
+)];
 
 fn check_pair(slug: &str) {
     let slug = &resolve_slug(slug);

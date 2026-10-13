@@ -725,6 +725,8 @@ mod an_ordered_task_item_keeps_its_label;
 mod an_over_indented_unterminated_fence_folds;
 #[path = "../an_unattached_block_attribute_is_reported.rs"]
 mod an_unattached_block_attribute_is_reported;
+#[path = "../an_unclosed_fence_owns_the_colon_runs_it_carries.rs"]
+mod an_unclosed_fence_owns_the_colon_runs_it_carries;
 #[path = "../an_unclosed_run_at_a_forced_closer_drops_the_break.rs"]
 mod an_unclosed_run_at_a_forced_closer_drops_the_break;
 #[path = "../an_unclosed_verbatim_run_strips_at_a_forced_closer.rs"]
@@ -921,6 +923,7 @@ mod constructed_figure_invariants;
 mod container_scoped_content_columns;
 #[path = "../corpus.rs"]
 mod corpus;
+
 #[path = "../corpus_canonical_form.rs"]
 mod corpus_canonical_form;
 #[path = "../corpus_render_fixtures.rs"]
@@ -991,6 +994,8 @@ mod description_column_closes_overindented_code_fences;
 mod description_fence_paragraph_boundary;
 #[path = "../display_math_on_a_marker_line_takes_its_caption.rs"]
 mod display_math_on_a_marker_line_takes_its_caption;
+#[path = "../quote_note_first_block.rs"]
+mod quote_note_first_block;
 
 #[path = "../destination_parens.rs"]
 mod destination_parens;
@@ -2065,3 +2070,6 @@ mod wave7_2609;
 
 #[path = "../wave7_description_openers.rs"]
 mod wave7_description_openers;
+
+#[path = "../a_continuation_on_a_span_marker_joins_its_origin.rs"]
+mod a_continuation_on_a_span_marker_joins_its_origin;
