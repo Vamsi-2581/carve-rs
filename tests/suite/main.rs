@@ -2020,3 +2020,6 @@ mod line_block_fence_writer;
 
 #[path = "../spec_wave_parity.rs"]
 mod spec_wave_parity;
+
+#[path = "../wave7_quoted_term.rs"]
+mod wave7_quoted_term;

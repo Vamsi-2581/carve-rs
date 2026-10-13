@@ -11934,6 +11934,12 @@ fn collect_blockquote_body(
             } else {
                 (line.to_string(), 0)
             }
+        } else if is_term
+            && matches!(open_entry.half, Some(DefHalf::Term))
+            && indent_columns(line) > 0
+        {
+            // An indented unmarked term is plain lazy text of the open term.
+            (format!("{LAZY} {trimmed}"), leading_ws(line))
         } else if line.starts_with(LAZY) {
             (line.to_string(), 0)
         } else {
@@ -18056,7 +18062,13 @@ fn fold_term(
         // Spaces INSIDE a verbatim run end at its closing delimiter, so an
         // all-space `` `  ` `` term is untouched by a trim that only ever sees
         // the end of a line.
-        let line = trim_ascii_end(strip_lazy(&owned)).to_string();
+        let text = strip_lazy(&owned);
+        let text = if owned.starts_with(LAZY) {
+            trim_ascii_start(text)
+        } else {
+            text
+        };
+        let line = trim_ascii_end(text).to_string();
         let anchor = options
             .positions
             .then(|| inline_anchor_for_line(cur, cur.pos, &owned));
