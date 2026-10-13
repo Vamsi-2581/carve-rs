@@ -1971,6 +1971,8 @@ impl<'a> Importer<'a> {
                     && Self::reads_explicit_id(handle)
             }
             crate::roundtrip::AUTOLINK => tag == "a" && Self::reads_autolink(handle),
+            crate::roundtrip::XREF => tag == "a" && Self::reads_xref(handle),
+            crate::roundtrip::CAPTION_NUMBER => tag == "span" && Self::reads_caption_number(handle),
             crate::roundtrip::RAW => {
                 tag == "span" && Self::reads_raw_format(handle, mode).is_some()
             }
@@ -2005,7 +2007,22 @@ impl<'a> Importer<'a> {
         tag: &str,
         mode: HtmlImportMode,
     ) -> Option<(&'static str, &'static str)> {
-        use crate::roundtrip::{AUTOLINK, ESCAPED, EXPLICIT_ID, GENERATED_ID, RAW, REF};
+        use crate::roundtrip::{
+            AUTOLINK, ESCAPED, EXPLICIT_ID, FOOTNOTE_LABEL, GENERATED_ID, RAW, REF, XREF,
+        };
+        if tag == "a" && Self::carries_xref(handle) {
+            if Self::carries_valid_ref(handle) {
+                return Some((XREF, REF));
+            }
+            if Self::carries_autolink(handle) {
+                return Some((XREF, AUTOLINK));
+            }
+            if Self::carrier(handle, FOOTNOTE_LABEL)
+                .is_some_and(|label| valid_footnote_carrier_label(&label))
+            {
+                return Some((XREF, FOOTNOTE_LABEL));
+            }
+        }
         match tag {
             "a" if Self::carries_autolink(handle) && Self::carries_valid_ref(handle) => {
                 Some((AUTOLINK, REF))
@@ -2150,8 +2167,31 @@ impl<'a> Importer<'a> {
     /// Whether the anchor was authored as an autolink. A PRESENCE carrier, so
     /// the value is not compared (§13a), but an anchor with no destination has
     /// no autolink to be.
+    fn carries_xref(handle: &Handle) -> bool {
+        Self::carrier(handle, crate::roundtrip::XREF).is_some()
+            && Self::attr(handle, "href").is_some_and(|href| {
+                href.strip_prefix('#')
+                    .is_some_and(|id| !id.is_empty() && !id.contains(['>', ' ', '\r', '\n']))
+            })
+    }
+
+    fn reads_xref(handle: &Handle) -> bool {
+        Self::carries_xref(handle)
+            && Self::contradictory_carriers(handle, "a", HtmlImportMode::Safe).is_none()
+    }
+
+    fn reads_caption_number(handle: &Handle) -> bool {
+        Self::carrier(handle, crate::roundtrip::CAPTION_NUMBER).is_some()
+            && matches!(&handle.data, NodeData::Element { attrs, .. } if attrs.borrow().iter().all(|attr| crate::roundtrip::canonical(attr.name.local.as_ref()) == Some(crate::roundtrip::CAPTION_NUMBER)))
+            && handle
+                .children
+                .borrow()
+                .iter()
+                .all(|child| matches!(child.data, NodeData::Text { .. }))
+    }
+
     fn reads_autolink(a: &Handle) -> bool {
-        Self::carries_autolink(a) && !Self::carries_valid_ref(a)
+        Self::carries_autolink(a) && !Self::carries_valid_ref(a) && !Self::carries_xref(a)
     }
 
     fn carries_valid_ref(handle: &Handle) -> bool {
@@ -2200,7 +2240,9 @@ impl<'a> Importer<'a> {
         path: &str,
     ) -> Option<String> {
         let label = Self::carrier(h, crate::roundtrip::REF)?;
-        if Self::tag(h).as_deref() == Some("a") && Self::carries_autolink(h) {
+        if Self::tag(h).as_deref() == Some("a")
+            && (Self::carries_autolink(h) || Self::carries_xref(h))
+        {
             // §13d: it contradicts the autolink carrier, and `attrs` reported the pair.
             return None;
         }
@@ -6743,6 +6785,29 @@ impl<'a> Importer<'a> {
             return self.code_span(h, path, depth, attrs);
         }
         let children = self.inlines(&h.children.borrow(), path, depth + 1)?;
+        if tag == "a" && Self::reads_xref(h) {
+            let node = InlineNode::CrossRef(CrossRef {
+                target: Self::attr(h, "href").unwrap()[1..].to_owned(),
+                href: None,
+                pos: None,
+            });
+            return Ok(if attrs.is_some() {
+                vec![InlineNode::Span(Span {
+                    attrs,
+                    children: vec![node],
+                    injected: false,
+                    pos: None,
+                })]
+            } else {
+                vec![node]
+            });
+        }
+        if tag == "span" && Self::reads_caption_number(h) {
+            return Ok(vec![InlineNode::CaptionNumber(CaptionNumber {
+                number: None,
+                pos: None,
+            })]);
+        }
         if tag == "span" {
             // AFTER the children have been walked, which is what keeps the
             // budget honest for free: `inlines` has already charged every node

@@ -4230,7 +4230,11 @@ fn render_inline_after(
                 if opens_anchor {
                     out.push_str("<a href=\"#");
                     write_escaped_attr(out, &actual_id);
-                    out.push_str("\">");
+                    out.push('"');
+                    if options.html_carriers() {
+                        out.push_str(" data-carve-xref");
+                    }
+                    out.push('>');
                     out.push_str(&text);
                     out.push_str("</a>");
                 } else {
@@ -4242,6 +4246,9 @@ fn render_inline_after(
         }
         InlineNode::CaptionNumber(n) => {
             match n.number {
+                Some(number) if options.html_carriers() => {
+                    write!(out, "<span data-carve-caption-number>{number}</span>").unwrap();
+                }
                 Some(number) => out.push_str(&number.to_string()),
                 // An unresolved placeholder stays the literal `#` the author
                 // wrote - the visible failure this language prefers to a
