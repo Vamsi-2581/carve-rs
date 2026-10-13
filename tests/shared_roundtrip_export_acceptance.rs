@@ -98,26 +98,26 @@ fn import_projection(tree: &Value, fixture: &Value) -> bool {
 }
 fn reserved(name: &str) -> bool {
     // `data-carve-src` is reserved with no inventory row and no deprecated alias.
-    matches!(name, "data-marker" | "data-char" | "data-carve-src")
-        || [
-            "explicit-id",
-            "ref",
-            "autolink",
-            "footnote-label",
-            "inline-footnote",
-            "raw",
-            "escaped",
-            "abbreviations",
-            "col-widths",
-            "label",
-            "ext",
-            "id-slot",
-            "tight",
-        ]
-        .iter()
-        .any(|suffix| {
-            name == format!("data-carve-{suffix}") || name == format!("data-djot-{suffix}")
-        })
+    matches!(
+        name,
+        "data-marker" | "data-char" | "data-carve-src" | "data-djot-src"
+    ) || [
+        "explicit-id",
+        "ref",
+        "autolink",
+        "footnote-label",
+        "inline-footnote",
+        "raw",
+        "escaped",
+        "abbreviations",
+        "col-widths",
+        "label",
+        "generated-id",
+        "id-slot",
+        "tight",
+    ]
+    .iter()
+    .any(|suffix| name == format!("data-carve-{suffix}") || name == format!("data-djot-{suffix}"))
 }
 fn no_reserved(tree: &Value) {
     for node in node_list(tree) {
@@ -532,7 +532,8 @@ fn collision_row(fixture: &Value) {
         result.losses.iter().any(|row| dropped(row)
             && row.attribute.as_deref() == Some(name.as_str())
             && row.format.is_none()
-            && row.target.as_str() == "html"),
+            && row.target.as_str() == "html")
+            == !fixture["kept"].as_bool().unwrap_or(false),
         "{}",
         fixture["id"]
     );
@@ -560,17 +561,48 @@ fn shared_markdown_container_carriers_restore_ast_fields() {
             ordinary
         );
         assert!(!ordinary.contains("<!-- carve:"));
-        let exported = to_markdown_with_options(&source, &Options::default().with_roundtrip(true));
+        let report = carve::with_render_loss_report(
+            carve::RenderTarget::Markdown,
+            CheckedRenderOptions::default(),
+            || {
+                carve::render_markdown_with_options(
+                    &parse(&source),
+                    &Options::default().with_roundtrip(true),
+                )
+                .unwrap()
+            },
+        )
+        .unwrap();
+        for code in rows(fixture, "lossCodes") {
+            assert!(
+                report
+                    .losses
+                    .iter()
+                    .any(|loss| loss.code == code.as_str().unwrap()),
+                "{}: {:?}",
+                fixture["id"],
+                report.losses
+            );
+        }
+        let exported = report.value;
         for fragment in required_rows(fixture, "carrierFragments") {
             assert!(exported.contains(fragment.as_str().unwrap()));
         }
         let imported = migrate_markdown(&exported);
         assert!(
             projection(&ast(&imported.value), &fixture["expectedNodes"]),
-            "{}",
-            fixture["id"]
+            "{}: exported={exported:?}, imported={:?}",
+            fixture["id"],
+            imported.value
         );
-        assert_eq!(to_html(&imported.value).trim(), to_html(&source).trim());
+        if fixture["lossCodes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "definition-list-flattened"))
+        {
+            assert_ne!(to_html(&imported.value).trim(), to_html(&source).trim());
+        } else {
+            assert_eq!(to_html(&imported.value).trim(), to_html(&source).trim());
+        }
     }
 }
 

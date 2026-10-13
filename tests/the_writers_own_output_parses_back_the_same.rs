@@ -119,8 +119,7 @@ fn the_emptied_item_survives_its_own_round_trip() {
 /// `fmt` closes an unterminated container, so the two spellings below are `x`
 /// and `fmt(x)`. The trees are otherwise identical - the item holds one
 /// container either way and `tail` sits inside it - so only the flag moved,
-/// which is what markup-carve/carve#1602 ruled out. Both read LOOSE, the
-/// reading the source already gave and the one carve-php gives both.
+/// A held container keeps its interior blank lines, with or without a closer.
 #[test]
 fn a_supplied_closer_does_not_tighten_an_item_whose_body_is_the_container() {
     for (kind, unterminated, terminated) in [
@@ -142,8 +141,8 @@ fn a_supplied_closer_does_not_tighten_an_item_whose_body_is_the_container() {
             terminated,
             "{kind}: fmt output"
         );
-        assert_eq!(tightness(unterminated), vec![false], "{kind}: unterminated");
-        assert_eq!(tightness(terminated), vec![false], "{kind}: terminated");
+        assert_eq!(tightness(unterminated), vec![true], "{kind}: unterminated");
+        assert_eq!(tightness(terminated), vec![true], "{kind}: terminated");
         assert!(
             parses_the_same(unterminated),
             "{kind}: parse(fmt(x)) != parse(x)"

@@ -640,6 +640,7 @@ fn parse_with_options_mode_and_index(
                     reached: Vec::new(),
                     authored_base_at_start: false,
                     item_marker_at_start: false,
+                    marker_colon_rebased: false,
                     marker_tail: None,
                     sublists_carry_authored_base: false,
                 },
@@ -1522,7 +1523,7 @@ fn extract_footnote_defs(
         if let Some(open) = in_fence {
             if inline_fence_paragraph_ends(lines[i], open, inline_marker_paragraph.as_ref())
                 || (description_fence
-                    && description_blank
+                    && (description_blank || !inline_marker_fence)
                     && description_fence_leaves_after_blank(lines[i], open, &term_fence_columns))
                 || !inline_fence_lazy_line(lines[i], inline_marker_paragraph.as_ref())
                     && ((inline_marker_fence
@@ -2200,6 +2201,7 @@ fn extract_footnote_defs(
                     line_map: def_line_map,
                     authored_base_at_start: false,
                     item_marker_at_start: false,
+                    marker_colon_rebased: false,
                     marker_tail: None,
                     reached: vec![true; def_lines.len()],
                     // A FOOTNOTE BODY carries authored base for its sublists, so
@@ -2267,6 +2269,7 @@ fn extract_footnote_defs(
             source: joined_source(&body),
             authored_base_at_start: false,
             item_marker_at_start: false,
+            marker_colon_rebased: false,
             marker_tail: None,
             reached: Vec::new(),
             sublists_carry_authored_base: false,
@@ -3350,7 +3353,9 @@ fn prepass_paragraph_open_above(
         && indent_columns(above) <= indent_columns(lines[index])
         && !is_definition_placeholder(above)
         && !is_line_comment_any_column(above)
-        && !prepass_definition_line(above)
+        && !prepass_definition_line(
+            strip_term_quote_prefixes(above, quote_columns).unwrap_or(above),
+        )
 }
 
 fn remember_prepass_paragraph_line(
@@ -3408,7 +3413,7 @@ fn remember_prepass_paragraph_line(
     if is_blank_line(raw)
         || (trim_ascii(raw) == "+" && attaches_flush_left(Some(0), Some(&raw)))
         || is_definition_placeholder(raw)
-        || prepass_definition_line(raw)
+        || prepass_definition_line(rest)
         || trim_ascii_start(rest).starts_with("%%")
     {
         paragraph = None;
@@ -3833,7 +3838,7 @@ fn extract_link_defs_with_guard_full(
         if let Some(open) = in_fence {
             if inline_fence_paragraph_ends(line, open, inline_marker_paragraph.as_ref())
                 || (description_fence
-                    && description_blank
+                    && (description_blank || !inline_marker_fence)
                     && description_fence_leaves_after_blank(line, open, &term_fence_columns))
                 || !inline_fence_lazy_line(line, inline_marker_paragraph.as_ref())
                     && ((inline_marker_fence && is_blank_line(without_blockquote_prefixes(line)))
@@ -4403,18 +4408,13 @@ fn closing_title_quote(after_pad: &str) -> Option<usize> {
 /// tell a brace or a quote in the DESTINATION from one opening the block, so
 /// `[a]: /u{x} {.c}` and `[a]: it's {.c}` both fell through to prose.
 ///
-/// THE HEAD OF THE LINE IS DELIBERATELY UNTOUCHED. carve#911 rules what follows
-/// the destination; a run BEFORE it is a different question, and the executable
-/// spec agrees with the leniency - `[a]: <U+202F>javascript:alert(1)` is still a
-/// definition there, with the destination sanitized rather than the line
-/// refused.
 fn parse_link_def_target_parts(target: &str) -> Option<(String, Option<String>, Option<Attrs>)> {
     // THE LINE ENDING IS `whitespace` - a space or a tab, the same terminal
     // `blank_line` takes (PART 1, carve#890). So `[a]: /u<SP>` is a definition
     // and `[a]: /u<NBSP>` is not: a no-break space, an en quad, a byte order
     // mark and a form feed are CONTENT under that ruling, and content after the
     // destination is what the anchor rejects.
-    let target = trim_ascii_end(target.trim_start());
+    let target = trim_ascii_end(target.trim_start_matches(' '));
     // `link_destination` ends at the first whitespace, and that scan IS the
     // Unicode property (`unicode_url_char` is "non-whitespace, non-ASCII").
     let end = target
@@ -6986,6 +6986,10 @@ fn rebased_colon_group_end(
                 } else {
                     stack.push(trimmed.len());
                 }
+            } else if let Some(open) = detect_container_open(trimmed) {
+                if stack.len() < MAX_NESTING_DEPTH {
+                    stack.push(open.fence_len);
+                }
             }
         }
     }
@@ -7189,6 +7193,132 @@ fn rebased_table_end(lines: &[Cow<'_, str>], start: usize, base: usize) -> usize
     end
 }
 
+#[cfg(test)]
+thread_local! {
+    static NAMED_COLON_REBASE_LINES: Cell<usize> = const { Cell::new(0) };
+}
+
+fn rebase_named_colon_extent(
+    lines: &mut [Cow<'_, str>],
+    columns: &mut [Option<isize>],
+    start: usize,
+    end: usize,
+    base: usize,
+    width: usize,
+) {
+    // Each payload line is rewritten once, even when named children nest.
+    let mut frames = vec![(width, base, 0, false, false)];
+    let mut items: Vec<usize> = Vec::new();
+    let mut comment_retains_frame = false;
+    let mut code: Option<(FenceOpen, usize, bool)> = None;
+    let mut comment: Option<usize> = None;
+    for (at, line) in lines.iter_mut().enumerate().take(end + 1).skip(start) {
+        let column = indent_columns(line);
+        let local = trim_ascii_start(line);
+        let Some(&(frame_width, frame_base, parent_base, literal, paragraph)) = frames.last()
+        else {
+            break;
+        };
+        let mut strip = frame_base;
+        let mut opaque = false;
+        if let Some((open, opener_column, payload)) = code {
+            if !is_blank_line(line) && column < frame_base && !payload {
+                code = None;
+            } else {
+                if (payload || column == opener_column) && is_fence_close(local, open) {
+                    code = None;
+                }
+                opaque = true;
+            }
+        }
+        if let Some(width) = comment {
+            if is_comment_fence_close_any_column(line, width) {
+                comment = None;
+            }
+            opaque = true;
+        }
+        if at > start && !opaque {
+            if is_blank_line(line) {
+                comment_retains_frame = false;
+                if let Some(frame) = frames.last_mut() {
+                    frame.4 = false;
+                }
+            } else {
+                let comment_is_body_owned = items.is_empty();
+                let comment_line = is_line_comment_any_column(line);
+                if !comment_line && column <= frame_base {
+                    comment_retains_frame = false;
+                }
+                if comment_line {
+                    comment_retains_frame = true;
+                }
+                while !comment_retains_frame
+                    && items.last().is_some_and(|content| column < *content)
+                {
+                    items.pop();
+                }
+                let in_item = items.last().is_some_and(|content| column >= *content);
+                let held_by_item = in_item || comment_retains_frame;
+                if let Some(open) = detect_comment_fence_line_any_column(line) {
+                    if comment_is_body_owned && column > frame_base {
+                        comment_retains_frame = true;
+                    }
+                    comment = Some(open.fence_len);
+                } else if let Some(open) =
+                    detect_fence_open(local).filter(|_| literal || column == frame_base || in_item)
+                {
+                    code = Some((open, column, literal));
+                    if let Some(frame) = frames.last_mut() {
+                        frame.4 = false;
+                    }
+                } else if !held_by_item && !literal {
+                    if exact_colon_fence_len(local) == Some(frame_width)
+                        && (column == frame_base || column == parent_base)
+                    {
+                        strip = column;
+                        frames.pop();
+                    } else if column >= frame_base && (column == frame_base || !paragraph) {
+                        if let Some(next_width) = detect_container_open(local)
+                            .map(|open| open.fence_len)
+                            .or_else(|| detect_line_block_open(local))
+                            .or_else(|| detect_hardbreaks_block_open(local))
+                            .or_else(|| detect_quote_block_open(local))
+                        {
+                            if frames.len() < MAX_NESTING_DEPTH {
+                                let next_literal = detect_line_block_open(local).is_some()
+                                    || detect_quote_block_open(local).is_some();
+                                frames.push((next_width, column, frame_base, next_literal, false));
+                                strip = column;
+                            }
+                        } else if let Some(frame) = frames.last_mut() {
+                            frame.4 =
+                                detect_fence_open(local).is_some() || !item_block_opener(local);
+                        }
+                    }
+                } else if literal
+                    && exact_colon_fence_len(local) == Some(frame_width)
+                    && column == frame_base
+                {
+                    frames.pop();
+                }
+                if !literal && (!paragraph || in_item) {
+                    if let Some(content) = marker_content_col_at(line, column) {
+                        items.push(content);
+                    }
+                }
+            }
+        }
+        if !is_blank_line(line) && column >= strip {
+            #[cfg(test)]
+            NAMED_COLON_REBASE_LINES.with(|count| count.set(count.get() + 1));
+            *line = Cow::Owned(strip_leading_columns(line, strip));
+            if let Some(Some(column)) = columns.get_mut(at) {
+                *column += strip as isize;
+            }
+        }
+    }
+}
+
 /// Apply an authored block base after a container's minimum content column has
 /// been stripped. List-item calls leave sublists alone because their residual
 /// indentation expresses another list level; definition and footnote bodies
@@ -7213,6 +7343,8 @@ fn rebase_overindented_blocks(
     let quote_lines = std::cell::OnceCell::new();
     let mut i = 0usize;
     let mut nested_columns: Vec<usize> = Vec::new();
+    let mut descendant_code: Option<(FenceOpen, usize)> = None;
+    let mut orphaned_code: Option<(FenceOpen, usize)> = None;
     let mut after_blank = false;
     let mut paragraph_open = false;
     let mut opaque_quote_tail = false;
@@ -7240,6 +7372,32 @@ fn rebase_overindented_blocks(
         }
         let base = indent_columns(&lines[i]);
         let local_at_base = strip_leading_columns(&lines[i], base);
+        let mut closed_descendant_code = false;
+        if let Some((open, column)) = descendant_code {
+            if base < column {
+                orphaned_code = descendant_code.take();
+            } else if base == column && is_fence_close(&local_at_base, open) {
+                descendant_code = None;
+                closed_descendant_code = true;
+            }
+        }
+        if orphaned_code
+            .is_some_and(|(open, column)| base == column && is_fence_close(&local_at_base, open))
+        {
+            orphaned_code = None;
+            paragraph_open = true;
+            after_blank = false;
+            i += 1;
+            continue;
+        }
+        if !closed_descendant_code
+            && descendant_code.is_none()
+            && nested_columns.last().is_some_and(|column| base >= *column)
+        {
+            if let Some(open) = detect_fence_open(&local_at_base) {
+                descendant_code = Some((open, base));
+            }
+        }
         if base > 0
             && last_literal_base.is_some_and(|column| base != column)
             && detect_fence_open(&local_at_base).is_some()
@@ -7481,12 +7639,118 @@ fn rebase_overindented_blocks(
                 .map(|open| open.fence_len)
                 .or_else(|| detect_quote_block_open(&lines[i]))
             {
+                let marker_body =
+                    source.item_marker_at_start && i == 0 && !source.marker_colon_rebased;
+                let mut body_paragraph = false;
+                let mut body_code: Option<(FenceOpen, usize)> = None;
+                let mut body_comment: Option<usize> = None;
+                let mut body_items: Vec<usize> = Vec::new();
+                let mut comment_retains_frame = false;
+                let mut rebased_until = 0;
                 let mut stack = vec![width];
                 i += 1;
                 while i < lines.len() {
+                    let base = indent_columns(&lines[i]);
+                    if let Some((open, column)) = body_code {
+                        if !is_blank_line(&lines[i]) && base < column {
+                            body_code = None;
+                        } else {
+                            if base == column && is_fence_close(trim_ascii_start(&lines[i]), open) {
+                                body_code = None;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    if let Some(width) = body_comment {
+                        if is_comment_fence_close_any_column(&lines[i], width) {
+                            body_comment = None;
+                        }
+                        i += 1;
+                        continue;
+                    }
+                    let comment_is_body_owned = body_items.is_empty();
+                    let comment_line = is_line_comment_any_column(&lines[i]);
+                    if is_blank_line(&lines[i]) || (!comment_line && base == 0) {
+                        comment_retains_frame = false;
+                    }
+                    if comment_line {
+                        comment_retains_frame = true;
+                    }
+                    while !comment_retains_frame
+                        && body_items.last().is_some_and(|column| base < *column)
+                        && !is_blank_line(&lines[i])
+                    {
+                        body_items.pop();
+                    }
+                    let owned_by_item = body_items.last().is_some_and(|column| base >= *column);
+                    if let Some(open) = detect_fence_open(trim_ascii_start(&lines[i]))
+                        .filter(|_| base == 0 || owned_by_item)
+                    {
+                        body_code = Some((open, base));
+                        i += 1;
+                        continue;
+                    }
+                    if let Some(open) = detect_comment_fence_line(trim_ascii_start(&lines[i]))
+                        .filter(|_| {
+                            entry_closers
+                                .get_or_init(|| comment_closers_by_run(&lines))
+                                .get(
+                                    &detect_comment_fence_line(trim_ascii_start(&lines[i]))
+                                        .unwrap()
+                                        .fence_len,
+                                )
+                                .is_some_and(|indices| indices.last().is_some_and(|last| *last > i))
+                        })
+                    {
+                        if comment_is_body_owned && base > 0 {
+                            comment_retains_frame = true;
+                        }
+                        body_comment = Some(open.fence_len);
+                        i += 1;
+                        continue;
+                    }
+                    if (!body_paragraph || !body_items.is_empty())
+                        && detect_list_marker_full_at(&lines[i], base).is_some()
+                    {
+                        if let Some(column) = marker_content_col_at(&lines[i], base) {
+                            body_items.push(column);
+                        }
+                    }
+                    if marker_body
+                        && !body_paragraph
+                        && !owned_by_item
+                        && !comment_retains_frame
+                        && i >= rebased_until
+                        && base > 0
+                    {
+                        if let Some(open) = detect_container_open(trim_ascii_start(&lines[i])) {
+                            if exact_colon_fence_len(trim_ascii_start(&lines[i])).is_none() {
+                                let end = rebased_colon_group_end(&lines, i, base, open.fence_len);
+                                rebased_until = end + 1;
+                                source.marker_colon_rebased = true;
+                                rebase_named_colon_extent(
+                                    &mut lines,
+                                    &mut source.col_map,
+                                    i,
+                                    end,
+                                    base,
+                                    open.fence_len,
+                                );
+                            }
+                        }
+                    }
                     let line = &lines[i];
+                    if is_blank_line(line) || is_line_comment_any_column(line) {
+                        body_paragraph = false;
+                    } else if detect_fence_open(trim_ascii_start(line)).is_some()
+                        || !item_block_opener(trim_ascii_start(line))
+                    {
+                        body_paragraph = true;
+                    }
                     i += 1;
                     if exact_colon_fence_len(line) == Some(*stack.last().unwrap()) {
+                        body_paragraph = false;
                         stack.pop();
                         if stack.is_empty() {
                             break;
@@ -10076,6 +10340,7 @@ struct NestedFenceReplay {
 #[derive(Default)]
 struct NestedLevel {
     hosts: Vec<(usize, usize, bool)>,
+    term_columns: HashSet<usize>,
     /// The fence a quoted host holds open, as (opener, the host's content column,
     /// the opener's own column, and whether this is a payload span). The two columns differ when the opener is
     /// SHIFTED past its host, and a closer at either one ends it.
@@ -10189,7 +10454,7 @@ impl NestedFenceReplay {
                 } else {
                     if is_comment_fence_close(trim_ascii_start(text), width) {
                         chain[level].host_comment = None;
-                        chain[level].by_comment = false;
+                        chain[level].by_comment = true;
                     }
                     if !provisional {
                         chain.truncate(level + 1);
@@ -10247,6 +10512,7 @@ impl NestedFenceReplay {
             }
             if let Some(rest) = strip_blockquote_prefix(text) {
                 chain[level].hosts.clear();
+                chain[level].term_columns.clear();
                 chain[level].colons.clear();
                 chain[level].para = false;
                 chain[level].colon_absorption = false;
@@ -10262,6 +10528,14 @@ impl NestedFenceReplay {
                 && (!chain[level].colons.is_empty() || chain[level].by_colon)
                 && is_line_comment_any_column(text)
             {
+                if let Some(open) = detect_comment_fence_line_any_column(text) {
+                    let column = indent_columns(text);
+                    if closer_ahead(lines, at, level, |line| {
+                        is_comment_fence_close_any_column(line, open.fence_len)
+                    }) {
+                        chain[level].host_comment = Some((open.fence_len, column, false));
+                    }
+                }
                 chain[level].by_comment = false;
                 chain[level].para = false;
                 chain[level].colon_absorption = false;
@@ -10341,7 +10615,9 @@ impl NestedFenceReplay {
                 let sibling = marker_ends_replayed_item(&here.hosts, column);
                 if !lazy_paragraph {
                     while here.hosts.last().is_some_and(|&(_, col, _)| col > column) {
-                        here.hosts.pop();
+                        if let Some((_, column, _)) = here.hosts.pop() {
+                            here.term_columns.remove(&column);
+                        }
                     }
                 }
                 let inside_item = here.hosts.last().is_some_and(|&(_, _, item)| item);
@@ -10359,6 +10635,9 @@ impl NestedFenceReplay {
                         }
                         let next = col + marker_content_col(inner).expect("matched list marker");
                         here.hosts.push((col, next, true));
+                        if is_definition_list_start(trim_ascii_start(marker.content)) {
+                            here.term_columns.insert(next);
+                        }
                         col = next + indent_columns(marker.content);
                         inner = trim_ascii_start(marker.content);
                         block_start = true;
@@ -10458,9 +10737,12 @@ impl NestedFenceReplay {
                     }
                 }
                 let row = is_table_start(leaf);
+                if !block_start && col == floor {
+                    here.term_columns.remove(&floor);
+                }
                 if floor > 0
-                    && col == floor
-                    && here.hosts.last().is_some_and(|&(_, _, item)| item)
+                    && col >= floor
+                    && !here.term_columns.contains(&floor)
                     && (row
                         || detect_heading(leaf).is_some()
                         || detect_thematic_break(leaf)
@@ -15026,7 +15308,7 @@ fn closed_colon_span_end(
     None
 }
 
-fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> bool {
+fn continuation_source_loosens(source: &str, _source_is_the_item_body: bool) -> bool {
     let lines: Vec<&str> = source.split('\n').collect();
     // A blank line INSIDE AN OPEN FENCE is that block's own content, not an
     // interior block separator, so it must not loosen the item (carve-php#404
@@ -15040,32 +15322,6 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
     // ONE STATEFUL LEFT-TO-RIGHT PASS, not one scan per line: each closed span
     // is jumped over whole, and spans never overlap, so the walk stays linear.
     //
-    // WHEN THE CONTAINER IS THE ITEM'S WHOLE BODY, ITS CLOSER IS A SPELLING.
-    // An unclosed opener runs to the end of the item and a closer on the item's
-    // final line ends in the same place, so the two spell ONE container and §17's
-    // looseness may not move across them. The canonical writer SUPPLIES the
-    // missing closer, so the pair is `x` and `fmt(x)`, which PART 11 §1 requires
-    // to parse alike. markup-carve/carve#1602 ruled the reading is the one the
-    // source already gives, LOOSE. Whether such an item SHOULD be loose is left
-    // open there; that it cannot be both is settled.
-    //
-    // BOUNDED TO AN ITEM WHOSE WHOLE BODY IS THE CONTAINER: the source must be
-    // the item's body from its first block (`source_is_the_item_body`, which
-    // only the marker-line-lead callers can say), the opener must be its first
-    // line, and the closer its last. A container with anything beside it in the
-    // item is one block among several, and its interior blank is its own
-    // content rather than a separator between the item's blocks - that is the
-    // case the skip was written for (markup-carve/carve#985).
-    //
-    // The bound is measured, not assumed: corpus 279-10 reaches this scan with
-    // the SAME lines as the case above, because its lead paragraph is not part of
-    // the collected chunk. Nothing in the text tells the two apart - only the
-    // caller knows whether a block precedes it - so widening the lift to that
-    // caller flips 279-10 loose and moves its pinned HTML.
-    let last_content = lines.iter().rposition(|line| !is_blank_line(line));
-    let is_the_whole_item_body = |start: usize, end: usize| {
-        source_is_the_item_body && start == 0 && last_content.is_some_and(|last| end > last)
-    };
     let mut fence: Option<FenceOpen> = None;
     let mut comment_closers: Option<HashMap<usize, usize>> = None;
     let mut closer_index = None;
@@ -15112,10 +15368,8 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
                 &mut comment_closers,
             )
             .unwrap_or(lines.len());
-            if !is_the_whole_item_body(i, end) {
-                i = end;
-                continue;
-            }
+            i = end;
+            continue;
         }
         if let Some(fence_len) = detect_hardbreaks_block_open(lines[i]) {
             let end = closed_colon_span_end(
@@ -15127,10 +15381,8 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
                 &mut comment_closers,
             )
             .unwrap_or(lines.len());
-            if !is_the_whole_item_body(i, end) {
-                i = end;
-                continue;
-            }
+            i = end;
+            continue;
         }
         if let Some(fence_len) = detect_quote_block_open(lines[i]) {
             let end = closed_colon_span_end(
@@ -15142,10 +15394,8 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
                 &mut comment_closers,
             )
             .unwrap_or(lines.len());
-            if !is_the_whole_item_body(i, end) {
-                i = end;
-                continue;
-            }
+            i = end;
+            continue;
         }
         if let Some(open) = detect_container_open(lines[i]) {
             let end = closed_colon_span_end(
@@ -15157,10 +15407,8 @@ fn continuation_source_loosens(source: &str, source_is_the_item_body: bool) -> b
                 &mut comment_closers,
             )
             .unwrap_or(lines.len());
-            if !is_the_whole_item_body(i, end) {
-                i = end;
-                continue;
-            }
+            i = end;
+            continue;
         }
         if is_definition_list_start(lines[i]) {
             let (end, _) = definition_entry_extent(&lines, i, 0, &entry_closers);
@@ -15918,6 +16166,8 @@ fn collect_indented_block_mapped_with_columns(
     let mut marker_definition_has_description = !marker_is_definition_term;
     let mut marker_description_code_admitted = false;
     let mut marker_description_has_inline_code = false;
+    let mut marker_description_has_lazy_tail = false;
+    let mut marker_description_is_paragraph = false;
     let mut marker_attribute_end = None;
     let mut term_code_lazy_tail = false;
     let mut term_code_tail_can_resume = false;
@@ -16105,6 +16355,16 @@ fn collect_indented_block_mapped_with_columns(
             continue;
         }
         let indent = indent_columns(line);
+        if marker_definition_has_description
+            && indent <= strip_cols
+            && fence.is_none()
+            && comment_fence.is_none()
+            && colon_open.is_empty()
+            && (is_line_comment_any_column(line)
+                || detect_comment_fence_line_any_column(line).is_some())
+        {
+            marker_description_is_paragraph = false;
+        }
         if literal_colon.is_some_and(|(_, _, floor)| indent < floor)
             && !is_line_comment_any_column(line)
             && detect_comment_fence_line_any_column(line).is_none()
@@ -16294,7 +16554,12 @@ fn collect_indented_block_mapped_with_columns(
                 let previous = cur.lines.at(at);
                 indent_columns(previous) < strip_cols && is_line_comment_any_column(previous)
             });
-            if after_comment && !interrupts_lazy_continuation_as_container(cur, line) {
+            let after_span = cur
+                .closed_comment_location
+                .is_some_and(|(at, _)| at + 1 == cur.pos);
+            if (after_comment || after_span)
+                && !interrupts_lazy_continuation_as_container(cur, line)
+            {
                 marker_colon_retained_para = true;
             }
         }
@@ -16522,14 +16787,23 @@ fn collect_indented_block_mapped_with_columns(
                 marker_definition_has_description = false;
                 marker_description_code_admitted = false;
                 marker_description_has_inline_code = false;
+                marker_description_has_lazy_tail = false;
+                marker_description_is_paragraph = false;
                 marker_term_paragraph_open = true;
                 marker_term_open = true;
-            } else if strip_description_prefix(trim_ascii_start(line)).is_some() {
+            } else if let Some(body) = strip_description_prefix(trim_ascii_start(line)) {
                 marker_definition_has_description = true;
                 marker_description_code_admitted = false;
                 marker_description_has_inline_code = trim_ascii_start(line).contains('`');
+                marker_description_has_lazy_tail = false;
+                marker_description_is_paragraph = ParaOpen::from_line(body, false).get();
                 marker_term_paragraph_open = false;
                 marker_term_open = false;
+            } else if marker_definition_has_description
+                && line_starts_paragraph(trim_ascii_start(line))
+                && detect_fence_open(trim_ascii_start(line)).is_none()
+            {
+                marker_description_has_lazy_tail = true;
             } else if marker_term_open
                 && detect_fence_open(trim_ascii_start(line)).is_none()
                 && ((matches!(
@@ -16600,6 +16874,21 @@ fn collect_indented_block_mapped_with_columns(
         if authored_code_base.is_none()
             && (marker_definition_has_description || !marker_term_open)
             && !marker_description_code_admitted
+            && !(marker_is_definition_term
+                && marker_description_is_paragraph
+                && !marker_description_has_inline_code
+                && !marker_description_has_lazy_tail
+                && lines
+                    .iter()
+                    .rev()
+                    .take(2)
+                    .filter(|line| is_blank_line(line))
+                    .count()
+                    < 2
+                && marker_definition_has_description
+                && detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
+                    list_code_fence_closer_ahead(cur, open, indent, parent_indent)
+                }))
             && fence.is_none()
             && !in_comment_span
             && colon_open.is_empty()
@@ -16840,6 +17129,7 @@ fn collect_indented_block_mapped_with_columns(
         line_map,
         authored_base_at_start,
         item_marker_at_start: false,
+        marker_colon_rebased: false,
         marker_tail: None,
         reached,
         sublists_carry_authored_base: false,
@@ -17885,6 +18175,7 @@ fn body_as_read(source: String, reached: Vec<bool>, options: &Options<'_>) -> St
         // rebase reads the same document here as it does there.
         authored_base_at_start: false,
         item_marker_at_start: false,
+        marker_colon_rebased: false,
         marker_tail: None,
         reached,
         sublists_carry_authored_base: false,
@@ -17993,6 +18284,9 @@ fn collect_definition_body(
     options: &Options<'_>,
 ) -> MappedSource {
     let mut lines: Vec<String> = Vec::new();
+    let mut nested_definition_open = seed.lines().any(is_definition_list_start);
+    let mut descendant_marker_fence: Option<(FenceOpen, usize)> = None;
+    let mut descendant_block_ended = false;
     // A lazy fold leaves a paragraph open. Rechecking by parsing all collected
     // lines after each fold would make a long paragraph quadratic. Other ways
     // of extending the body clear this hint because they may open a block.
@@ -18113,10 +18407,19 @@ fn collect_definition_body(
                 // declined an opener the block parser accepts, so the body folded
                 // the run below its own column in as verbatim payload
                 // (carve-rs#2092).
-                let paragraph_open = match lines.last() {
-                    Some(last) => !is_blank_line(last),
-                    None => seed.lines().last().is_some_and(|line| !is_blank_line(line)),
-                };
+                if let Some((open, column)) = descendant_marker_fence {
+                    if indent < column
+                        || (indent == column && is_fence_close(trim_ascii_start(line), open))
+                    {
+                        descendant_marker_fence = None;
+                        descendant_block_ended = true;
+                    }
+                }
+                let paragraph_open = !descendant_block_ended
+                    && match lines.last() {
+                        Some(last) => !is_blank_line(last),
+                        None => seed.lines().last().is_some_and(|line| !is_blank_line(line)),
+                    };
                 let accept_fence_opener = fence.open.is_none()
                     && detect_fence_open(&sliced).is_some_and(|open| {
                         !paragraph_open
@@ -18171,7 +18474,41 @@ fn collect_definition_body(
                 // nested fence starts a new item instead of being absorbed
                 // (carve#1970). `sliced` is in the body's own coordinates, as
                 // the seed and `advance_nested_lead_fence` both are.
-                advance_nested_lead_fence(&mut nested_lead_fence, &sliced);
+                let prior = lines
+                    .last()
+                    .map(String::as_str)
+                    .or_else(|| seed.lines().last());
+                if nested_lead_fence.is_some() || prior.map_or(true, is_blank_line) {
+                    advance_nested_lead_fence(&mut nested_lead_fence, &sliced);
+                }
+                if fence.open.is_none() {
+                    let local = trim_ascii_start(&sliced);
+                    if is_definition_list_start(local) {
+                        nested_definition_open = true;
+                    }
+                    if nested_definition_open {
+                        if let Some(body) = strip_description_prefix(local) {
+                            let marker_column = innermost_marker_content_col(body);
+                            if marker_column > 0 {
+                                if let Some(open) = detect_fence_open(trim_ascii_start(
+                                    innermost_marker_content(body),
+                                )) {
+                                    descendant_marker_fence = Some((
+                                        open,
+                                        indent + local.len() - body.len() + marker_column,
+                                    ));
+                                    descendant_block_ended = false;
+                                }
+                            }
+                        }
+                    }
+                    if indent == content_column
+                        && detect_fence_open(local).is_none()
+                        && line_starts_paragraph(local)
+                    {
+                        descendant_block_ended = false;
+                    }
+                }
                 folded_a_lazy_line = false;
                 lines.push(sliced);
                 line_map.push(cur.source_line(cur.pos));
@@ -18179,25 +18516,9 @@ fn collect_definition_body(
                 cur.consume();
                 continue;
             }
-            // A fence opened on the body's LEAD owns the flush-left lines below it
-            // as verbatim body (markup-carve/carve#1958). Frame the line so the
-            // re-parse reads it at NO column and the fence takes it, matching the
-            // oracle (carve-rs#1547/#1559). A `:: ` inside the open fence is body
-            // text too; a blank line ends the fence via the branch below.
+            // An unfinished nested marker fence owns no below-column line.
             if nested_lead_fence.is_some() {
-                folded_a_lazy_line = false;
-                let framed = format!("{LAZY}{}", strip_lazy(trim_ascii_start(line)));
-                // `trim_ascii_start` drops the line's own indent, so the column
-                // is what was stripped and nothing more - the frame is not
-                // source text and no position reader counts it (carve-rs#1559,
-                // carve-rs#1832).
-                let stripped = line.chars().count() - trim_ascii_start(line).chars().count();
-                col_map.push(cur.source_col(cur.pos).map(|c| c + stripped as isize));
-                lines.push(framed);
-                line_map.push(cur.source_line(cur.pos));
-                reached.push(false);
-                cur.consume();
-                continue;
+                break;
             }
             // A new term/definition marker ends the definition (the outer loop
             // picks it up). An EMPTY term marker opens nothing, whatever
@@ -18396,6 +18717,7 @@ fn collect_definition_body(
         line_map,
         authored_base_at_start: false,
         item_marker_at_start: false,
+        marker_colon_rebased: false,
         marker_tail: None,
         reached,
         sublists_carry_authored_base: false,
@@ -21157,7 +21479,7 @@ fn parse_attrs_with(src: &str, space_only: bool) -> Option<Attrs> {
     // them one at a time is how the executable spec left `[x]{<TAB>}` a valid
     // EMPTY block after its separator had already been narrowed. Inside a
     // QUOTED value the character is content and does not move.
-    if space_only {
+    {
         let mut quote: Option<char> = None;
         let mut escaped = false;
         for ch in src.chars() {
@@ -21176,7 +21498,8 @@ fn parse_attrs_with(src: &str, space_only: bool) -> Option<Attrs> {
                 None => match ch {
                     '\\' => escaped = true,
                     '"' | '\'' => quote = Some(ch),
-                    '\t' | '\r' | '\n' => return None,
+                    '\t' => return None,
+                    '\r' | '\n' if space_only => return None,
                     _ => {}
                 },
             }
@@ -24887,7 +25210,7 @@ fn parse_crossref(text: &str, pos: usize, bounds: &InlineBounds<'_>) -> Option<(
     }
     let close = inner
         .bytes()
-        .position(|b| matches!(b, b'>' | b' ' | b'\t' | b'\r' | b'\n'))?;
+        .position(|b| matches!(b, b'>' | b' ' | b'\r' | b'\n'))?;
     if inner.as_bytes()[close] != b'>' {
         bounds
             .crossref_invalid_range
@@ -26382,7 +26705,7 @@ impl CrossrefIndex {
 /// label and the heading text are both trimmed, their internal whitespace runs
 /// collapsed to one space, NFC-normalized, and then compared with exact case.
 pub(crate) fn normalize_heading_label(s: &str) -> String {
-    s.split([' ', '\t', '\n', '\u{000C}', '\r'])
+    s.split(' ')
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
@@ -30800,5 +31123,27 @@ mod marker_note_comment_bounds {
             assert!(!index.closes_in_note(&lines, at, 0, 4, width));
         }
         assert_eq!(CONTAINER_DEDENT_STEPS.with(Cell::get), 0);
+    }
+}
+
+#[cfg(test)]
+mod named_colon_rebase_work {
+    use super::*;
+
+    #[test]
+    fn named_colon_payload_rebasing_is_bounded_by_the_line_count() {
+        for size in [64, 128, 256] {
+            let mut source = "- ::: d\n".to_string();
+            for column in 1..size {
+                source.push_str(&format!("  {}::: x\n", " ".repeat(column)));
+            }
+            NAMED_COLON_REBASE_LINES.with(|count| count.set(0));
+            let _doc = parse(&source);
+            let work = NAMED_COLON_REBASE_LINES.with(Cell::get);
+            assert!(
+                work <= size * 6,
+                "{size} lines required {work} payload rewrites"
+            );
+        }
     }
 }

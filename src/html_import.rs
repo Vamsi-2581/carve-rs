@@ -1579,18 +1579,6 @@ impl<'a> Importer<'a> {
         }
     }
 
-    /// Whether `id` sits where `render_heading` writes a GENERATED one: after
-    /// every authored attribute. `data-source-line` is the one thing that
-    /// follows it, because that is a render annotation rather than an authored
-    /// attribute and `render_heading` emits it last on purpose.
-    fn id_in_generated_position(handle: &Handle) -> bool {
-        let mut names = Self::element_attr_names(handle);
-        while names.last().is_some_and(|name| name == "data-source-line") {
-            names.pop();
-        }
-        names.last().is_some_and(|name| name == "id")
-    }
-
     /// Whether `id` is a value the renderer would derive for a heading whose
     /// plain-text projection is `text`.
     ///
@@ -1993,7 +1981,10 @@ impl<'a> Importer<'a> {
             crate::roundtrip::COL_WIDTHS => {
                 tag == "table" && Self::reads_separator_widths(handle).is_some()
             }
-            crate::roundtrip::EXT => tag == "section" && Self::reads_generated_section(handle),
+            crate::roundtrip::GENERATED_ID => {
+                matches!(tag, "section" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+                    && Self::reads_generated_section(handle)
+            }
             crate::roundtrip::ID_SLOT => {
                 tag == "section"
                     && Self::reads_explicit_id(handle)
@@ -2014,15 +2005,15 @@ impl<'a> Importer<'a> {
         tag: &str,
         mode: HtmlImportMode,
     ) -> Option<(&'static str, &'static str)> {
-        use crate::roundtrip::{AUTOLINK, ESCAPED, EXPLICIT_ID, EXT, RAW, REF};
+        use crate::roundtrip::{AUTOLINK, ESCAPED, EXPLICIT_ID, GENERATED_ID, RAW, REF};
         match tag {
             "a" if Self::carries_autolink(handle) && Self::carries_valid_ref(handle) => {
                 Some((AUTOLINK, REF))
             }
-            "section"
+            "section" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
                 if Self::carries_generated_section(handle) && Self::carries_explicit_id(handle) =>
             {
-                Some((EXT, EXPLICIT_ID))
+                Some((GENERATED_ID, EXPLICIT_ID))
             }
             "span"
                 if Self::carries_escaped(handle).is_some()
@@ -2049,34 +2040,45 @@ impl<'a> Importer<'a> {
         );
     }
 
-    /// On a `<section>` only: anywhere else the name is no carrier and must not
-    /// contradict the explicit-id carrier a heading can hold.
+    /// Presence marks a generated id on a heading or its wrapper.
     fn carries_generated_section(handle: &Handle) -> bool {
-        Self::tag(handle).as_deref() == Some("section")
-            && Self::carrier(handle, crate::roundtrip::EXT).as_deref()
-                == Some(crate::roundtrip::EXT_SECTION)
+        Self::carrier(handle, crate::roundtrip::GENERATED_ID).is_some()
     }
 
-    /// Whether the wrapper says its id is generated. Any other value belongs to
-    /// an extension's contract and is not this carrier.
+    /// A generated-id carrier applies unless explicit-id contradicts it.
     fn reads_generated_section(section: &Handle) -> bool {
         Self::carries_generated_section(section) && !Self::carries_explicit_id(section)
     }
 
-    /// The authored id's slot: a run of decimal digits, clamped by the caller.
+    /// The authored id slot is decimal and bounded by the heading attributes.
     fn reads_id_slot(section: &Handle) -> Option<usize> {
+        if !Self::reads_explicit_id(section) {
+            return None;
+        }
         let value = Self::carrier(section, crate::roundtrip::ID_SLOT)?;
-        (!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
-            .then(|| value.parse().unwrap_or(usize::MAX))
+        let slot = (!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| value.parse::<usize>().ok())
+            .flatten()?;
+        let heading = section
+            .children
+            .borrow()
+            .iter()
+            .find(|child| {
+                Self::tag(child).is_some_and(|tag| {
+                    matches!(tag.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+                })
+            })
+            .cloned()?;
+        let count = Self::element_attr_names(&heading)
+            .iter()
+            .filter(|name| name.as_str() != "id" && crate::roundtrip::canonical(name).is_none())
+            .count();
+        (slot <= count).then_some(slot)
     }
 
-    /// `true` or `false`, taken over what the items' `<p>` elements imply.
+    /// Presence takes precedence over paragraph wrappers in the items.
     fn reads_tight(list: &Handle) -> Option<bool> {
-        match Self::carrier(list, crate::roundtrip::TIGHT)?.as_str() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        }
+        Self::carrier(list, crate::roundtrip::TIGHT).map(|_| true)
     }
 
     fn reads_code_label(pre: &Handle) -> Option<String> {
@@ -3149,17 +3151,7 @@ impl<'a> Importer<'a> {
                 return Ok(Vec::new());
             }
             if let Some(held) = attrs.as_mut().filter(|held| held.id.is_some()) {
-                if self.opts.mode == HtmlImportMode::Roundtrip
-                    && !Self::reads_explicit_id(h)
-                    && Self::id_in_generated_position(h)
-                    && held.id.as_deref().is_some_and(|id| {
-                        Self::is_generated_heading_id(id, &crate::render::plain_inlines(&inlines))
-                    })
-                {
-                    // The renderer derives it again from the same text, so
-                    // dropping it is the no-op `drop_derived` documents for
-                    // every other derived attribute. Carrying it would spell an
-                    // authored slot the source never had.
+                if Self::reads_generated_section(h) {
                     held.id = None;
                 } else if self.writing || Self::reads_explicit_id(h) {
                     // Authored. A non-empty order is exhaustive, so every
@@ -3830,7 +3822,7 @@ impl<'a> Importer<'a> {
         // between rows at the same position, and these are not.
         let mut blocks = self.blocks(&children, path, depth + 1)?;
         let mut attrs = attrs;
-        Self::restore_hoisted_section_id(h, &tag, &mut attrs, &mut blocks);
+        self.restore_hoisted_section_id(h, &tag, &mut attrs, &mut blocks, path);
         // AN UNWRAPPED ELEMENT TAKES ITS ATTRIBUTES WITH IT. `<section
         // role="region">`, `<article>`, `<aside>`, `<main>`, `<nav>` and
         // `<form>` all land here and keep only their children. The keep list
@@ -3854,10 +3846,12 @@ impl<'a> Importer<'a> {
     /// Put a `<section id>` back on the heading the renderer hoisted it off
     /// (markup-carve/carve-rs#1380).
     fn restore_hoisted_section_id(
+        &mut self,
         handle: &Handle,
         tag: &str,
         attrs: &mut Option<Attrs>,
         blocks: &mut [BlockNode],
+        path: &str,
     ) {
         if tag != "section" {
             return;
@@ -3882,7 +3876,7 @@ impl<'a> Importer<'a> {
         }
         held.id = None;
         let explicit = Self::reads_explicit_id(handle);
-        // PART 10 §13a `data-carve-ext="section"` says generated outright; an
+        // PART 10 §13a `data-carve-generated-id` says generated outright; an
         // unmarked wrapper falls back to comparing against the default slug.
         if !explicit
             && (Self::reads_generated_section(handle)
@@ -3917,7 +3911,21 @@ impl<'a> Importer<'a> {
             }
             order.extend(heading_attrs.key_values.keys().cloned().map(AttrSlot::Key));
         }
-        let slot = Self::reads_id_slot(handle).unwrap_or(0).min(order.len());
+        let slot = match Self::reads_id_slot(handle) {
+            Some(slot) if slot > order.len() => {
+                self.diag(
+                    HtmlImportDiagnosticCode::AttributeDropped,
+                    "Dropped data-carve-id-slot beyond the heading's surviving attribute count"
+                        .to_owned(),
+                    HtmlImportSeverity::Info,
+                    path,
+                    handle,
+                );
+                0
+            }
+            Some(slot) => slot,
+            None => 0,
+        };
         order.insert(slot, AttrSlot::Id);
         heading_attrs.order = order;
     }

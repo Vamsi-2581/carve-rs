@@ -10,7 +10,7 @@
   {
     "id": "authored-code-hosts-1",
     "source": "- :: term\n  : payload\n    ```\n    code\n    ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -26,7 +26,7 @@
   {
     "id": "authored-code-hosts-6",
     "source": "- :: term\n  : payload\n      ```\n      code\n      ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -42,7 +42,7 @@
   {
     "id": "authored-code-hosts-11",
     "source": "- :: term\n  : payload\n        ```\n        code\n        ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -154,7 +154,7 @@
   {
     "id": "authored-code-hosts-25",
     "source": "> - :: term\n>   : payload\n>     ```\n>     code\n>     ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -170,7 +170,7 @@
   {
     "id": "authored-code-hosts-30",
     "source": "> - :: term\n>   : payload\n>       ```\n>       code\n>       ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -186,7 +186,7 @@
   {
     "id": "authored-code-hosts-35",
     "source": "> - :: term\n>   : payload\n>         ```\n>         code\n>         ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -298,7 +298,7 @@
   {
     "id": "authored-code-hosts-49",
     "source": "> > - :: term\n> >   : payload\n> >     ```\n> >     code\n> >     ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -314,7 +314,7 @@
   {
     "id": "authored-code-hosts-54",
     "source": "> > - :: term\n> >   : payload\n> >       ```\n> >       code\n> >       ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -330,7 +330,7 @@
   {
     "id": "authored-code-hosts-59",
     "source": "> > - :: term\n> >   : payload\n> >         ```\n> >         code\n> >         ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -902,7 +902,7 @@
   {
     "id": "definition-deep-0",
     "source": "- :: term\n  : desc\n    ```\n    code\n    ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>desc</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>desc</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -910,7 +910,7 @@
   {
     "id": "definition-deep-1",
     "source": "- :: term\n  : desc\n      ```\n      code\n      ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>desc</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>desc</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -918,7 +918,7 @@
   {
     "id": "definition-deep-2",
     "source": "- :: term\n  : desc\n        ```\n        code\n        ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>desc</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>desc</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -926,7 +926,7 @@
   {
     "id": "definition-deep-3",
     "source": "- :: term\n  : desc\n    paragraph\n    ```\n    code\n    ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>desc\nparagraph</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>desc\nparagraph</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -934,7 +934,7 @@
   {
     "id": "definition-deep-4",
     "source": "- :: term\n  : desc\n    paragraph\n      ```\n      code\n      ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>desc\nparagraph</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>desc\nparagraph</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -942,7 +942,7 @@
   {
     "id": "definition-deep-5",
     "source": "- :: term\n  : desc\n    paragraph\n        ```\n        code\n        ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>desc\nparagraph</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>desc\nparagraph</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -1322,7 +1322,7 @@
   {
     "id": "definition-deep-54",
     "source": "> - :: term\n>   : desc\n>     ```\n>     code\n>     ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>desc</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>desc</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1330,7 +1330,7 @@
   {
     "id": "definition-deep-55",
     "source": "> - :: term\n>   : desc\n>       ```\n>       code\n>       ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>desc</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>desc</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1338,7 +1338,7 @@
   {
     "id": "definition-deep-56",
     "source": "> - :: term\n>   : desc\n>         ```\n>         code\n>         ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>desc</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>desc</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1346,7 +1346,7 @@
   {
     "id": "definition-deep-57",
     "source": "> - :: term\n>   : desc\n>     paragraph\n>     ```\n>     code\n>     ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>desc\nparagraph</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>desc\nparagraph</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1354,7 +1354,7 @@
   {
     "id": "definition-deep-58",
     "source": "> - :: term\n>   : desc\n>     paragraph\n>       ```\n>       code\n>       ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>desc\nparagraph</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>desc\nparagraph</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1362,7 +1362,7 @@
   {
     "id": "definition-deep-59",
     "source": "> - :: term\n>   : desc\n>     paragraph\n>         ```\n>         code\n>         ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>desc\nparagraph</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>desc\nparagraph</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1742,7 +1742,7 @@
   {
     "id": "definition-deep-108",
     "source": "> > - :: term\n> >   : desc\n> >     ```\n> >     code\n> >     ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>desc</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>desc</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1750,7 +1750,7 @@
   {
     "id": "definition-deep-109",
     "source": "> > - :: term\n> >   : desc\n> >       ```\n> >       code\n> >       ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>desc</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>desc</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1758,7 +1758,7 @@
   {
     "id": "definition-deep-110",
     "source": "> > - :: term\n> >   : desc\n> >         ```\n> >         code\n> >         ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>desc</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>desc</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1766,7 +1766,7 @@
   {
     "id": "definition-deep-111",
     "source": "> > - :: term\n> >   : desc\n> >     paragraph\n> >     ```\n> >     code\n> >     ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>desc\nparagraph</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>desc\nparagraph</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1774,7 +1774,7 @@
   {
     "id": "definition-deep-112",
     "source": "> > - :: term\n> >   : desc\n> >     paragraph\n> >       ```\n> >       code\n> >       ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>desc\nparagraph</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>desc\nparagraph</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -1782,7 +1782,7 @@
   {
     "id": "definition-deep-113",
     "source": "> > - :: term\n> >   : desc\n> >     paragraph\n> >         ```\n> >         code\n> >         ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>desc\nparagraph</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>desc\nparagraph</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -3693,7 +3693,7 @@
   {
     "id": "dd-closer-review-7",
     "source": "- :: term\n  : payload\n    ```\n    code\n    ```\n%% hidden\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -3701,7 +3701,7 @@
   {
     "id": "dd-closer-review-8",
     "source": "- :: term\n  : payload\n    ```\n    code\n    ```\n{#tail}\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p id=\"tail\">after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p id=\"tail\">after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -3793,7 +3793,7 @@
   {
     "id": "dd-closer-review-24",
     "source": "- :: term\n  : payload\n    ~~~\n    code\n    ~~~\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -3801,7 +3801,7 @@
   {
     "id": "dd-closer-review-25",
     "source": "- :: term\n  : payload\n    ~~~\n    code\n    ~~~\n%% hidden\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -3809,7 +3809,7 @@
   {
     "id": "dd-closer-review-26",
     "source": "- :: term\n  : payload\n    ~~~\n    code\n    ~~~\n{#tail}\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p id=\"tail\">after</p>",
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p id=\"tail\">after</p>",
     "codePayloads": [
       "code\n"
     ]
@@ -4385,7 +4385,7 @@
   {
     "id": "dd-closer-review-169",
     "source": "> - :: term\n>   : payload\n>     ```\n>     code\n>     ```\n> %% hidden\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -4393,7 +4393,7 @@
   {
     "id": "dd-closer-review-170",
     "source": "> - :: term\n>   : payload\n>     ```\n>     code\n>     ```\n> {#tail}\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p id=\"tail\">after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p id=\"tail\">after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -4485,7 +4485,7 @@
   {
     "id": "dd-closer-review-186",
     "source": "> - :: term\n>   : payload\n>     ~~~\n>     code\n>     ~~~\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -4493,7 +4493,7 @@
   {
     "id": "dd-closer-review-187",
     "source": "> - :: term\n>   : payload\n>     ~~~\n>     code\n>     ~~~\n> %% hidden\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -4501,7 +4501,7 @@
   {
     "id": "dd-closer-review-188",
     "source": "> - :: term\n>   : payload\n>     ~~~\n>     code\n>     ~~~\n> {#tail}\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p id=\"tail\">after</p></blockquote>",
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p id=\"tail\">after</p></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -5077,7 +5077,7 @@
   {
     "id": "dd-closer-review-331",
     "source": "> > - :: term\n> >   : payload\n> >     ```\n> >     code\n> >     ```\n> > %% hidden\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -5085,7 +5085,7 @@
   {
     "id": "dd-closer-review-332",
     "source": "> > - :: term\n> >   : payload\n> >     ```\n> >     code\n> >     ```\n> > {#tail}\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p id=\"tail\">after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p id=\"tail\">after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -5177,7 +5177,7 @@
   {
     "id": "dd-closer-review-348",
     "source": "> > - :: term\n> >   : payload\n> >     ~~~\n> >     code\n> >     ~~~\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -5185,7 +5185,7 @@
   {
     "id": "dd-closer-review-349",
     "source": "> > - :: term\n> >   : payload\n> >     ~~~\n> >     code\n> >     ~~~\n> > %% hidden\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]
@@ -5193,7 +5193,7 @@
   {
     "id": "dd-closer-review-350",
     "source": "> > - :: term\n> >   : payload\n> >     ~~~\n> >     code\n> >     ~~~\n> > {#tail}\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload</dd></dl><pre><code>code\n</code></pre></li></ul><p id=\"tail\">after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p id=\"tail\">after</p></blockquote></blockquote>",
     "codePayloads": [
       "code\n"
     ]

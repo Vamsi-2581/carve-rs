@@ -60,7 +60,12 @@ fn every_dangerous_scheme_is_blanked() {
 #[test]
 fn a_scheme_hidden_behind_unicode_whitespace_is_blanked() {
     let url = format!("{NNBSP}javascript:alert(1)");
-    assert_eq!(destination_of(&link_to(&url)), "");
+    let value = serde_json::json!({"type":"document", "srcByteLength":0,
+        "children":[{"type":"paragraph", "children":[{"type":"link", "href":url,
+            "children":[{"type":"text", "value":"click"}]}]}]});
+    let doc = carve::from_json(&value.to_string()).unwrap();
+    assert_eq!(carve::render_markdown(&doc).unwrap().trim(), "[click]()");
+    assert_eq!(destination_of(&link_to(&url)), "<none>");
 }
 
 #[test]

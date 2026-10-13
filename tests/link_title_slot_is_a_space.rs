@@ -214,13 +214,9 @@ fn the_run_after_an_inline_title_is_no_slot_either() {
     );
 }
 
-/// CONTROL. The `']' ':'` MARKER SEPARATOR on a definition line already rejected
-/// a tab before this change, and the destination's own leading run is explicitly
-/// whitespace by the production (`resources/grammar.ebnf`, the note at
-/// `link_destination`). Both are watched so that narrowing the title slot is not
-/// quietly extended along the line.
+/// Tabs on either side of the destination do not extend the space separator.
 #[test]
-fn the_rest_of_the_definition_line_is_unchanged() {
+fn tabs_do_not_extend_the_definition_separator() {
     let out = html("[r]:\t/u\n\n[t][r]\n");
     assert!(
         !out.contains("<a "),
@@ -229,7 +225,7 @@ fn the_rest_of_the_definition_line_is_unchanged() {
 
     let out = html("[r]: \t/u\n\n[t][r]\n");
     assert!(
-        out.contains("href=\"/u\""),
-        "the destination's leading run stopped being whitespace: {out}"
+        !out.contains("<a "),
+        "a tab after the space separator defined a link: {out}"
     );
 }

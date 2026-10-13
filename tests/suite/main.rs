@@ -1987,3 +1987,33 @@ mod djot_quoted_thematic_text;
 
 #[path = "../term_intervening_block_payload.rs"]
 mod term_intervening_block_payload;
+
+#[path = "../space_only_inline_slots.rs"]
+mod space_only_inline_slots;
+
+#[path = "../unfinished_nested_fences.rs"]
+mod unfinished_nested_fences;
+
+#[path = "../term_description_code.rs"]
+mod term_description_code;
+
+#[path = "../quoted_item_block_end.rs"]
+mod quoted_item_block_end;
+
+#[path = "../held_container_tightness.rs"]
+mod held_container_tightness;
+
+#[path = "../item_hosted_named_colon.rs"]
+mod item_hosted_named_colon;
+
+#[path = "../retained_paragraphs.rs"]
+mod retained_paragraphs;
+
+#[path = "../descendant_fence_scope.rs"]
+mod descendant_fence_scope;
+
+#[path = "../agreed_comment_retention.rs"]
+mod agreed_comment_retention;
+
+#[path = "../line_block_fence_writer.rs"]
+mod line_block_fence_writer;

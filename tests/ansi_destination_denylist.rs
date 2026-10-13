@@ -25,7 +25,10 @@
 
 /// ANSI output with the SGR sequences removed, so a case reads as text.
 fn ansi(source: &str) -> String {
-    let out = carve::to_ansi(source);
+    clean_ansi(&carve::to_ansi(source))
+}
+
+fn clean_ansi(out: &str) -> String {
     let mut clean = String::with_capacity(out.len());
     let mut chars = out.chars().peekable();
     while let Some(c) = chars.next() {
@@ -66,11 +69,12 @@ fn the_scheme_check_is_case_insensitive() {
 
 #[test]
 fn obfuscating_whitespace_is_stripped_before_the_scheme_is_read() {
-    // The shape corpus 121 pins for HTML. An inline `(...)` destination cannot
-    // begin with whitespace at all, so the probe never mattered there - a
-    // reference DEFINITION can, and that path reaches this target.
-    let source = "[click][a]\n\n[a]: \u{202f}javascript:alert(1)\n";
-    assert_eq!(ansi(source), "click ()");
+    let value = serde_json::json!({"type":"document", "srcByteLength":0,
+        "children":[{"type":"paragraph", "children":[{"type":"link",
+            "href":"\u{202f}javascript:alert(1)",
+            "children":[{"type":"text", "value":"click"}]}]}]});
+    let doc = carve::from_json(&value.to_string()).unwrap();
+    assert_eq!(clean_ansi(&carve::render_ansi(&doc).unwrap()), "click ()");
 }
 
 #[test]

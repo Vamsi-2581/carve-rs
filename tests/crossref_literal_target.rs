@@ -11,6 +11,7 @@ fn a_crossref_target_keeps_its_literal_backslashes() {
         "日本語",
         "a\x0cb",
         "a\x0bb",
+        "a\tb",
     ] {
         let source = format!("See </#{target}>.\n");
         let once = to_carve(&source);
@@ -30,7 +31,7 @@ fn a_crossref_target_keeps_its_literal_backslashes() {
 
 #[test]
 fn an_ingested_target_without_a_spelling_is_refused() {
-    for target in ["", "a>b", "a b", "a\tb", "a\nb", "a\rb"] {
+    for target in ["", "a>b", "a b", "a\nb", "a\rb"] {
         let value = serde_json::json!({
             "type":"document", "srcByteLength":0,
             "children":[{"type":"paragraph", "children":[{"type":"heading_ref", "target":target}]}]

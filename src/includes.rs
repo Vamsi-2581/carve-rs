@@ -363,7 +363,7 @@ fn is_ident_rest(c: char) -> bool {
 /// Bare path: stops at space, `#`, `@`, `}` (PART 6), plus the quote
 /// characters that introduce the quoted form.
 fn is_bare_path_char(c: char) -> bool {
-    !matches!(c, '#' | '@' | '}' | '"' | '\u{201c}') && !c.is_whitespace()
+    !matches!(c, '#' | '@' | '}' | '"' | '\u{201c}') && !matches!(c, ' ' | '\n' | '\r')
 }
 
 /// Match a directive starting exactly at `start`, returning the byte index one
@@ -381,7 +381,7 @@ fn match_directive_at(text: &str, start: usize) -> Option<(usize, RawDirective)>
     let mut i = start + 2;
     // `\s+` after the opening braces.
     let ws_start = i;
-    while i < bytes.len() && text[i..].chars().next()?.is_whitespace() {
+    while i < bytes.len() && bytes[i] == b' ' {
         i += text[i..].chars().next()?.len_utf8();
     }
     if i == ws_start {
@@ -456,7 +456,7 @@ fn match_directive_at(text: &str, start: usize) -> Option<(usize, RawDirective)>
     let mut section = None;
     {
         let tail = &text[i..];
-        let ws = tail.len() - tail.trim_start_matches(|c: char| c.is_whitespace()).len();
+        let ws = tail.len() - tail.trim_start_matches(' ').len();
         {
             let after_ws = &tail[ws..];
             if let Some(name) = after_ws.strip_prefix('#') {
@@ -491,10 +491,7 @@ fn match_directive_at(text: &str, start: usize) -> Option<(usize, RawDirective)>
     let is_closer = |j: usize| {
         tail_bytes[j] == b'}'
             && tail_bytes.get(j + 1) == Some(&b'}')
-            && tail[..j]
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_whitespace())
+            && tail[..j].chars().next_back().is_some_and(|c| c == ' ')
     };
     let mut j = 0usize;
     let mut open_quote: Option<u8> = None;
@@ -541,9 +538,7 @@ fn match_directive_at(text: &str, start: usize) -> Option<(usize, RawDirective)>
         RawDirective {
             path,
             section,
-            options: before
-                .trim_end_matches(|c: char| c.is_whitespace())
-                .to_string(),
+            options: before.trim_end_matches(' ').to_string(),
         },
     ))
 }
@@ -595,7 +590,7 @@ fn option_parts(tail: &str) -> Vec<&str> {
             }
             continue;
         }
-        if c.is_whitespace() {
+        if c == ' ' {
             if let Some(s) = start.take() {
                 parts.push(&tail[s..i]);
             }
