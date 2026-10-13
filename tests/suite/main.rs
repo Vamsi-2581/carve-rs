@@ -2032,3 +2032,6 @@ mod wave7_unused_references;
 
 #[path = "../wave7_link_footnotes.rs"]
 mod wave7_link_footnotes;
+
+#[path = "../wave7_2606.rs"]
+mod wave7_2606;
