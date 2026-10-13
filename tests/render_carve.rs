@@ -1350,3 +1350,26 @@ fn code_source_boundaries_preserve_payloads() {
         );
     }
 }
+
+#[test]
+fn image_alt_block_markers_round_trip() {
+    for source in [
+        r"{%%}![a
+\# b](u)",
+        r"{%%}![a
+\::: b](u)",
+        r"{%%}![a
+\> b](u)",
+        r"{%%}![a
+\- b](u)",
+        r"{%%}![a
+1\. b](u)",
+        r"{%%}![a
+\%% b](u)",
+        r"{%%}![a
+\[r\]: b](u)",
+    ] {
+        let written = carve::to_carve(source);
+        assert_eq!(carve::to_html(source), carve::to_html(&written), "{source}");
+    }
+}

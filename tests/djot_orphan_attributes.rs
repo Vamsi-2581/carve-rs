@@ -145,6 +145,31 @@ fn root_attribute_boundaries_match_native_djot() {
             };
             let items = native["children"][0]["children"].as_array().unwrap();
             assert_eq!(list.items.len(), items.len());
+            if native["children"][0]["children"][0]["children"][0]["tag"] == "block_quote" {
+                assert_eq!(list.items.len(), 1);
+                let carve::ast::BlockNode::BlockQuote(quote) = &list.items[0].children[0] else {
+                    panic!("{source}: expected quote")
+                };
+                let paragraphs = native["children"][0]["children"][0]["children"][0]["children"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(quote.children.len(), paragraphs.len());
+                for (paragraph, original) in quote.children.iter().zip(paragraphs) {
+                    let carve::ast::BlockNode::Paragraph(paragraph) = paragraph else {
+                        panic!("{source}: expected paragraph")
+                    };
+                    assert_eq!(
+                        paragraph
+                            .attrs
+                            .as_ref()
+                            .map(|attrs| attrs.classes.join(" "))
+                            .unwrap_or_default(),
+                        original["attributes"]["class"].as_str().unwrap_or("")
+                    );
+                }
+                assert!(html.contains("<p class=\"x\">para</p>"), "{html}");
+                continue;
+            }
             for (item, original) in list.items.iter().zip(items) {
                 assert_eq!(item.checked, Some(original["checkbox"] == "checked"));
                 let classes = original["attributes"]["class"].as_str().unwrap_or("");
@@ -186,4 +211,56 @@ fn a_comment_between_items_adds_no_empty_attribute() {
     let converted = carve::djot_to_carve(source);
     assert!(!converted.contains("-{}"), "{converted}");
     assert_eq!(carve::to_html(&converted), carve::to_html("- x\n\n- y"));
+}
+
+#[test]
+fn pending_item_attributes_return_when_a_footnote_closes() {
+    let converted = carve::djot_to_carve("[^n]: - x\n\n        {.a}\n\np[^n]");
+    let html = carve::to_html(&converted);
+    let html = regex::Regex::new(r">\s+<")
+        .unwrap()
+        .replace_all(&html, "><");
+    assert!(!converted.contains('\0'), "{converted:?}");
+    assert!(html.contains("<p class=\"a\">p<a"), "{html}");
+    assert!(html.contains("<ul><li><p>x</p></li></ul>"), "{html}");
+}
+
+#[test]
+fn a_referenced_footnote_head_keeps_one_task_list() {
+    let converted = carve::djot_to_carve("[^n]: - [ ] a\n      - [ ] b\n\nx[^n]");
+    let html = carve::to_html(&converted);
+    assert!(!converted.contains('\0'), "{converted:?}");
+    assert_eq!(
+        regex::Regex::new(r"<ul(?: |>)")
+            .unwrap()
+            .find_iter(&html)
+            .count(),
+        1
+    );
+    assert_eq!(html.matches("type=\"checkbox\"").count(), 2);
+}
+
+#[test]
+fn nested_footnote_item_attributes_return_before_the_parent_fence() {
+    let converted = carve::djot_to_carve("[^a]: - x\n\n      [^b]: - y\n\n              {.c}\n\n      ```\n      z\n      ```\n\np[^a] q[^b]");
+    let html = carve::to_html(&converted);
+    assert!(!converted.contains('\0'), "{converted:?}");
+    assert!(
+        html.contains("<pre class=\"c\"><code>z\n</code></pre>"),
+        "{html}"
+    );
+    assert!(!html.contains("<p class=\"c\">"), "{html}");
+}
+
+#[test]
+fn a_footnote_paragraph_keeps_one_literal_quote_marker() {
+    let converted = carve::djot_to_carve("[^n]: > a\n      > >\n\nx[^n]");
+    let html = carve::to_html(&converted);
+    let html = regex::Regex::new(r">\s+<")
+        .unwrap()
+        .replace_all(&html, "><");
+    assert!(
+        html.contains("<blockquote><p>a\n&gt;</p></blockquote>"),
+        "{html}"
+    );
 }

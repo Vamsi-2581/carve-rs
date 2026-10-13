@@ -11,9 +11,15 @@ fn matches_checker() {
             carve::to_html(&imported),
             carve::render_html(&carve::parse(&imported)).unwrap(),
         ] {
+            let canonical = |html: &str| {
+                html.replace("&#10;", "\n")
+                    .replace("&#62;", "&gt;")
+                    .replace('\u{a0}', "&nbsp;")
+            };
+            let html = canonical(&html);
             assert_eq!(
                 whitespace.replace_all(&html, "><").trim(),
-                row["html"].as_str().unwrap(),
+                canonical(row["html"].as_str().unwrap()),
                 "{}: {source}",
                 row["id"]
             );
