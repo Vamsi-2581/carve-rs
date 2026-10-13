@@ -2858,6 +2858,69 @@ fn protected_mask(source: &str) -> Vec<u8> {
     )
 }
 
+pub(super) fn quote_spellings(source: &str) -> String {
+    let comments = mask_djot_opaque_with_comments(
+        &mask_djot_fences(source, None, &[], false),
+        OpaqueOptions::default(),
+    )
+    .1;
+    let mut source = source.to_owned();
+    for (start, end) in comments.into_iter().rev() {
+        source.replace_range(start..end, "{%%}");
+    }
+    let source = source.as_str();
+    let mut mask = mask_code_and_destinations(source).into_bytes();
+    let mut at = 0;
+    while at < source.len() {
+        if mask[at] == b'{' && !is_escaped(source.as_bytes(), at) {
+            if let Some((end, attrs)) = read_djot_word_attributes(source, at) {
+                if attrs != "{}" {
+                    for byte in &mut mask[at..end] {
+                        if *byte != b'\n' {
+                            *byte = b' ';
+                        }
+                    }
+                }
+                at = end;
+                continue;
+            }
+        }
+        at += 1;
+    }
+    cached_regex!(r#"\{["']|["']\}|\{\}"#)
+        .unwrap()
+        .replace_all(source, |caps: &regex::Captures<'_>| {
+            let token = caps.get(0).unwrap();
+            if mask[token.start()] != source.as_bytes()[token.start()]
+                || is_escaped(source.as_bytes(), token.start())
+            {
+                return token.as_str().to_owned();
+            }
+            if token.as_str() == "{}" {
+                return if token
+                    .start()
+                    .checked_sub(1)
+                    .and_then(|at| source.as_bytes().get(at))
+                    == Some(&b']')
+                {
+                    "{}"
+                } else {
+                    "{%%}"
+                }
+                .to_owned();
+            }
+            match token.as_str() {
+                "{'" => "‘",
+                "'}" => "’",
+                "{\"" => "“",
+                "\"}" => "”",
+                _ => token.as_str(),
+            }
+            .to_owned()
+        })
+        .into_owned()
+}
+
 pub(super) fn inline(source: &str) -> String {
     inline_with_quote_preservation(source, |_| false)
 }

@@ -299,7 +299,7 @@ fn convert_djot_document(
         }
         if !label.contains('\n')
             && !label.bytes().any(|byte| b"_*`{^~[]".contains(&byte))
-            && ![b'"', b'\'']
+            && !b"\"'"
                 .iter()
                 .any(|quote| label.bytes().filter(|byte| byte == quote).take(2).count() >= 2)
             && !label.contains("\"}")
@@ -680,10 +680,7 @@ fn image_quote_layout(source: &str, omit_quote_delimiters: bool) -> String {
                 {
                     image.to_owned()
                 } else {
-                    format!(
-                        "![{}]",
-                        &normalize::inline(&format!("DJOTALT {label}"))[8..]
-                    )
+                    format!("![{}]", normalize::quote_spellings(label))
                 }
             },
             true,
@@ -693,11 +690,24 @@ fn image_quote_layout(source: &str, omit_quote_delimiters: bool) -> String {
     };
     let mut positions = HashSet::new();
     if !omit_quote_delimiters {
+        let mask = mask_code_and_destinations(&source);
+        let (_, image_lines) = image_line_owners(&source, &mask);
+        let mut line = 0;
         replace_image_labels(
             &source,
             &mask_code_and_destinations(&source),
             |image, label, at| {
-                if source[at + image.len()..].starts_with("[]") {
+                if source[at + image.len()..].starts_with("[]")
+                    || label.starts_with('^')
+                    || cached_regex!(r"\n[ \t]*\n").unwrap().is_match(label)
+                {
+                    return image.to_owned();
+                }
+                while image_lines[line].0 <= at {
+                    line += 1;
+                }
+                let (_, quotes, item_column, item_quote, div, _) = image_lines[line];
+                if !image_alt_layout(label, quotes, item_column, item_quote, div).2 {
                     return image.to_owned();
                 }
                 for (i, byte) in label.bytes().enumerate() {
