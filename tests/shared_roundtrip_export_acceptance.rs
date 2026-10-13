@@ -731,12 +731,17 @@ fn fence_title_marker_requires_an_adjacent_code_fence() {
         "<!-- carve: ```js \"app.js\" [Example] -->\n> quoted\n",
     ] {
         let imported = migrate_markdown(markdown);
+        let expected = if markdown.starts_with("<!-- carve:2") {
+            "carrier-marker-dropped"
+        } else {
+            "carrier-markers-damaged"
+        };
         assert!(
             imported
                 .report
                 .diagnostics
                 .iter()
-                .any(|row| row.code == "carrier-markers-damaged"),
+                .any(|row| row.code == expected),
             "{markdown}: {:?}",
             imported.report
         );
