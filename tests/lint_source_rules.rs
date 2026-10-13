@@ -318,6 +318,33 @@ fn overindented_blocks_report_only_their_openers() {
 }
 
 #[test]
+fn a_fence_below_a_comment_in_a_marker_line_note_is_not_a_list_warning() {
+    for source in [
+        "- [^n]: text\n\n    %% c\n    ```\n    code\n    ```\nafter [^n]\n",
+        "- [^n]: text\n    %% c\n    ```\n    code\n    ```\nafter [^n]\n",
+        "- [^n]: text\n    more\n\n    %% c\n    ~~~\n    code\nafter [^n]\n",
+        "- [^n]: text\n    more\n    %% c\n    ~~~\n    code\nafter [^n]\n",
+    ] {
+        let warnings: Vec<_> = lint_carve(source)
+            .into_iter()
+            .filter(|warning| warning.rule == "list-item-block-overindented")
+            .collect();
+        assert!(warnings.is_empty(), "{source:?}: {warnings:?}");
+    }
+    for source in [
+        "- [^n]: text\n\n    %% c\n        ```\n        code\n        ```\nafter [^n]\n",
+        "- [^n]: text\n\n    - child\n\n      %% c\n        ```\n        code\n        ```\nafter [^n]\n",
+    ] {
+        assert!(
+            lint_carve(source)
+                .iter()
+                .any(|warning| warning.rule == "list-item-block-overindented"),
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
 fn canonical_empty_bodies_and_quote_prefixes_do_not_warn() {
     for source in [
         "See[^f]\n\n[^f]: {empty}\n",

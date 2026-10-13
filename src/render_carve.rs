@@ -2788,7 +2788,7 @@ fn render_list(session: &RenderSession, node: &List, ctx: &mut CarveContext) -> 
     trim_end_non_nbsp(&out).to_string()
 }
 
-fn ordered_marker(n: usize, ty: Option<OrderedListType>) -> String {
+pub(crate) fn ordered_marker(n: usize, ty: Option<OrderedListType>) -> String {
     match ty {
         Some(OrderedListType::LowerAlpha) => alpha_marker(n, false),
         Some(OrderedListType::UpperAlpha) => alpha_marker(n, true),

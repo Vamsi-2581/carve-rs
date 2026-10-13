@@ -219,6 +219,9 @@ fn render_markdown_once(
         suppress_automatic_abbreviation: false,
         heading_slugs,
         list_depth: 0,
+        in_footnote: false,
+        footnote_allowed_lists: HashSet::new(),
+        list_item_opening_list: None,
         defined_footnotes: doc.footnote_defs.keys().cloned().collect(),
         crossref_index,
         link_depth: 0,
@@ -345,6 +348,9 @@ struct MarkdownContext {
     /// document assigned it (PART 11 §11).
     heading_slugs: HashMap<String, String>,
     list_depth: usize,
+    in_footnote: bool,
+    footnote_allowed_lists: HashSet<usize>,
+    list_item_opening_list: Option<usize>,
     /// Labels that actually have a definition. A reference without one did not
     /// form a footnote, so it is not a footnote marker. The HTML renderer decides
     /// this on the node's `number`, which numbering assigns -- this target does no
@@ -663,9 +669,18 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
             note_inserted(C_PAYLOAD_BOUNDARY);
             note_inserted(C_PAYLOAD_BOUNDARY);
             let boundary = carrier(C_PAYLOAD_BOUNDARY);
-            format!(
+            let body = format!(
                 "{fence}{info_separator}{info}{boundary}\n{content}{boundary}{ending}{fence}\n\n"
-            )
+            );
+            if ctx.roundtrip {
+                if let Some(marker) = crate::carrier_markers::code_fence_marker(code) {
+                    format!("{marker}\n{body}")
+                } else {
+                    body
+                }
+            } else {
+                body
+            }
         }
         BlockNode::BlockQuote(quote) => {
             let outer = ctx.previous_list.take();
@@ -686,6 +701,17 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
             format!("{quoted}\n\n")
         }
         BlockNode::List(list) => {
+            let style_carrier = ctx.roundtrip
+                && list.ordered
+                && list.ol_type.is_some()
+                && ctx.list_item_opening_list != Some(list as *const List as usize)
+                && (!ctx.in_footnote
+                    || ctx
+                        .footnote_allowed_lists
+                        .contains(&(list as *const List as usize)));
+            if let Some(style) = list.ol_type.filter(|_| !style_carrier) {
+                crate::render_loss::record_list_style_dropped(style, list.pos.as_ref());
+            }
             // The marker the list would take, switched when the list written
             // just before it in this flow is of the same kind and used it.
             let usual = if list.ordered {
@@ -697,7 +723,7 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
             } else {
                 list.bullet_char.unwrap_or('-')
             };
-            let marker = match ctx.previous_list {
+            let marker = match ctx.previous_list.filter(|_| !style_carrier) {
                 Some((ordered, previous)) if ordered == list.ordered && previous == usual => {
                     match usual {
                         '.' => ')',
@@ -708,7 +734,28 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
                 }
                 _ => usual,
             };
-            let out = render_list(list, ctx, depth + 1, marker);
+            let mut out = render_list(list, ctx, depth + 1, marker);
+            if style_carrier {
+                let start = list.start.unwrap_or(1);
+                let style = list.ol_type;
+                let first = crate::render_carve::ordered_marker(start, style);
+                let second = if first.len() == 1
+                    && first.bytes().all(|ch| b"ivxlcdmIVXLCDM".contains(&ch))
+                    && list.items.len() > 1
+                {
+                    format!(
+                        " {}{}",
+                        crate::render_carve::ordered_marker(start + 1, style),
+                        usual
+                    )
+                } else {
+                    String::new()
+                };
+                out = format!(
+                    "{}\n{out}",
+                    carrier_line(&format!("{first}{usual}{second}"))
+                );
+            }
             if !out.trim().is_empty() {
                 ctx.previous_list = Some((list.ordered, marker));
             }
@@ -1078,7 +1125,15 @@ fn render_list_item(
     }
     let mut out = String::new();
     for child in &item.children {
+        let outer_opening = ctx.list_item_opening_list;
+        if out.is_empty() {
+            ctx.list_item_opening_list = match child {
+                BlockNode::List(list) => Some(list as *const List as usize),
+                _ => None,
+            };
+        }
         let rendered = render_block(child, ctx, depth);
+        ctx.list_item_opening_list = outer_opening;
         // Check the block that opens the rendered output through any div wrappers.
         let opener = opening_block(child);
         if tight
@@ -1765,7 +1820,18 @@ fn render_footnote_defs(doc: &Document, ctx: &mut MarkdownContext) -> String {
     // SOURCE ORDER, not label order (§7; carve-rs#686). The map is a BTreeMap.
     for (label, blocks) in crate::ast_json::footnote_defs_in_source_order(doc) {
         let outer = ctx.previous_list.take();
+        ctx.in_footnote = true;
+        ctx.footnote_allowed_lists = blocks
+            .iter()
+            .skip(1)
+            .filter_map(|block| match block {
+                BlockNode::List(list) => Some(list as *const List as usize),
+                _ => None,
+            })
+            .collect();
         let body = render_blocks(blocks, ctx, 0);
+        ctx.in_footnote = false;
+        ctx.footnote_allowed_lists.clear();
         ctx.previous_list = outer;
         let mut lines = trim_non_nbsp(&body).split('\n');
         out.push_str(&format!(

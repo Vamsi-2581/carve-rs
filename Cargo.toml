@@ -115,3 +115,11 @@ path = "tests/markdown_roundtrip_phase_one.rs"
 [[test]]
 name = "inline_carrier_wave"
 path = "tests/inline_carrier_wave.rs"
+
+[[test]]
+name = "carrier_marker_depth"
+path = "tests/carrier_marker_depth.rs"
+
+[[test]]
+name = "carrier_marker_figure"
+path = "tests/carrier_marker_figure.rs"
