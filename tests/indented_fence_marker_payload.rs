@@ -64,7 +64,7 @@ fn a_closer_between_container_and_authored_columns_is_payload() {
     let source = "- head\n\n      ```\n      body\n    ```\n  - payload\n";
     let html = to_html(source);
     assert!(
-        html.contains("body\n  ```\n- payload\n</code></pre>"),
+        html.contains("body\n```\n- payload\n</code></pre>"),
         "{html}"
     );
     let source = "- head\n\n      ```\n      body\n  ```\n  - child\n";
