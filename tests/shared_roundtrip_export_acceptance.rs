@@ -980,3 +980,60 @@ fn markdown_reports_a_list_delimiter_forced_apart_from_the_list_above() {
         assert!(apart.losses.is_empty(), "{:?}", apart.losses);
     }
 }
+
+#[test]
+fn shared_reference_marker_and_abbreviation_rows() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "spec/resources/roundtrip-export-acceptance-fixtures.json"
+    ))
+    .unwrap();
+    let wanted = [
+        "bare-div",
+        "definition-list-wrapped-term",
+        "reference-link-full",
+        "reference-link-collapsed",
+        "markdown-abbreviation-definition",
+    ];
+    for id in wanted {
+        let fixture = fixtures["markdownExportImport"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap();
+        let source = fixture["source"].as_str().unwrap();
+        let ordinary = to_markdown_with_options(source, &Options::default());
+        let exported = to_markdown_with_options(source, &Options::default().with_roundtrip(true));
+        for fragment in fixture["carrierFragments"].as_array().unwrap() {
+            assert!(
+                exported.contains(fragment.as_str().unwrap()),
+                "{id}: {exported:?}"
+            );
+        }
+        if id == "bare-div" {
+            assert!(!exported.contains("<!-- carve: :::  -->"));
+        }
+        if id.starts_with("reference-link") {
+            assert!(ordinary.contains("[a](/u)") || ordinary.contains("[r](/u)"));
+            assert!(!ordinary.contains("[r]: /u"));
+        }
+        let imported = migrate_markdown(&exported);
+        assert!(
+            !imported
+                .report
+                .diagnostics
+                .iter()
+                .any(|row| row.code == "carrier-markers-damaged"),
+            "{id}: {:?}",
+            imported.report
+        );
+        assert_eq!(
+            to_html(&imported.value),
+            to_html(source),
+            "{id}: {:?}",
+            imported.value
+        );
+        let tree: Value = serde_json::from_str(&to_json(&parse(&imported.value))).unwrap();
+        assert!(projection(&tree, &fixture["expectedNodes"]), "{id}: {tree}");
+    }
+}
