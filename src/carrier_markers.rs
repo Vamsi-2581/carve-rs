@@ -986,13 +986,30 @@ fn strip_host_prefix<'a>(line: &'a str, host: &str) -> &'a str {
 
 /// Write every lifted payload back as the Carve line it is.
 pub(crate) fn restore_carrier_markers(carve: &str, lift: &CarrierLift) -> String {
+    use pulldown_cmark::{Event, Tag};
     let mut source_with_definitions = carve.to_owned();
+    // The import writes a resolved reference inline, so only a definition no
+    // link or image used needs its line back.
+    let used_ids: Vec<String> = pulldown_cmark::Parser::new_ext(&lift.source, markdown_options())
+        .filter_map(|event| match event {
+            Event::Start(Tag::Link { id, .. } | Tag::Image { id, .. }) if !id.is_empty() => {
+                Some(id.into_string())
+            }
+            _ => None,
+        })
+        .collect();
     let parser = pulldown_cmark::Parser::new_ext(&lift.source, markdown_options());
     let definitions = parser.reference_definitions();
+    let used: std::collections::HashSet<usize> = used_ids
+        .iter()
+        .filter_map(|id| definitions.get(id))
+        .map(|definition| definition.span.start)
+        .collect();
     let mut entries: Vec<_> = definitions.iter().collect();
     entries.sort_by_key(|(_, definition)| definition.span.start);
     for (label, definition) in entries {
-        if !crate::parse::reference_label_has_definition_spelling(label)
+        if used.contains(&definition.span.start)
+            || !crate::parse::reference_label_has_definition_spelling(label)
             || definition.dest.is_empty()
             || definition
                 .title
