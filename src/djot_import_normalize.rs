@@ -2859,6 +2859,13 @@ fn protected_mask(source: &str) -> Vec<u8> {
 }
 
 pub(super) fn inline(source: &str) -> String {
+    inline_with_quote_preservation(source, |_| false)
+}
+
+pub(super) fn inline_with_quote_preservation(
+    source: &str,
+    preserve_quote: impl Fn(usize) -> bool,
+) -> String {
     let mask = mask_code_and_destinations(source);
     let protected = protected_mask(source);
     let comments: HashMap<_, _> = mask_djot_opaque_with_comments(
@@ -2967,7 +2974,7 @@ pub(super) fn inline(source: &str) -> String {
             let quote = [("{'", "‘"), ("'}", "’"), ("{\"", "“"), ("\"}", "”")]
                 .into_iter()
                 .find(|(token, _)| source[i..].starts_with(token));
-            if let Some((token, glyph)) = quote {
+            if let Some((token, glyph)) = quote.filter(|_| !preserve_quote(i)) {
                 output.push_str(glyph);
                 i += token.len();
                 continue;
