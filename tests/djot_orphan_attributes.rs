@@ -75,7 +75,36 @@ fn root_attribute_boundaries_match_native_djot() {
     let text_spaces = regex::Regex::new(r"[ \t\r\n]+").unwrap();
     let opening_tag = regex::Regex::new(r"^<([A-Za-z][A-Za-z0-9-]*)([^>]*)>$").unwrap();
     let tag_attribute = regex::Regex::new(r#"[^\s=/>]+(?:=(?:"[^"]*"|'[^']*'|[^\s>]+))?"#).unwrap();
+    let canonical_code = |text: &str| {
+        use html5ever::tendril::TendrilSink;
+        use markup5ever_rcdom::{NodeData, RcDom};
+        let dom = html5ever::parse_document(RcDom::default(), Default::default())
+            .one(format!("<pre><code>{text}</code></pre>"));
+        let mut stack = vec![dom.document];
+        let mut value = String::new();
+        while let Some(node) = stack.pop() {
+            if let NodeData::Text { contents } = &node.data {
+                for c in contents.borrow().chars() {
+                    match c {
+                        '&' => value.push_str("&amp;"),
+                        '<' => value.push_str("&lt;"),
+                        '>' => value.push_str("&gt;"),
+                        '"' => value.push_str("&quot;"),
+                        '\'' => value.push_str("&apos;"),
+                        c => value.push(c),
+                    }
+                }
+            }
+            stack.extend(node.children.borrow().iter().rev().cloned());
+        }
+        value
+    };
     let normalize = |html: &str| {
+        let mut code_prefix = "DJOTCODETEXT".to_owned();
+        while html.contains(&code_prefix) {
+            code_prefix.push('X');
+        }
+        let mut code_text = Vec::new();
         let mut spaced = String::new();
         let mut end = 0;
         let mut in_code = false;
@@ -83,7 +112,9 @@ fn root_attribute_boundaries_match_native_djot() {
         for tag in html_tags.find_iter(html) {
             let text = &html[end..tag.start()];
             if in_code {
-                spaced.push_str(text);
+                let token = format!("{code_prefix}{}Z", code_text.len());
+                code_text.push((token.clone(), canonical_code(text)));
+                spaced.push_str(&token);
             } else {
                 let text = if in_backlink {
                     text.replace('\u{FE0E}', "")
@@ -121,7 +152,9 @@ fn root_attribute_boundaries_match_native_djot() {
             end = tag.end();
         }
         if in_code {
-            spaced.push_str(&html[end..]);
+            let token = format!("{code_prefix}{}Z", code_text.len());
+            code_text.push((token.clone(), canonical_code(&html[end..])));
+            spaced.push_str(&token);
         } else {
             spaced.push_str(&text_spaces.replace_all(&html[end..], " "));
         }
@@ -134,7 +167,18 @@ fn root_attribute_boundaries_match_native_djot() {
         let html = html.replace(" scope=\"col\"", "");
         let html = li_open.replace_all(&html, "$1");
         let html = li_close.replace_all(&html, "$1");
-        nested_list_indent.replace_all(&html, "\n$1").into_owned()
+        let html = nested_list_indent.replace_all(&html, "\n$1").into_owned();
+        let tokens =
+            regex::Regex::new(&format!("{}([0-9]+)Z", regex::escape(&code_prefix))).unwrap();
+        tokens
+            .replace_all(&html, |matched: &regex::Captures<'_>| {
+                matched[1]
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|index| code_text.get(index))
+                    .map_or_else(|| matched[0].to_owned(), |(_, text)| text.clone())
+            })
+            .into_owned()
     };
     let mut failures = Vec::new();
     for case in cases.as_array().unwrap() {
