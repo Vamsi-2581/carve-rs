@@ -15629,6 +15629,20 @@ fn colon_fences_left_open(nested: &str) -> usize {
             local
         })
         .collect();
+    // Longest bare backtick and tilde run on any later line.
+    let mut closer_after = (vec![0usize; lines.len()], vec![0usize; lines.len()]);
+    let mut longest = (0usize, 0usize);
+    for (index, line) in lines.iter().enumerate().rev() {
+        closer_after.0[index] = longest.0;
+        closer_after.1[index] = longest.1;
+        let run = trim_ascii(line);
+        let width = run.len();
+        if width >= 3 && run.bytes().all(|b| b == b'`') {
+            longest.0 = longest.0.max(width);
+        } else if width >= 3 && run.bytes().all(|b| b == b'~') {
+            longest.1 = longest.1.max(width);
+        }
+    }
     let mut host_floor = 0;
     let mut verse_end = 0;
     let mut closer_index = None;
@@ -15655,7 +15669,16 @@ fn colon_fences_left_open(nested: &str) -> usize {
             continue;
         }
         if let Some(fence) = detect_fence_open(trimmed) {
-            code = Some(fence);
+            // With no closer below, the run is paragraph text and hides no
+            // colon closer (CARVE-P0-014).
+            let closer = if fence.fence_char == b'`' {
+                &closer_after.0
+            } else {
+                &closer_after.1
+            };
+            if closer[index] >= fence.fence_len {
+                code = Some(fence);
+            }
             continue;
         }
         if let Some(fence_len) = detect_line_block_open(trimmed) {
