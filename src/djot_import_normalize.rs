@@ -145,8 +145,7 @@ fn deep_quoted_item_attributes(
         } else {
             0
         };
-        let ends_item = text.is_empty()
-            && masks[row].as_bytes().get(prefix.rfind('>').unwrap_or(0)) == Some(&b'>')
+        let ends_item = masks[row].as_bytes().get(prefix.rfind('>').unwrap_or(0)) == Some(&b'>')
             && frames
                 .get(&previous_depth)
                 .is_some_and(|owners| owners.iter().any(|owner| owner.column >= opening_column));
@@ -158,7 +157,7 @@ fn deep_quoted_item_attributes(
         }
         frames.retain(|level, _| *level <= depth);
         if depth > previous_depth {
-            if (text.is_empty() || !previous_paragraph)
+            if (ends_item || !previous_paragraph)
                 && masks[row].as_bytes().get(prefix.rfind('>').unwrap_or(0)) == Some(&b'>')
             {
                 if let Some(owners) = frames.get_mut(&previous_depth) {
@@ -476,8 +475,34 @@ fn quoted_list_attribute_layout(
                             .unwrap_or(0),
                 ));
         if lazy_quote {
+            let literal_empty = quoted(lines[n]).1.trim().is_empty()
+                && comment_continues_paragraph(
+                    source,
+                    starts[n]
+                        + lines[n][..lines[n].len() - quoted(lines[n]).1.len()]
+                            .rfind('>')
+                            .unwrap_or(0),
+                );
+            let parent_depth = depths[n - 1];
             while n < lines.len() && depths[n] >= depth {
-                result.push(lines[n].to_owned());
+                let mut line = lines[n].to_owned();
+                if literal_empty {
+                    let mut at = 0;
+                    for _ in 0..parent_depth {
+                        let rest = &line[at..];
+                        at += rest.len() - rest.trim_start_matches([' ', '\t']).len() + 1;
+                        if line
+                            .as_bytes()
+                            .get(at)
+                            .is_some_and(|byte| *byte == b' ' || *byte == b'\t')
+                        {
+                            at += 1;
+                        }
+                    }
+                    at += line[at..].len() - line[at..].trim_start_matches([' ', '\t']).len();
+                    line.insert(at, '\\');
+                }
+                result.push(line);
                 n += 1;
             }
             continue;
