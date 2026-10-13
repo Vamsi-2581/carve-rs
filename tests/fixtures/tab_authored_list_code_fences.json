@@ -2284,10 +2284,10 @@
   {
     "id": "tab-state-boundaries-0",
     "source": "- a\n  \t```\n  \tone\n      ```\n  \ttwo\n\t```\n        ~~~\n        three\n  \t~~~\n        four\n        ~~~\nafter\n",
-    "html": "<ul><li>a\n    <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n\t~~~\nfour\n</code></pre></li></ul><p>after</p>",
+    "html": "<ul><li>a\n    <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n~~~\nfour\n</code></pre></li></ul><p>after</p>",
     "codePayloads": [
       "one\n  ```\ntwo\n",
-      "three\n\t~~~\nfour\n"
+      "three\n~~~\nfour\n"
     ]
   },
   {
@@ -2301,10 +2301,10 @@
   {
     "id": "tab-state-boundaries-2",
     "source": "1. a\n  \t```\n  \tone\n      ```\n  \ttwo\n\t```\n        ~~~\n        three\n  \t~~~\n        four\n        ~~~\nafter\n",
-    "html": "<ol><li>a\n    <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n ~~~\nfour\n</code></pre></li></ol><p>after</p>",
+    "html": "<ol><li>a\n    <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n~~~\nfour\n</code></pre></li></ol><p>after</p>",
     "codePayloads": [
       "one\n  ```\ntwo\n",
-      "three\n ~~~\nfour\n"
+      "three\n~~~\nfour\n"
     ]
   },
   {
@@ -2318,10 +2318,10 @@
   {
     "id": "tab-state-boundaries-4",
     "source": "> - a\n>   \t```\n>   \tone\n>       ```\n>   \ttwo\n> \t```\n>         ~~~\n>         three\n>   \t~~~\n>         four\n>         ~~~\n> after\n",
-    "html": "<blockquote><ul><li>a\n      <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n\t~~~\nfour\n</code></pre></li></ul><p>after</p></blockquote>",
+    "html": "<blockquote><ul><li>a\n      <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n~~~\nfour\n</code></pre></li></ul><p>after</p></blockquote>",
     "codePayloads": [
       "one\n  ```\ntwo\n",
-      "three\n\t~~~\nfour\n"
+      "three\n~~~\nfour\n"
     ]
   },
   {
@@ -2335,10 +2335,10 @@
   {
     "id": "tab-state-boundaries-6",
     "source": "> 1. a\n>   \t```\n>   \tone\n>       ```\n>   \ttwo\n> \t```\n>         ~~~\n>         three\n>   \t~~~\n>         four\n>         ~~~\n> after\n",
-    "html": "<blockquote><ol><li>a\n      <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n ~~~\nfour\n</code></pre></li></ol><p>after</p></blockquote>",
+    "html": "<blockquote><ol><li>a\n      <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n~~~\nfour\n</code></pre></li></ol><p>after</p></blockquote>",
     "codePayloads": [
       "one\n  ```\ntwo\n",
-      "three\n ~~~\nfour\n"
+      "three\n~~~\nfour\n"
     ]
   },
   {
@@ -2352,10 +2352,10 @@
   {
     "id": "tab-state-boundaries-8",
     "source": "> > - a\n> >   \t```\n> >   \tone\n> >       ```\n> >   \ttwo\n> > \t```\n> >         ~~~\n> >         three\n> >   \t~~~\n> >         four\n> >         ~~~\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li>a\n        <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n\t~~~\nfour\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ul><li>a\n        <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n~~~\nfour\n</code></pre></li></ul><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "one\n  ```\ntwo\n",
-      "three\n\t~~~\nfour\n"
+      "three\n~~~\nfour\n"
     ]
   },
   {
@@ -2369,10 +2369,10 @@
   {
     "id": "tab-state-boundaries-10",
     "source": "> > 1. a\n> >   \t```\n> >   \tone\n> >       ```\n> >   \ttwo\n> > \t```\n> >         ~~~\n> >         three\n> >   \t~~~\n> >         four\n> >         ~~~\n> > after\n",
-    "html": "<blockquote><blockquote><ol><li>a\n        <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n ~~~\nfour\n</code></pre></li></ol><p>after</p></blockquote></blockquote>",
+    "html": "<blockquote><blockquote><ol><li>a\n        <pre><code>one\n  ```\ntwo\n</code></pre><pre><code>three\n~~~\nfour\n</code></pre></li></ol><p>after</p></blockquote></blockquote>",
     "codePayloads": [
       "one\n  ```\ntwo\n",
-      "three\n ~~~\nfour\n"
+      "three\n~~~\nfour\n"
     ]
   },
   {

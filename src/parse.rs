@@ -8298,12 +8298,27 @@ fn rebase_body_blocks(
                 *line = Cow::Owned(strip_lazy(line).to_string());
                 continue;
             }
-            // Payload below a code or colon fence's base keeps its residual
-            // indentation, so an in-band run cannot become a closer.
-            if (code.is_some() || colon.is_some() || line_block.is_some())
-                && indent_columns(line) < base
-            {
-                continue;
+            // Code payload below the fence's base loses its whole prefix
+            // (CARVE-P0-004); a run there still closes nothing. Colon payload
+            // keeps its residual indentation, so an in-band run cannot become
+            // a closer.
+            if indent_columns(line) < base {
+                if let Some(open) = code {
+                    let consumed = indent_columns(line);
+                    let residue = trim_ascii_start(line);
+                    *line = Cow::Owned(if is_fence_close(residue, open) {
+                        format!("{LAZY}{residue}")
+                    } else {
+                        residue.to_string()
+                    });
+                    if let Some(Some(col)) = source.col_map.get_mut(j) {
+                        *col += consumed as isize;
+                    }
+                    continue;
+                }
+                if colon.is_some() || line_block.is_some() {
+                    continue;
+                }
             }
             if line_block.is_some() {
                 let (residue, consumed, synthetic) = slice_columns_mapped(line, base, true);

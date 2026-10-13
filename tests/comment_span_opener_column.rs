@@ -206,7 +206,7 @@ fn overindented_fences_keep_the_existing_closer_and_payload_rules() {
         // corpus 524, carve-rs#2162). The shape here is the over-indented closer,
         // not the payload.
         ("- a\n  - b\n %% c\n      ```\n    ```\n", "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <pre><code></code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>"),
-        ("- a\n  - b\n %% c\n      ```\n     x\n", "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <pre><code> x\n</code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>"),
+        ("- a\n  - b\n %% c\n      ```\n     x\n", "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <pre><code>x\n</code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>"),
     ] {
         assert_html(source, expected);
     }
