@@ -2117,6 +2117,11 @@ fn extract_footnote_defs(
                         .get_or_insert_with(|| source.contains("%%%") || source.contains("~~~"));
                 let mut note_opacity = BodyCommentState::new();
                 let mut note_has_inline_code = first.contains('`');
+                let mut note_marker_seen = false;
+                let mut note_child_open = false;
+                let mut note_admitted_fence: Option<(FenceOpen, usize)> = None;
+                let mut note_paragraph_open =
+                    !trim_ascii(first).is_empty() && !is_line_comment_any_column(first);
                 let comment_closes = |at, width, cache: &mut Option<ContainerCommentClosers>| {
                     let index = cache.get_or_insert_with(|| ContainerCommentClosers::build(&lines));
                     index.closes_in_note(&lines, at, quote_depth, note_floor, width)
@@ -2131,15 +2136,35 @@ fn extract_footnote_defs(
                     note_opacity.comment = None;
                 }
                 let reaches_floor =
-                    |raw, first_continuation, opaque_comment: bool, inline_code: bool| {
+                    |raw,
+                     first_continuation,
+                     marker_seen: bool,
+                     child_open: bool,
+                     paragraph_open: bool,
+                     opaque_comment: bool,
+                     inline_code: bool,
+                     admitted_fence: Option<(FenceOpen, usize)>| {
                         content(raw).is_some_and(|line| {
                             indent_columns(line) >= note_floor
                                 && !(marker_note
                                     && (first_continuation
                                         || (!opaque_comment
-                                            && !inline_code
-                                            && indent_columns(line) == note_floor))
+                                            && !child_open
+                                            && (!marker_seen
+                                                || !paragraph_open
+                                                || indent_columns(line) == note_floor)
+                                            && !admitted_fence.is_some_and(|(open, column)| {
+                                                (indent_columns(line) == note_floor
+                                                    || indent_columns(line) == column)
+                                                    && is_fence_close(trim_ascii_start(line), open)
+                                            })))
                                     && detect_fence_open(trim_ascii_start(line)).is_some())
+                                && !(marker_note
+                                    && paragraph_open
+                                    && !opaque_comment
+                                    && !inline_code
+                                    && (strip_blockquote_prefix(trim_ascii_start(line)).is_some()
+                                        || is_definition_list_start(trim_ascii_start(line))))
                         })
                     };
                 let blank = |raw| content(raw).is_some_and(is_blank_line);
@@ -2152,8 +2177,12 @@ fn extract_footnote_defs(
                         && reaches_floor(
                             lines[at],
                             def_lines.len() == 1,
+                            note_marker_seen,
+                            note_child_open,
+                            note_paragraph_open,
                             note_opacity.comment.is_some(),
                             note_has_inline_code || note_opacity.code.is_some(),
+                            note_admitted_fence,
                         )
                 };
                 if body_resumes {
@@ -2169,8 +2198,12 @@ fn extract_footnote_defs(
                                 && reaches_floor(
                                     lines[after],
                                     def_lines.len() == 1,
+                                    note_marker_seen,
+                                    note_child_open,
+                                    note_paragraph_open,
                                     note_opacity.comment.is_some(),
                                     note_has_inline_code || note_opacity.code.is_some(),
+                                    note_admitted_fence,
                                 )
                             {
                                 while i < after {
@@ -2182,6 +2215,7 @@ fn extract_footnote_defs(
                                     if track_note_opacity {
                                         note_opacity.observe(&residue);
                                     }
+                                    note_paragraph_open = false;
                                     def_lines.push(residue);
                                     def_line_map.push(Some(first_source_line + i));
                                     if positions {
@@ -2198,8 +2232,12 @@ fn extract_footnote_defs(
                         if !reaches_floor(
                             raw,
                             def_lines.len() == 1,
+                            note_marker_seen,
+                            note_child_open,
+                            note_paragraph_open,
                             note_opacity.comment.is_some(),
                             note_has_inline_code || note_opacity.code.is_some(),
+                            note_admitted_fence,
                         ) || parse_footnote_def_line(trim_ascii_start(line)).is_some()
                         {
                             break;
@@ -2209,7 +2247,35 @@ fn extract_footnote_defs(
                             let prefix = raw.chars().count() - line.chars().count();
                             def_col_map.push(stripped_col(Some(prefix as isize), line, &dedented));
                         }
+                        if note_opacity.comment.is_none() {
+                            let column = indent_columns(line);
+                            if note_admitted_fence.is_some_and(|(open, base)| {
+                                (column == note_floor || column == base)
+                                    && is_fence_close(trim_ascii_start(line), open)
+                            }) {
+                                note_admitted_fence = None;
+                            } else if note_admitted_fence.is_none() && column > note_floor {
+                                if let Some(open) = detect_fence_open(trim_ascii_start(line)) {
+                                    note_admitted_fence = Some((open, column));
+                                }
+                            }
+                        }
                         let was_comment = note_opacity.comment.is_some();
+                        if !was_comment
+                            && note_opacity.code.is_none()
+                            && detect_list_marker_full(trim_ascii_start(&dedented)).is_some()
+                        {
+                            note_marker_seen = true;
+                            note_child_open |= !note_paragraph_open;
+                        }
+                        if !was_comment && note_opacity.code.is_none() {
+                            if is_line_comment_any_column(&dedented) {
+                                note_paragraph_open = false;
+                            } else if !note_paragraph_open {
+                                note_paragraph_open =
+                                    line_starts_paragraph(trim_ascii_start(&dedented));
+                            }
+                        }
                         if !was_comment {
                             note_has_inline_code |= dedented.contains('`');
                         }
@@ -2264,7 +2330,10 @@ fn extract_footnote_defs(
                     // span at the marker (markup-carve/carve#1980).
                     sublists_carry_authored_base: true,
                 };
-                rebase_overindented_blocks(&mut definition_source, true, options);
+                let absorbed_note_marker =
+                    detect_list_marker_full(without_blockquote_prefixes(raw_def_line))
+                        .is_some_and(|marker| parse_footnote_def_line(marker.content).is_some());
+                rebase_body_blocks(&mut definition_source, true, options, absorbed_note_marker);
                 defs.insert(label.to_string(), definition_source);
             }
             // Leave the container's structural prefix (or a blank line at top
@@ -7395,6 +7464,15 @@ fn rebase_overindented_blocks(
     include_sublists: bool,
     options: &Options<'_>,
 ) {
+    rebase_body_blocks(source, include_sublists, options, false);
+}
+
+fn rebase_body_blocks(
+    source: &mut MappedSource,
+    include_sublists: bool,
+    options: &Options<'_>,
+    absorbed_note_marker: bool,
+) {
     let trailing_newline = source.source.ends_with('\n');
     let mut lines: Vec<Cow<'_, str>> = source.source.lines().map(Cow::Borrowed).collect();
     if trailing_newline {
@@ -7500,7 +7578,8 @@ fn rebase_overindented_blocks(
             if let Some(column) = marker_content_col(&lines[i]) {
                 nested_columns.push(column);
             }
-            paragraph_open = true;
+            paragraph_open = !is_line_comment_any_column(&lines[i]);
+            block_at_minimum = !paragraph_open && source.reached.get(i).copied().unwrap_or(false);
             i += 1;
             continue;
         }
@@ -7577,7 +7656,9 @@ fn rebase_overindented_blocks(
         while nested_columns.last().is_some_and(|column| base < *column) {
             nested_columns.pop();
         }
-        if let Some(column) = marker_content_col_at(&lines[i], base) {
+        if let Some(column) = marker_content_col_at(&lines[i], base)
+            .filter(|_| !(absorbed_note_marker && paragraph_open && !after_blank))
+        {
             if !include_sublists || base == 0 || !nested_columns.is_empty() {
                 let marker = detect_list_marker_full_at(&lines[i], base);
                 let colon_folds = marker.as_ref().is_some_and(|marker| {
@@ -16522,6 +16603,15 @@ fn collect_indented_block_mapped_with_columns(
             continue;
         }
         let indent = indent_columns(line);
+        if marker_is_definition_lead
+            && lines.is_empty()
+            && indent > strip_cols
+            && (strip_blockquote_prefix(trim_ascii_start(line)).is_some()
+                || is_definition_list_start(trim_ascii_start(line)))
+        {
+            authored_code_base = Some(indent);
+        }
+
         if marker_is_definition_term
             && marker_definition_has_description
             && fence.is_none()
