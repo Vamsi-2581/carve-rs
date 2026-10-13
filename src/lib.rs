@@ -37,6 +37,7 @@ mod include_walk;
 pub mod includes;
 pub mod incremental;
 mod index_budget;
+mod inline_carriers;
 pub mod lint;
 mod markdown_assessment;
 mod markdown_gfm_autolinks;
