@@ -271,10 +271,11 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         .replace("\0U\0", "\0");
         let native = remove_inherited_attribute_markers(&native, &inherited);
         let mut document = crate::parse_with_options(&native, &options);
-        if label.contains('\n') {
-            use crate::include_walk::SubtreeVisitor;
-            ImageAltBreaks.blocks(&mut document.children);
+        use crate::include_walk::SubtreeVisitor;
+        ImageAltChildText {
+            preserve_breaks: label.contains('\n'),
         }
+        .blocks(&mut document.children);
         let plain = crate::render_plain_text_with_options(&document, &options).unwrap_or_default();
         let plain = plain
             .trim_end_matches('\n')
@@ -533,7 +534,7 @@ fn replace_image_labels(
     }
     let bytes = source.as_bytes();
     let visible = mask.as_bytes();
-    let mut opens: Vec<(usize, bool)> = Vec::new();
+    let mut opens: Vec<usize> = Vec::new();
     let mut closes = HashMap::new();
     let mut boundaries: HashSet<_> = djot_inline_boundaries(source, mask).into_iter().collect();
     for blank in cached_regex!(r"\n[ \t]*\n").unwrap().find_iter(source) {
@@ -544,14 +545,10 @@ fn replace_image_labels(
             opens.clear();
         }
         if visible[at] == b'[' && !is_escaped(bytes, at) {
-            if let Some(parent) = opens.last_mut() {
-                parent.1 = true;
-            }
-            opens.push((at, false));
+            opens.push(at);
         } else if visible[at] == b']' && !is_escaped(bytes, at) {
-            if let Some((open, nested)) = opens.pop() {
-                if !nested
-                    && open > 0
+            if let Some(open) = opens.pop() {
+                if open > 0
                     && bytes[open - 1] == b'!'
                     && visible[open - 1] == b'!'
                     && !is_escaped(bytes, open - 1)
@@ -570,8 +567,14 @@ fn replace_image_labels(
     let mut at = 0;
     while at < bytes.len() {
         if let Some(&end) = closes.get(&at) {
+            let image = &source[at..end + 1];
+            let replaced = replace(image, &source[at + 2..end], at);
+            if replaced == image {
+                at += 1;
+                continue;
+            }
             output.push_str(&source[cursor..at]);
-            output.push_str(&replace(&source[at..end + 1], &source[at + 2..end], at));
+            output.push_str(&replaced);
             cursor = end + 1;
             at = end;
         }
@@ -881,9 +884,18 @@ fn protect_image_alt_scalars(label: &str) -> (String, Vec<String>, String) {
     (output, values, prefix)
 }
 
-struct ImageAltBreaks;
+struct ImageAltChildText {
+    preserve_breaks: bool,
+}
 
-impl crate::include_walk::SubtreeVisitor for ImageAltBreaks {
+impl crate::include_walk::SubtreeVisitor for ImageAltChildText {
+    fn image(&mut self, image: &mut crate::ast::Image) {
+        if image.src.is_empty() {
+            image.ref_label = None;
+            image.raw_ref = None;
+        }
+    }
+
     fn blocks(&mut self, blocks: &mut Vec<crate::ast::BlockNode>) {
         for block in blocks {
             crate::include_walk::visit_block_children(block, self);
@@ -892,11 +904,19 @@ impl crate::include_walk::SubtreeVisitor for ImageAltBreaks {
 
     fn inlines(&mut self, inlines: &mut Vec<crate::ast::InlineNode>) {
         for inline in inlines {
-            if let crate::ast::InlineNode::SoftBreak(value) = inline {
-                *inline = crate::ast::InlineNode::HardBreak(value.clone());
-            } else {
-                crate::include_walk::visit_inline_children(inline, self);
+            if let crate::ast::InlineNode::Link(link) = inline {
+                if link.href.is_empty() {
+                    link.ref_label = None;
+                    link.raw_ref = None;
+                }
             }
+            if self.preserve_breaks {
+                if let crate::ast::InlineNode::SoftBreak(value) = inline {
+                    *inline = crate::ast::InlineNode::HardBreak(value.clone());
+                    continue;
+                }
+            }
+            crate::include_walk::visit_inline_children(inline, self);
         }
     }
 }
@@ -5244,6 +5264,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn image_reference_child_text() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/djot-image-reference-child-text.json"
+        ))
+        .unwrap();
+        let alt = cached_regex!(r#"<img\b[^>]*\balt="([^"]*)""#).unwrap();
+        for case in cases.as_array().unwrap() {
+            let source = case["source"].as_str().unwrap();
+            let imported = djot_to_carve(source);
+            let html = crate::to_html(&imported);
+            let actual = alt.captures(&html).map(|capture| capture[1].to_owned());
+            assert_eq!(
+                actual.as_deref(),
+                case["alt"].as_str(),
+                "{source}\n{imported}"
+            );
+        }
+    }
+
+    #[test]
     fn site_frontmatter_is_preserved_outside_the_djot_reader() {
         let source = "---\nkey: my_long_value\n---\n\nBody.\n";
         assert_eq!(djot_to_carve(source), source);
@@ -7118,13 +7158,19 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
                 format!("{definitions}\n\n")
             };
             let converted = djot_to_carve(&format!("{definitions}DJOTALT {raw} DJOTEND"));
-            let plain = crate::to_plain_text_with_options(
-                &converted.replace("\0U\0", "\0"),
-                &crate::Options {
-                    smart_typography: crate::SmartTypographyMode::Source,
-                    ..Default::default()
-                },
-            );
+            let options = crate::Options {
+                smart_typography: crate::SmartTypographyMode::Source,
+                ..Default::default()
+            };
+            let mut document =
+                crate::parse_with_options(&converted.replace("\0U\0", "\0"), &options);
+            use crate::include_walk::SubtreeVisitor;
+            ImageAltChildText {
+                preserve_breaks: raw.contains('\n'),
+            }
+            .blocks(&mut document.children);
+            let plain =
+                crate::render_plain_text_with_options(&document, &options).unwrap_or_default();
             let plain = alt_end.replace(&plain, "");
             label = plain[8..]
                 .replace('\\', "\\\\")
