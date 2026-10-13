@@ -19,3 +19,14 @@ fn corpus_category(prefix: &str) {
 fn a_note_reference_inside_link_text_keeps_its_sup_id() {
     corpus_category("573-");
 }
+
+#[test]
+fn typography_uses_one_flank_class() {
+    for flank in ['\u{000b}', '\u{000c}', '\u{0085}', '\u{2003}'] {
+        assert_eq!(carve::to_html(&format!("x{flank}\"q\"")), format!("<p>x{flank}”q”</p>"));
+    }
+    for flank in [' ', '\t', '\u{00a0}'] {
+        let rendered = if flank == '\u{00a0}' { "&nbsp;".to_owned() } else { flank.to_string() };
+        assert_eq!(carve::to_html(&format!("x{flank}\"q\"")), format!("<p>x{rendered}“q”</p>"));
+    }
+}

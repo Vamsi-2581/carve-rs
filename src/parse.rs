@@ -24489,8 +24489,7 @@ fn closes_after_dash(prev: char, next: Option<char>) -> bool {
 
 fn quote_open_context(prev: char) -> bool {
     prev == '\0'
-        || prev.is_whitespace()
-        || prev == crate::NBSP_PLACEHOLDER
+        || is_flank_space(prev)
         || matches!(
             prev,
             '(' | '[' | '{' | '=' | ':' | '-' | '/' | '–' | '—' | '“' | '‘'
