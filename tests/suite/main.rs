@@ -2029,3 +2029,6 @@ mod wave7_html_tabs;
 
 #[path = "../wave7_unused_references.rs"]
 mod wave7_unused_references;
+
+#[path = "../wave7_link_footnotes.rs"]
+mod wave7_link_footnotes;
