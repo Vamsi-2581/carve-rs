@@ -211,7 +211,18 @@ fn html_label_validation_precedence_and_attribute_placement() {
             mode,
             ..Default::default()
         };
-        for bad in ["", "bad]label", "line&#10;break", "line&#13;break"] {
+        let empty = carve::html_to_carve(
+            "<pre data-carve-label=\"\"><code>x\n</code></pre>",
+            &options,
+        )
+        .unwrap();
+        let carve::BlockNode::CodeBlock(code) = &carve::parse(&empty.value).children[0] else {
+            panic!("{}", empty.value);
+        };
+        assert_eq!(code.label.as_deref(), Some(""));
+        assert!(empty.report.diagnostics.is_empty());
+
+        for bad in ["bad]label", "line&#10;break", "line&#13;break"] {
             let html = format!("<pre data-carve-label=\"{bad}\"><code>x\n</code></pre>");
             let imported = carve::html_to_carve(&html, &options).unwrap();
             let carve::BlockNode::CodeBlock(code) = &carve::parse(&imported.value).children[0]
