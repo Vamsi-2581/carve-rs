@@ -53,6 +53,124 @@ pub(super) fn blocks_with_list_attributes(
     attribute_prefix: &str,
     item_attributes: &mut Vec<String>,
 ) -> String {
+    let normalized_quotes = quoted_list_attribute_layout(source, attribute_prefix, item_attributes);
+    block_layout_inner(
+        &normalized_quotes,
+        attribute_prefix,
+        item_attributes,
+        source.contains("\\|"),
+    )
+}
+
+fn quoted_list_attribute_layout(
+    source: &str,
+    attribute_prefix: &str,
+    item_attributes: &mut Vec<String>,
+) -> String {
+    if !source.contains('>') || !source.contains('{') || attribute_prefix.is_empty() {
+        return source.to_owned();
+    }
+    let lines: Vec<_> = source.split('\n').collect();
+    if !lines.iter().any(|line| {
+        line.starts_with('>') && {
+            let body = quoted(line).1;
+            body.starts_with([' ', '\t']) && body.trim_start().starts_with('{')
+        }
+    }) {
+        return source.to_owned();
+    }
+    let list_marker = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
+    let prior_block = cached_regex!(r"^(?:#{1,6}(?:[ \t]|$)|:{3,}|[`~]{3,}|\[[^\]]+\]:)").unwrap();
+    let pipe_pass = source.contains("\\|");
+    let mask = mask_code_and_destinations(source);
+    let masks: Vec<_> = mask.split('\n').collect();
+    let mut result = Vec::new();
+    let mut n = 0;
+    while n < lines.len() {
+        let depth = quoted(lines[n]).0;
+        let lazy_quote = depth > 0
+            && n > 0
+            && !lines[n - 1].trim().is_empty()
+            && quoted(lines[n - 1]).0 == 0
+            && !prior_block.is_match(lines[n - 1].trim_start())
+            && !thematic(lines[n - 1])
+            && !read_djot_word_attributes(lines[n - 1], 0)
+                .is_some_and(|(end, _)| end == lines[n - 1].trim_end().len());
+        if lazy_quote {
+            while n < lines.len() && lines[n].starts_with('>') {
+                result.push(lines[n].to_owned());
+                n += 1;
+            }
+            continue;
+        }
+        if depth == 0
+            || !lines[n].starts_with('>')
+            || masks[n].as_bytes().first() != Some(&b'>')
+            || (n > 0
+                && !lines[n - 1].trim().is_empty()
+                && quoted(lines[n - 1]).0 == 0
+                && !prior_block.is_match(lines[n - 1].trim_start())
+                && !thematic(lines[n - 1])
+                && !read_djot_word_attributes(lines[n - 1], 0)
+                    .is_some_and(|(end, _)| end == lines[n - 1].trim_end().len()))
+        {
+            result.push(lines[n].to_owned());
+            n += 1;
+            continue;
+        }
+        let start = n;
+        while n < lines.len() && lines[n].starts_with('>') && quoted(lines[n]).0 >= depth {
+            n += 1;
+        }
+        let bodies: Vec<_> = lines[start..n]
+            .iter()
+            .map(|line| {
+                let mut body = *line;
+                for _ in 0..depth {
+                    body = body.trim_start_matches([' ', '\t']);
+                    body = &body[1..];
+                    if body.starts_with([' ', '\t']) {
+                        body = &body[1..];
+                    }
+                }
+                body
+            })
+            .collect();
+        let has_list_attributes = bodies.iter().any(|body| {
+            let text = body.trim_start();
+            body.len() > text.len()
+                && text.starts_with('{')
+                && read_djot_word_attributes(text, 0)
+                    .is_some_and(|(end, _)| end == text.trim_end().len())
+        }) && bodies.iter().any(|body| {
+            let text = body.trim_start();
+            list_marker.is_match(text)
+        });
+        if has_list_attributes {
+            let normalized = block_layout_inner(
+                &bodies.join("\n"),
+                attribute_prefix,
+                item_attributes,
+                pipe_pass,
+            );
+            result.extend(
+                normalized
+                    .split('\n')
+                    .map(|body| format!("{}{}", "> ".repeat(depth), body)),
+            );
+        } else {
+            result.extend(lines[start..n].iter().map(|line| (*line).to_owned()));
+        }
+    }
+    result.join("\n")
+}
+
+fn block_layout_inner(
+    source: &str,
+    attribute_prefix: &str,
+    item_attributes: &mut Vec<String>,
+    pipe_pass: bool,
+) -> String {
     let mask = mask_code_and_destinations(source);
     let mut div_closers = HashMap::new();
     if source.contains(":::") {
@@ -100,7 +218,6 @@ pub(super) fn blocks_with_list_attributes(
     let fence_masks: Vec<_> = fence_mask.split('\n').collect();
     let code_opener = cached_regex!(r"^(`{3,}|~{3,})[ \t]*=?[A-Za-z0-9_+#.-]*[ \t]*$").unwrap();
     let mut open_code: Option<(u8, usize, String)> = None;
-    let pipe_pass = source.contains("\\|");
     let marker =
         cached_regex!(r"^([-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))([ \t]+)(?:\[[ xX]\][ \t]+)?")
             .unwrap();
@@ -143,20 +260,33 @@ pub(super) fn blocks_with_list_attributes(
         let (indent, indent_bytes) = leading_indent(raw);
         let text = &raw[indent_bytes..];
         let masked_visible = masks[n].get(indent_bytes..).unwrap_or("");
-        let carried_fence = !pending_item_attributes.is_empty()
-            && marker
-                .captures(text)
-                .is_some_and(|item| code_opener.is_match(&text[item.get(0).unwrap().end()..]));
-        let visible = if carried_fence { text } else { masked_visible };
+        let carried_block = !pending_item_attributes.is_empty()
+            && marker.captures(text).is_some_and(|item| {
+                let body = &text[item.get(0).unwrap().end()..];
+                code_opener.is_match(body)
+                    || reference.is_match(body)
+                    || body.starts_with('|')
+                    || body.starts_with(":::")
+            });
+        let visible = if carried_block { text } else { masked_visible };
         let attribute_only = visible.starts_with('{')
             && read_djot_word_attributes(text, 0)
                 .is_some_and(|(end, _)| end == text.trim_end().len());
         if !pending_item_attributes.is_empty()
             && !raw.trim().is_empty()
-            && !attribute_only
+            && (!attribute_only || !lists.iter().any(|list| indent > list.source))
             && (!marker.is_match(visible) || thematic(text))
         {
-            pending_item_attributes.clear();
+            let target = lists
+                .iter()
+                .rev()
+                .find(|list| indent > list.source)
+                .map_or(indent, |list| {
+                    list.target_column + indent.saturating_sub(list.column)
+                });
+            for (_, row, attrs) in pending_item_attributes.drain(..) {
+                result[row] = format!("{}{attrs}", " ".repeat(target));
+            }
         }
         if rejected_comment_starts_block(visible) {
             let outside_list = lists.first().is_some_and(|list| indent <= list.source);
@@ -187,7 +317,7 @@ pub(super) fn blocks_with_list_attributes(
             in_heading = false;
         }
         let block = rows[n]
-            || fence_masks[n] != *raw && !carried_fence
+            || fence_masks[n] != *raw && !carried_block
             || heading.is_match(visible)
             || visible.starts_with('>')
             || visible.starts_with(":::")
@@ -209,7 +339,7 @@ pub(super) fn blocks_with_list_attributes(
                 quote_paragraph_depth = None;
             }
         }
-        if block {
+        if block && !(carried_block && marker.is_match(visible)) {
             while lists.last().is_some_and(|list| {
                 indent <= list.source || lists.len() > 1 && indent < list.column
             }) {
@@ -450,6 +580,10 @@ pub(super) fn blocks_with_list_attributes(
             }
         }
         if let Some(item) = marker.captures(visible).filter(|_| !thematic(text)) {
+            let pending_for_item = std::mem::take(&mut pending_item_attributes);
+            for (_, row, _) in &pending_for_item {
+                result[*row].clear();
+            }
             if in_quote && !previous_blank {
                 result.push(String::new());
                 in_quote = false;
@@ -508,11 +642,18 @@ pub(super) fn blocks_with_list_attributes(
             }
             let bullet = item[1].as_bytes()[0];
             let is_bullet = matches!(bullet, b'-' | b'*' | b'+');
-            let kind = if is_bullet {
+            let mut kind = if is_bullet {
                 item[1].to_owned()
             } else {
                 ordered_label.replace(&item[1], "1").into_owned()
             };
+            if is_bullet
+                && cached_regex!(r"^\[[ xX]\][ \t]+")
+                    .unwrap()
+                    .is_match(&text[item.get(2).unwrap().end()..])
+            {
+                kind.push_str(":task");
+            }
             let mut target = if definition_columns
                 .last()
                 .is_some_and(|column| indent >= *column)
@@ -560,9 +701,8 @@ pub(super) fn blocks_with_list_attributes(
                     .is_some_and(|list| !nested && kind == list.kind)
             {
                 let mut parts = Vec::new();
-                for (owner, row, attrs) in pending_item_attributes.drain(..) {
-                    if owner == indent {
-                        result[row].clear();
+                for (owner, _, attrs) in pending_for_item {
+                    if owner >= indent {
                         parts.push(attrs);
                     }
                 }
@@ -580,29 +720,22 @@ pub(super) fn blocks_with_list_attributes(
                     token
                 })
             } else {
-                let mut moved = false;
-                for (owner, row, attrs) in pending_item_attributes.drain(..) {
-                    if !nested
-                        && owner == indent
-                        && top.as_ref().is_some_and(|list| kind != list.kind)
-                    {
-                        result[row] = format!("{}{attrs}", " ".repeat(target));
-                        moved = true;
-                    }
-                }
-                if moved {
-                    let previous = top.as_ref().unwrap();
-                    result[previous.start] = format!(
-                        "{}{{loose}}\n{}",
-                        " ".repeat(previous.target),
-                        result[previous.start]
-                    );
+                for (_, _, attrs) in pending_for_item {
+                    result.push(format!("{}{attrs}", " ".repeat(target)));
                 }
                 None
             };
             if let Some(token) = carried {
-                payload.insert_str(payload_start, &token);
+                while result.last().is_some_and(|line| line.trim().is_empty()) {
+                    result.pop();
+                }
+                if top.as_ref().is_some_and(|list| !nested && list.loose) {
+                    result.push(String::new());
+                }
+                result.push(format!("{}{token}", " ".repeat(target)));
+                result.push(String::new());
             }
+            payload.replace_range(..marker_end, &payload[..marker_end].replace('\t', " "));
             if is_bullet {
                 payload.replace_range(..1, &(written as char).to_string());
             }
@@ -639,7 +772,7 @@ pub(super) fn blocks_with_list_attributes(
                 ));
             }
             in_heading = heading.is_match(item_body);
-            paragraph = !in_quote && !item_div && !in_heading;
+            paragraph = !in_quote && !item_div && !in_heading && !code_opener.is_match(item_body);
             previous_blank = item_div;
             continue;
         }
@@ -746,9 +879,17 @@ pub(super) fn blocks_with_list_attributes(
             let attribute = text.starts_with('{')
                 && read_djot_word_attributes(text, 0).is_some_and(|(end, _)| end == text.len());
             if attribute_only && !paragraph {
-                if let Some(list) = lists.last().filter(|list| indent >= list.column) {
+                if let Some(list) = lists.last_mut().filter(|list| indent > list.source) {
                     if let Some((_, wire)) = read_djot_word_attributes(text, 0) {
                         if wire != "{}" {
+                            if previous_blank && !result[list.start].contains("{loose}\n") {
+                                result[list.start] = format!(
+                                    "{}{{loose}}\n{}",
+                                    " ".repeat(list.target),
+                                    result[list.start]
+                                );
+                                list.loose = true;
+                            }
                             pending_item_attributes.push((list.source, result.len(), wire));
                         }
                     }

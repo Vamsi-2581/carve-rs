@@ -103,7 +103,8 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     let normalized = &stripped_definitions.source;
     let (frontmatter, separator, body) = split_frontmatter(normalized);
     let (literal_attributes, inherited) = escape_invalid_djot_attributes(body);
-    let attributes = normalize_djot_attribute_lines(&literal_attributes);
+    let quote_attributes = carry_djot_attributes_across_quote_exits(&literal_attributes);
+    let attributes = normalize_djot_attribute_lines(&quote_attributes);
     let fences = normalize_djot_fences(&attributes);
     let item_attribute_prefix = djot_placeholder_prefix(&fences, "\0DJOTITEMATTR\0");
     let mut item_attributes = Vec::new();
@@ -269,6 +270,21 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     let converted = if item_attributes.is_empty() {
         converted
     } else {
+        let fence_pattern = regex::Regex::new(&format!(
+            r"(?m)^[ \t>]*{}([0-9]+)\x00\n(?:[ \t>]*\n)*([ \t>]*)([-*+]|[^ \t\n]+)([ \t]+)",
+            regex::escape(&item_attribute_prefix)
+        ))
+        .unwrap();
+        let converted = fence_pattern.replace_all(&converted, |caps: &regex::Captures<'_>| {
+            caps[1]
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| item_attributes.get(index))
+                .map_or_else(
+                    || caps[0].to_string(),
+                    |attrs| format!("{}{}{attrs}{}", &caps[2], &caps[3], &caps[4]),
+                )
+        });
         let pattern = regex::Regex::new(&format!(
             r"([ \t]+)((?:\[[ xX]\][ \t]+)?){}([0-9]+)\x00",
             regex::escape(&item_attribute_prefix)
@@ -2896,7 +2912,7 @@ fn mask_djot_fences(
     strict: bool,
 ) -> String {
     let mut mask = source.as_bytes().to_vec();
-    let opener = cached_regex!(r"^([ \t]*)(?:(\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+))?(`{3,}|~{3,})[ \t]*=?[A-Za-z0-9_+#.-]*[ \t]*$").unwrap();
+    let opener = cached_regex!(r"^([ \t]*)(?:(\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+(?:\[[ xX]\][ \t]+)?))?(`{3,}|~{3,})[ \t]*=?[A-Za-z0-9_+#.-]*[ \t]*$").unwrap();
     let boundary = cached_regex!(r"^[ \t]*(?:[-*+] |[0-9]+[.)] |:{1,2} |#{1,6} )").unwrap();
     let mut fence: Option<(u8, usize, usize, Option<usize>, usize)> = None;
     let mut previous_block = true;
@@ -3050,6 +3066,16 @@ fn mask_djot_fences(
             }
         } else if let Some(open) = opener.captures(content) {
             let marker = open.get(2).map_or("", |value| value.as_str());
+            let task_start = cached_regex!(r"\[[ xX]\][ \t]+$")
+                .unwrap()
+                .find(marker)
+                .map_or(marker.len(), |task| task.start());
+            let marker_base = &marker[..task_start];
+            let native_prefix = format!(
+                "{}{}",
+                native_marker.replace(marker_base, "$1.$2"),
+                &marker[task_start..]
+            );
             if (!marker.starts_with(':') || previous_block)
                 && (!strict || can_normalize || !marker.is_empty())
             {
@@ -3063,7 +3089,7 @@ fn mask_djot_fences(
                 let target_column = if marker.starts_with("[^") {
                     open[1].len() + 2
                 } else if !marker.is_empty() {
-                    open[1].len() + native_marker.replace(marker, "$1.$2").len()
+                    open[1].len() + native_marker.replace(marker_base, "$1.$2").len()
                 } else if nested {
                     owner_column
                 } else {
@@ -3072,7 +3098,6 @@ fn mask_djot_fences(
                 fence_normalize = can_normalize || !marker.is_empty();
                 fence_dedent = open[1].len() + marker.len();
                 fence_target = " ".repeat(target_column);
-                let native_prefix = native_marker.replace(marker, "$1.$2");
                 if fence_normalize && (marker.is_empty() || native_prefix != marker) {
                     if let Some(callback) = on_fence_line.as_mut() {
                         callback(
@@ -5867,6 +5892,105 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
     String::from_utf8(output).expect("link replacements preserve UTF-8")
 }
 
+fn carry_djot_attributes_across_quote_exits(source: &str) -> String {
+    if !source.contains('>') || !source.contains('{') {
+        return source.to_owned();
+    }
+    let _paragraph_cache = ParagraphCacheScope::new(source);
+    let mask = mask_djot_attribute_source(source);
+    let masks: Vec<_> = mask.split('\n').collect();
+    let mut lines: Vec<_> = source.split('\n').map(str::to_owned).collect();
+    let quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
+    let marker = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
+    let mut columns: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut contexts = Vec::new();
+    let mut offset = 0;
+    for (n, line) in lines.iter().enumerate() {
+        let prefix = quote.find(line).unwrap().end();
+        let depth = line[..prefix].bytes().filter(|byte| *byte == b'>').count();
+        let body = &line[prefix..];
+        let indent = body.len() - body.trim_start_matches([' ', '\t']).len();
+        let attributes = masks[n].as_bytes().get(prefix + indent) == Some(&b'{')
+            && read_djot_word_attributes(body, indent)
+                .is_some_and(|(end, _)| end == body.trim_end().len());
+        let mut continued = false;
+        let mut list_owned = false;
+        if !body.trim().is_empty() {
+            let held = columns.entry(depth).or_default();
+            if marker.is_match(&body[indent..]) {
+                while held.last().is_some_and(|column| *column >= indent) {
+                    held.pop();
+                }
+                held.push(indent);
+            }
+            if attributes {
+                continued = comment_continues_paragraph(source, offset + prefix + indent);
+                list_owned = held.iter().any(|column| *column < indent);
+            } else if held.last().is_some_and(|column| indent <= *column)
+                && !marker.is_match(&body[indent..])
+            {
+                held.clear();
+            }
+        }
+        contexts.push((
+            prefix,
+            depth,
+            indent,
+            attributes,
+            continued,
+            list_owned,
+            body.trim().is_empty(),
+        ));
+        offset += line.len() + 1;
+    }
+    let mut moved: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut following = None;
+    let mut destination_depth: Option<usize> = None;
+    for n in (0..lines.len()).rev() {
+        let (prefix, depth, indent, attributes, continued, list_owned, empty) = contexts[n];
+        if attributes {
+            if let (Some(target), Some(destination)) = (following, destination_depth) {
+                if depth > destination && !continued && !list_owned {
+                    let target_line: &String = &lines[target];
+                    let mut end = 0;
+                    for _ in 0..destination {
+                        let rest = &target_line[end..];
+                        end += rest.len() - rest.trim_start_matches([' ', '\t']).len() + 1;
+                        if target_line
+                            .as_bytes()
+                            .get(end)
+                            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+                        {
+                            end += 1;
+                        }
+                    }
+                    end += target_line[end..].len()
+                        - target_line[end..].trim_start_matches([' ', '\t']).len();
+                    moved.entry(target).or_default().push(format!(
+                        "{}{}",
+                        &target_line[..end],
+                        &lines[n][prefix + indent..]
+                    ));
+                    lines[n] = lines[n][..prefix].trim_end().to_owned();
+                }
+            }
+        } else if empty {
+            destination_depth = destination_depth.map(|destination| destination.min(depth));
+        } else {
+            following = Some(n);
+            destination_depth = Some(depth);
+        }
+    }
+    let mut output = Vec::new();
+    for (n, line) in lines.into_iter().enumerate() {
+        if let Some(attributes) = moved.remove(&n) {
+            output.extend(attributes.into_iter().rev());
+        }
+        output.push(line);
+    }
+    output.join("\n")
+}
+
 fn normalize_djot_attribute_lines(source: &str) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
     if !source.contains('{') {
@@ -7295,7 +7419,13 @@ fn close_djot_table_code(source: &str, only_closed: bool) -> String {
     let mut divs: Vec<(usize, usize, usize)> = Vec::new();
     let mut output = String::new();
     for line in source.split('\n') {
-        let at = djot_content_start(line);
+        let mut at = djot_content_start(line);
+        if let Some(task) = cached_regex!(r"^\[[ xX]\][ \t]+")
+            .unwrap()
+            .find(&line[at..])
+        {
+            at += task.end();
+        }
         let line_end = offset + line.len();
         let (parsed_depth, content) = quoted(line);
         let mut code_depth = 0;
@@ -7320,6 +7450,12 @@ fn close_djot_table_code(source: &str, only_closed: bool) -> String {
             }));
             marker_has_tab |= item_prefix.as_str().contains('\t');
             prefix_view = &rest[item_prefix.end()..];
+            if let Some(task) = cached_regex!(r"^\[[ xX]\][ \t]+")
+                .unwrap()
+                .find(prefix_view)
+            {
+                prefix_view = &prefix_view[task.end()..];
+            }
             if prefix_view.starts_with("[ ] ")
                 || prefix_view.starts_with("[x] ")
                 || prefix_view.starts_with("[X] ")

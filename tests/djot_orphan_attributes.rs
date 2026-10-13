@@ -64,12 +64,49 @@ fn root_attribute_boundaries_match_native_djot() {
     let li_open = regex::Regex::new(r"(<li[^>]*>)[\r\n]+").unwrap();
     let li_close = regex::Regex::new(r"[\r\n]+</li>").unwrap();
     let table_groups = regex::Regex::new(r"</?(?:thead|tbody)>").unwrap();
+    let nested_list_indent = regex::Regex::new(r"\n[ \t]+(<(?:ul|ol)(?:\s|>))").unwrap();
+    let incidental_attributes =
+        regex::Regex::new(r#" (?:aria-label|data-delim|data-task-state)="[^"]*""#).unwrap();
+    let input_spacing = regex::Regex::new(r"(<input[^>]*?)/?>[ \t\r\n]*").unwrap();
+    let input_attributes = regex::Regex::new(r#"<input[^>]*type="checkbox"[^>]*>"#).unwrap();
+    let nested_block_indent =
+        regex::Regex::new(r"\n[ \t]+(<(?:blockquote|table)(?:\s|>))").unwrap();
+    let html_tags = regex::Regex::new(r"<[^>]+>").unwrap();
+    let text_spaces = regex::Regex::new(r"[ \t\r\n]+").unwrap();
     let normalize = |html: &str| {
-        let html = between_tags.replace_all(html.trim(), "><");
+        let mut spaced = String::new();
+        let mut end = 0;
+        let mut in_code = false;
+        for tag in html_tags.find_iter(html) {
+            let text = &html[end..tag.start()];
+            if in_code {
+                spaced.push_str(text);
+            } else {
+                spaced.push_str(&text_spaces.replace_all(text, " "));
+            }
+            spaced.push_str(tag.as_str());
+            if tag.as_str().starts_with("<code") {
+                in_code = true;
+            } else if tag.as_str() == "</code>" {
+                in_code = false;
+            }
+            end = tag.end();
+        }
+        if in_code {
+            spaced.push_str(&html[end..]);
+        } else {
+            spaced.push_str(&text_spaces.replace_all(&html[end..], " "));
+        }
+        let html = incidental_attributes.replace_all(spaced.trim(), "");
+        let html = input_spacing.replace_all(&html, "$1>");
+        let html = input_attributes.replace_all(&html, "<input type=\"checkbox\">");
+        let html = nested_block_indent.replace_all(&html, "\n$1");
+        let html = between_tags.replace_all(&html, "><");
         let html = table_groups.replace_all(&html, "");
         let html = html.replace(" scope=\"col\"", "");
         let html = li_open.replace_all(&html, "$1");
-        li_close.replace_all(&html, "</li>").into_owned()
+        let html = li_close.replace_all(&html, "</li>");
+        nested_list_indent.replace_all(&html, "\n$1").into_owned()
     };
     let mut failures = Vec::new();
     for case in cases.as_array().unwrap() {
@@ -103,7 +140,12 @@ fn root_attribute_boundaries_match_native_djot() {
                 );
             }
             assert_eq!(html.matches("type=\"checkbox\"").count(), items.len());
-            assert!(html.contains("class=\"a\""));
+            if source.contains("{.a}") {
+                assert!(html.contains("class=\"a\""));
+            }
+            if source.contains("_c_") {
+                assert!(html.contains("<pre><code>_c_\n</code></pre>"));
+            }
             assert_eq!(
                 carve::to_html(&carve::render_carve(&document).unwrap()),
                 html

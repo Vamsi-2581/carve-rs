@@ -229,5 +229,283 @@
   {
     "source": "- x\n\n  {% c %}\n\n- y",
     "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\nroot",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<p class=\"a\">root</p>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n# root",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<section id=\"root\">\n<h1 class=\"a\">root</h1>\n</section>\n"
+  },
+  {
+    "source": "- outer\n\n  - inner\n\n    {.a}\n\n- peer",
+    "html": "<ul>\n<li>\nouter\n<ul>\n<li>\n<p>inner</p>\n</li>\n</ul>\n</li>\n<li class=\"a\">\npeer\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- outer\n\n  - inner\n\n    {.a}\n\n  - peer",
+    "html": "<ul>\n<li>\nouter\n<ul>\n<li>\n<p>inner</p>\n</li>\n<li class=\"a\">\n<p>peer</p>\n</li>\n</ul>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- outer\n\n  - inner\n\n    {.a}\n\n  outer continuation\n\n- peer",
+    "html": "<ul>\n<li>\n<p>outer</p>\n<ul>\n<li>\n<p>inner</p>\n</li>\n</ul>\n<p class=\"a\">outer continuation</p>\n</li>\n<li>\n<p>peer</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- outer\n\n  {.a}\n\n  - inner",
+    "html": "<ul>\n<li>\n<p>outer</p>\n<ul class=\"a\">\n<li>\ninner\n</li>\n</ul>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "> - outer\n>\n>   - inner\n>\n>     {.a}\n>\n> - peer",
+    "html": "<blockquote>\n<ul>\n<li>\nouter\n<ul>\n<li>\n<p>inner</p>\n</li>\n</ul>\n</li>\n<li class=\"a\">\npeer\n</li>\n</ul>\n</blockquote>\n"
+  },
+  {
+    "source": "{.q}\n> - a\n>\n>   {.x}\n>\n> - b",
+    "html": "<blockquote class=\"q\">\n<ul>\n<li>\n<p>a</p>\n</li>\n<li class=\"x\">\n<p>b</p>\n</li>\n</ul>\n</blockquote>\n"
+  },
+  {
+    "source": "::: d\n> - a\n>\n>   {.x}\n>\n> - b\n:::",
+    "html": "<div class=\"d\">\n<blockquote>\n<ul>\n<li>\n<p>a</p>\n</li>\n<li class=\"x\">\n<p>b</p>\n</li>\n</ul>\n</blockquote>\n</div>\n"
+  },
+  {
+    "source": "> - a\n>\n>   > q\n>\n>   {.x}\n>\n> - b",
+    "html": "<blockquote>\n<ul>\n<li>\n<p>a</p>\n<blockquote>\n<p>q</p>\n</blockquote>\n</li>\n<li class=\"x\">\n<p>b</p>\n</li>\n</ul>\n</blockquote>\n"
+  },
+  {
+    "source": "> 1. a\n>\n>    {.x}\n>\n> 2. b",
+    "html": "<blockquote>\n<ol>\n<li>\n<p>a</p>\n</li>\n<li class=\"x\">\n<p>b</p>\n</li>\n</ol>\n</blockquote>\n"
+  },
+  {
+    "source": "> -\ta\n>\n>   {.x}\n>\n> -\tb",
+    "html": "<blockquote>\n<ul>\n<li>\n<p>a</p>\n</li>\n<li class=\"x\">\n<p>b</p>\n</li>\n</ul>\n</blockquote>\n"
+  },
+  {
+    "source": "> - a\n>\n>   {.x}\n>\n> - b\n>\n> para\n> | a |\n\npara\n| a |",
+    "html": "<blockquote>\n<ul>\n<li>\n<p>a</p>\n</li>\n<li class=\"x\">\n<p>b</p>\n</li>\n</ul>\n<p>para\n| a |</p>\n</blockquote>\n<p>para\n| a |</p>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n  ```\n  _c_\n  ```\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n<pre class=\"a\"><code>_c_\n</code></pre>\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n  > q\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n<blockquote class=\"a\">\n<p>q</p>\n</blockquote>\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n  | t |\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n<table class=\"a\">\n<tr>\n<td>t</td>\n</tr>\n</table>\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n* ```\n  _c_\n  ```",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<ul class=\"a\">\n<li>\n<pre><code>_c_\n</code></pre>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n1. ```\n   _c_\n   ```",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<ol class=\"a\">\n<li>\n<pre><code>_c_\n</code></pre>\n</li>\n</ol>\n"
+  },
+  {
+    "source": "1. x\n\n   {.a}\n\n2) ```\n   _c_\n   ```",
+    "html": "<ol>\n<li>\n<p>x</p>\n</li>\n</ol>\n<ol start=\"2\" class=\"a\">\n<li>\n<pre><code>_c_\n</code></pre>\n</li>\n</ol>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- [ ] y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<ul class=\"task-list a\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\ny\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- [ ] ```\n  _c_\n  ```",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<ul class=\"task-list a\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\n<pre><code>_c_\n</code></pre>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n> - y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<blockquote class=\"a\">\n<ul>\n<li>\ny\n</li>\n</ul>\n</blockquote>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- ```\n  _c_\n  ```",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<pre><code>_c_\n</code></pre>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "> - x\n>\n>   {.a}\n>\n> - ```\n>   _c_\n>   ```",
+    "html": "<blockquote>\n<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<pre><code>_c_\n</code></pre>\n</li>\n</ul>\n</blockquote>\n"
+  },
+  {
+    "source": "> > - x\n> >\n> >   {.a}\n> >\n> > - ```\n> >   _c_\n> >   ```",
+    "html": "<blockquote>\n<blockquote>\n<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<pre><code>_c_\n</code></pre>\n</li>\n</ul>\n</blockquote>\n</blockquote>\n"
+  },
+  {
+    "source": "- [ ] ```\n  _c_\n  ```",
+    "html": "<ul class=\"task-list\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\n<pre><code>_c_\n</code></pre>\n</li>\n</ul>\n",
+    "nativeAst": {
+      "tag": "doc",
+      "references": {},
+      "autoReferences": {},
+      "footnotes": {},
+      "children": [
+        {
+          "tag": "task_list",
+          "tight": true,
+          "children": [
+            {
+              "tag": "task_list_item",
+              "children": [
+                {
+                  "tag": "code_block",
+                  "text": "_c_\n"
+                }
+              ],
+              "checkbox": "unchecked"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "source": "* [x] ```\n  _c_\n  ```",
+    "html": "<ul class=\"task-list\">\n<li>\n<input disabled=\"\" type=\"checkbox\" checked=\"\"/>\n<pre><code>_c_\n</code></pre>\n</li>\n</ul>\n",
+    "nativeAst": {
+      "tag": "doc",
+      "references": {},
+      "autoReferences": {},
+      "footnotes": {},
+      "children": [
+        {
+          "tag": "task_list",
+          "tight": true,
+          "children": [
+            {
+              "tag": "task_list_item",
+              "children": [
+                {
+                  "tag": "code_block",
+                  "text": "_c_\n"
+                }
+              ],
+              "checkbox": "checked"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "source": "- [ ] x\n\n  {.a}\n\n- [x] ```\n  _c_\n  ```",
+    "html": "<ul class=\"task-list\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\n<p>x</p>\n</li>\n<li>\n<input disabled=\"\" type=\"checkbox\" checked=\"\"/>\n<pre><code>_c_\n</code></pre>\n</li>\n</ul>\n",
+    "nativeAst": {
+      "tag": "doc",
+      "references": {},
+      "autoReferences": {},
+      "footnotes": {},
+      "children": [
+        {
+          "tag": "task_list",
+          "tight": false,
+          "children": [
+            {
+              "tag": "task_list_item",
+              "children": [
+                {
+                  "tag": "para",
+                  "children": [
+                    {
+                      "tag": "str",
+                      "text": "x"
+                    }
+                  ]
+                }
+              ],
+              "checkbox": "unchecked"
+            },
+            {
+              "tag": "task_list_item",
+              "children": [
+                {
+                  "tag": "code_block",
+                  "text": "_c_\n"
+                }
+              ],
+              "attributes": {
+                "class": "a"
+              },
+              "checkbox": "checked"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "source": "para\n> x\n> - a\n>\n>   {.x}\n>\n> - b",
+    "html": "<p>para\n&gt; x\n&gt; - a\n&gt;\n&gt;   \n&gt;\n&gt; - b</p>\n"
+  },
+  {
+    "source": "> {.a}\n>\n\np",
+    "html": "<blockquote>\n</blockquote>\n<p class=\"a\">p</p>\n"
+  },
+  {
+    "source": "> {.a}\n\n> p",
+    "html": "<blockquote>\n</blockquote>\n<blockquote class=\"a\">\n<p>p</p>\n</blockquote>\n"
+  },
+  {
+    "source": "> > {.a}\n\n> p",
+    "html": "<blockquote>\n<blockquote>\n</blockquote>\n</blockquote>\n<blockquote class=\"a\">\n<p>p</p>\n</blockquote>\n"
+  },
+  {
+    "source": ">  {.a}\n\np",
+    "html": "<blockquote>\n</blockquote>\n<p class=\"a\">p</p>\n"
+  },
+  {
+    "source": "- x\n\n  > {.a}\n\n  p",
+    "html": "<ul>\n<li>\n<p>x</p>\n<blockquote>\n</blockquote>\n<p class=\"a\">p</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "> - x\n>\n>   > {.a}\n>\n>   p",
+    "html": "<blockquote>\n<ul>\n<li>\n<p>x</p>\n<blockquote>\n</blockquote>\n<p class=\"a\">p</p>\n</li>\n</ul>\n</blockquote>\n"
+  },
+  {
+    "source": "1. a\n2. [ ] b\n3. c",
+    "html": "<ol>\n<li>\na\n</li>\n<li>\n[ ] b\n</li>\n<li>\nc\n</li>\n</ol>\n"
+  },
+  {
+    "source": "- a\n- [x](https://e.com) link",
+    "html": "<ul>\n<li>\na\n</li>\n<li>\n<a href=\"https://e.com\">x</a> link\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- a\n- [x]y",
+    "html": "<ul>\n<li>\na\n</li>\n<li>\n[x]y\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n- [ ] y",
+    "html": "<ul>\n<li>\nx\n</li>\n</ul>\n<ul class=\"task-list\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\ny\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- | t |\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<table>\n<tr>\n<td>t</td>\n</tr>\n</table>\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n  | ``` |\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n<p class=\"a\">| <code> |</code></p>\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- outer\n\n  - inner\n\n    {.a}\n\n- ```\n  _c_\n  ```",
+    "html": "<ul>\n<li>\nouter\n<ul>\n<li>\n<p>inner</p>\n</li>\n</ul>\n</li>\n<li class=\"a\">\n<pre><code>_c_\n</code></pre>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n{.b}\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<ul class=\"a b\">\n<li>\ny\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {#one}\n\n{#two}\n\n- y",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n</ul>\n<ul id=\"two\">\n<li>\ny\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- ::: d\n  y\n  :::\n\n- z",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n<div class=\"d\">\n<p>y</p>\n</div>\n</li>\n<li>\n<p>z</p>\n</li>\n</ul>\n"
+  },
+  {
+    "source": "- x\n\n  {.a}\n\n- [r]: /u\n\n- y\n\n[z][r]",
+    "html": "<ul>\n<li>\n<p>x</p>\n</li>\n<li class=\"a\">\n</li>\n<li>\n<p>y</p>\n</li>\n</ul>\n<p><a href=\"/u\">z</a></p>\n"
+  },
+  {
+    "source": "- [ ] ```\n        _c_\n  ```",
+    "html": "<ul class=\"task-list\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\n<pre><code>  _c_\n</code></pre>\n</li>\n</ul>\n"
   }
 ]
