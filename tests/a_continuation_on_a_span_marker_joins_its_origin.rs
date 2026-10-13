@@ -1,6 +1,7 @@
 //! A `+` continuation on a span marker joins the cell the T5 walk resolves the
-//! marker into; a blocked marker renders empty and keeps none of it
-//! (markup-carve/carve#3097). Expected output is the spec checker's.
+//! marker into (markup-carve/carve#3097); a blocked marker is a cell of its
+//! own and keeps its fragment (markup-carve/carve#3151). Expected output is
+//! the spec checker's.
 
 #[test]
 fn caret_after_the_origin_row() {
@@ -54,7 +55,7 @@ fn gfm_head_rowspan() {
 fn blocked_colspan_marker() {
     assert_eq!(
         carve::to_html("| a | b |\n| < | c |\n+ x | y |\n").trim(),
-        "<table>\n  <tbody>\n    <tr><td>a</td><td>b</td></tr>\n    <tr><td></td><td>c y</td></tr>\n  </tbody>\n</table>"
+        "<table>\n  <tbody>\n    <tr><td>a</td><td>b</td></tr>\n    <tr><td>x</td><td>c y</td></tr>\n  </tbody>\n</table>"
     );
 }
 
@@ -62,7 +63,7 @@ fn blocked_colspan_marker() {
 fn blocked_caret_in_the_first_row() {
     assert_eq!(
         carve::to_html("| ^ | b |\n+ x | y |\n").trim(),
-        "<table>\n  <tbody>\n    <tr><td></td><td>b y</td></tr>\n  </tbody>\n</table>"
+        "<table>\n  <tbody>\n    <tr><td>x</td><td>b y</td></tr>\n  </tbody>\n</table>"
     );
 }
 
@@ -78,7 +79,7 @@ fn two_origins_in_one_row() {
 fn blocked_caret_under_a_wide_cell() {
     assert_eq!(
         carve::to_html("| a | < |\n| ^ | b |\n+ x | y |\n").trim(),
-        "<table>\n  <tbody>\n    <tr><td colspan=\"2\">a</td></tr>\n    <tr><td></td><td>b y</td></tr>\n  </tbody>\n</table>"
+        "<table>\n  <tbody>\n    <tr><td colspan=\"2\">a</td></tr>\n    <tr><td>x</td><td>b y</td></tr>\n  </tbody>\n</table>"
     );
 }
 
@@ -87,5 +88,21 @@ fn two_continuation_lines_on_one_caret() {
     assert_eq!(
         carve::to_html("|= h |= i |\n| a | b |\n| ^ | c |\n+ more | |\n+ again | d |\n").trim(),
         "<table>\n  <thead>\n    <tr><th scope=\"col\">h</th><th scope=\"col\">i</th></tr>\n  </thead>\n  <tbody>\n    <tr><td rowspan=\"2\">a more again</td><td>b</td></tr>\n    <tr><td>c d</td></tr>\n  </tbody>\n</table>"
+    );
+}
+
+#[test]
+fn blocked_colspan_marker_under_a_rowspan() {
+    assert_eq!(
+        carve::to_html("| a | b |\n| ^ | c |\n| < | d |\n+ x | y |\n").trim(),
+        "<table>\n  <tbody>\n    <tr><td rowspan=\"2\">a</td><td>b</td></tr>\n    <tr><td>c</td></tr>\n    <tr><td>x</td><td>d y</td></tr>\n  </tbody>\n</table>"
+    );
+}
+
+#[test]
+fn a_marker_widening_a_blocked_cell_joins_its_fragment() {
+    assert_eq!(
+        carve::to_html("| ^ | < |\n+ x | y |\n").trim(),
+        "<table>\n  <tbody>\n    <tr><td colspan=\"2\">x y</td></tr>\n  </tbody>\n</table>"
     );
 }
