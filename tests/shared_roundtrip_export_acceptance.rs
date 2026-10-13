@@ -613,6 +613,26 @@ fn shared_markdown_container_carriers_restore_ast_fields() {
 }
 
 #[test]
+fn shared_nested_definition_marker_without_an_outer_list_is_damaged() {
+    for fixture in required_rows(&fixtures(), "markdownImportNegative") {
+        let imported = migrate_markdown(fixture["markdown"].as_str().unwrap());
+        assert!(
+            imported.report.diagnostics.iter().any(|diagnostic| {
+                Some(diagnostic.code.as_str()) == fixture["expectedDiagnostic"]["code"].as_str()
+            }),
+            "{:?}",
+            imported.report.diagnostics
+        );
+        let imported_ast = ast(&imported.value);
+        let mut imported_nodes = Vec::new();
+        nodes(&imported_ast, &mut imported_nodes);
+        for forbidden in required_rows(fixture, "forbiddenTypes") {
+            assert!(!imported_nodes.iter().any(|node| node["type"] == *forbidden));
+        }
+    }
+}
+
+#[test]
 fn shared_footnote_recovery_remains_a_complete_separate_resource() {
     let fixtures = fixtures();
     assert_eq!(

@@ -83,7 +83,10 @@ const SOURCE_LOSSY: &[(&str, &[&str])] = &[
         // returning the other one is not a loss. `-4` stays, because there the
         // delimiters reflow around content the list says nothing about.
         "the nested emphasis delimiters reflow: `/*x*/` comes back `*/x/*`",
-        &["130-bold-italic-delimiter-needs-content-4.crv"],
+        &[
+            "130-bold-italic-delimiter-needs-content-4.crv",
+            "576-an-at-sign-before-a-space-and-a-doubled-delimiter-inside-bold-italic-are-text-2.crv",
+        ],
     ),
     (
         "the combined token is not carried, and with asterisks as its content \
@@ -1627,7 +1630,13 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // Corpus 364-2, 482-5 and 558-3 enter the strict set. Corpus 510,
     // 557-4 and 82-5 leave it as the new ownership rules retain soft breaks
     // that ProseMirror reports as degraded.
-    const STRICT: usize = 1827;
+    // Spec ab887d86 adds the two category 576 delimiter documents and category
+    // 577's titled-endnotes document. All three round trip without reported
+    // loss. Category 576's second document joins the declared source-lossy set:
+    // its combined emphasis delimiter reflows around text, an existing cause.
+    // Spec 9acf3525 adds category 578's three marker-note fence documents. All
+    // three round trip without reported loss or canonical-source drift.
+    const STRICT: usize = 1833;
     const LOSSY: usize = 574;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
