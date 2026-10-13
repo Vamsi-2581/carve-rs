@@ -742,6 +742,7 @@ impl Reader {
             };
             self.apply_marks(obj, built, &mut out)?;
         }
+        out.iter_mut().for_each(mark_bold_italic);
         Ok(out)
     }
 
@@ -1563,6 +1564,33 @@ fn wire_plain_text(nodes: &[Json]) -> String {
         walk(n, &mut s)
     }
     s
+}
+/// The editor model holds `/*x*/` and `*/x/*` as the same two marks, so an
+/// unattributed `strong` wrapping only an unattributed `emphasis` is read back
+/// as the combined form. The writer still nests it where the content does not
+/// hug the delimiters, and the combined spelling keeps `//` inside it as text.
+fn mark_bold_italic(n: &mut Json) {
+    let Json::Object(o) = n else {
+        return;
+    };
+    let Some(Json::Array(children)) = o.get_mut("children") else {
+        return;
+    };
+    children.iter_mut().for_each(mark_bold_italic);
+    let combined = o.get("type").and_then(Json::as_str) == Some("strong")
+        && !o.contains_key("attrs")
+        && !o.contains_key("boldItalic")
+        && matches!(
+            o.get("children"),
+            Some(Json::Array(c)) if c.len() == 1 && matches!(
+                &c[0],
+                Json::Object(e) if e.get("type").and_then(Json::as_str) == Some("emphasis")
+                    && !e.contains_key("attrs")
+            )
+        );
+    if combined {
+        o.insert("boldItalic".into(), Json::Bool(true));
+    }
 }
 fn append_merged(out: &mut Vec<Json>, mut built: Vec<Json>) {
     for n in built.drain(..) {

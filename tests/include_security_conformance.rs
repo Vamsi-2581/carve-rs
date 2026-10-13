@@ -300,6 +300,45 @@ fn the_corpus_shape_is_pinned() {
     }
 }
 
+/// The reverse direction: a listed kind, requirement or denial class that no
+/// vector carries any more is a stale entry, not a capability.
+#[test]
+fn every_listed_name_is_still_used_by_the_corpus() {
+    let suite = suite();
+    let lists: [(&str, &[&str], Vec<&str>); 3] = [
+        (
+            "KNOWN_KINDS",
+            KNOWN_KINDS,
+            suite.vectors.iter().map(|v| v.kind.as_str()).collect(),
+        ),
+        (
+            "KNOWN_REQUIREMENTS",
+            KNOWN_REQUIREMENTS,
+            suite
+                .vectors
+                .iter()
+                .map(|v| v.requirement.as_str())
+                .collect(),
+        ),
+        (
+            "KNOWN_DENIALS",
+            KNOWN_DENIALS,
+            suite
+                .vectors
+                .iter()
+                .filter_map(|v| v.expected.denial.as_deref())
+                .collect(),
+        ),
+    ];
+    for (list, listed, used) in lists {
+        let stale: Vec<&&str> = listed.iter().filter(|name| !used.contains(name)).collect();
+        assert!(
+            stale.is_empty(),
+            "{list} lists {stale:?}, which no corpus vector uses any more: delete the stale entry"
+        );
+    }
+}
+
 /// Every member appears only on the kinds that may carry it.
 ///
 /// This is what READS the members the drivers do not compare, so they are

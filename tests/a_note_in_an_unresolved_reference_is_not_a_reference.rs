@@ -166,7 +166,7 @@ fn only_the_resolved_use_counts_when_a_label_is_used_both_ways() {
     assert_eq!(
         html,
         format!(
-            "<p>a <a href=\"/u\">t{NOTEREF}</a> b [u[^1]][nope] c</p>\n{}",
+            "<p>a <a href=\"/u\">t{LINK_NOTEREF}</a> b [u[^1]][nope] c</p>\n{}",
             lone_endnote("n")
         )
     );
@@ -242,7 +242,7 @@ fn control_a_note_in_a_reference_that_resolves_is_an_ordinary_reference() {
     assert_eq!(
         to_html("a [t[^1]][r] b\n\n[r]: /u\n\n[^1]: n\n"),
         format!(
-            "<p>a <a href=\"/u\">t{NOTEREF}</a> b</p>\n{}",
+            "<p>a <a href=\"/u\">t{LINK_NOTEREF}</a> b</p>\n{}",
             lone_endnote("n")
         )
     );
@@ -253,7 +253,7 @@ fn control_a_note_in_an_inline_link_is_an_ordinary_reference() {
     assert_eq!(
         to_html("a [t[^1]](/u) b\n\n[^1]: n\n"),
         format!(
-            "<p>a <a href=\"/u\">t{NOTEREF}</a> b</p>\n{}",
+            "<p>a <a href=\"/u\">t{LINK_NOTEREF}</a> b</p>\n{}",
             lone_endnote("n")
         )
     );
@@ -295,3 +295,5 @@ mod a_reference_tail_does_not_seal_its_own_text {
         );
     }
 }
+
+const LINK_NOTEREF: &str = "<sup id=\"fnref1\">1</sup>";

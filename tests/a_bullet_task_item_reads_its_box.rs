@@ -28,7 +28,7 @@ const BOX: &str = r#"<input type="checkbox" checked disabled"#;
 #[test]
 fn a_defined_label_does_not_turn_the_box_into_a_link() {
     let (carve, html) = imported("- [x] done\n\n[x]: /u\n");
-    assert_eq!(carve, "- [x] done\n");
+    assert_eq!(carve, "- [x] done\n\n[x]: /u\n");
     assert!(html.contains(BOX), "{html}");
     assert!(!html.contains("href"), "{html}");
 }
@@ -36,7 +36,7 @@ fn a_defined_label_does_not_turn_the_box_into_a_link() {
 #[test]
 fn a_title_on_the_definition_changes_nothing() {
     let (carve, html) = imported("- [x] done\n\n[x]: /u \"Title\"\n");
-    assert_eq!(carve, "- [x] done\n");
+    assert_eq!(carve, "- [x] done\n\n[x]: /u \"Title\"\n");
     assert!(html.contains(BOX), "{html}");
     assert!(!html.contains("Title"), "{html}");
 }
@@ -44,14 +44,14 @@ fn a_title_on_the_definition_changes_nothing() {
 #[test]
 fn a_tab_after_the_marker_is_the_boxs_own_separator() {
     let (carve, html) = imported("- [x]\tdone\n\n[x]: /u\n");
-    assert_eq!(carve, "- [x] done\n");
+    assert_eq!(carve, "- [x] done\n\n[x]: /u\n");
     assert!(html.contains(BOX), "{html}");
 }
 
 #[test]
 fn an_upper_case_label_reads_the_same_box() {
     let (carve, html) = imported("- [X] done\n\n[X]: /u\n");
-    assert_eq!(carve, "- [x] done\n");
+    assert_eq!(carve, "- [x] done\n\n[X]: /u\n");
     assert!(html.contains(BOX), "{html}");
 }
 
@@ -76,7 +76,7 @@ fn an_ordered_task_item_still_keeps_its_marker_as_text() {
     // carve-rs#1886's reading, which is the same ruling spelled where the
     // writer has no box to put.
     let (carve, html) = imported("1. [x] done\n\n[x]: /u\n");
-    assert_eq!(carve, "1. [x] done\n");
+    assert_eq!(carve, "1. [x] done\n\n[x]: /u\n");
     assert!(html.contains("<li>[x] done</li>"), "{html}");
 }
 

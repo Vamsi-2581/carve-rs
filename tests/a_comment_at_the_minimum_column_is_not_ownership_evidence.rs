@@ -30,7 +30,7 @@ fn both_paths(src: &str) -> String {
 fn the_reported_document_keeps_the_heading_as_text() {
     assert_eq!(
         both_paths("- x\n  %% x\n # h\n"),
-        "<ul>\n  <li>x\n    # h\n  </li>\n</ul>",
+        "<ul>\n  <li>x</li>\n</ul>\n<p># h</p>",
     );
 }
 
@@ -48,7 +48,7 @@ fn every_opener_kind_under_the_comment_stays_text() {
         let src = format!("- x\n  %% x\n{line}\n");
         assert_eq!(
             both_paths(&src),
-            format!("<ul>\n  <li>x\n    {folded}\n  </li>\n</ul>"),
+            format!("<ul>\n  <li>x</li>\n</ul>\n<p>{folded}</p>"),
             "{src:?}",
         );
     }

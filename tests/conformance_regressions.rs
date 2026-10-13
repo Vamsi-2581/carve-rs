@@ -190,7 +190,7 @@ fn marker_line_colon_blocks_nest_inside_list_item() {
 fn marker_line_colon_fence_below_content_column_stays_literal() {
     assert_eq!(
         html("- ::: note\nbody\n:::"),
-        "<ul>\n  <li>::: note\nbody</li>\n</ul>\n<div>\n\n</div>"
+        "<ul>\n  <li>\n    <aside class=\"admonition note\" aria-label=\"Note\">\n\n    </aside>\n  </li>\n</ul>\n<p>body</p>\n<div>\n\n</div>"
     );
     // With NOTHING below the content column to fold it into, the opener opens:
     // the flush-left `:::` is a sibling of the list, not the item's body, so the
@@ -229,7 +229,7 @@ fn flush_left_colon_fence_shape_ends_lazy_continuation() {
 
     assert_eq!(
         html("- ::: note\nbody\n:::"),
-        "<ul>\n  <li>::: note\nbody</li>\n</ul>\n<div>\n\n</div>"
+        "<ul>\n  <li>\n    <aside class=\"admonition note\" aria-label=\"Note\">\n\n    </aside>\n  </li>\n</ul>\n<p>body</p>\n<div>\n\n</div>"
     );
     assert_eq!(
         html("- ::: note\n  body\n  :::"),

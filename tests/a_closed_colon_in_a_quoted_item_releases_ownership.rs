@@ -166,18 +166,18 @@ fn all_hosted_colon_block_kinds_and_typed_interruptions_release_ownership() {
 }
 
 #[test]
-fn a_lazy_line_after_hosted_comment_shapes_keeps_existing_ownership() {
+fn a_marker_comment_handoff_releases_a_root_list() {
     let source = "> - %%%\n>   ::: box\n>   :::\n- tail\n>   %%%\n";
     let html = carve::to_html(source);
     assert!(html.ends_with("</blockquote>"), "{html}");
     let ast: Value = serde_json::from_str(&carve::to_json(&carve::parse(source))).unwrap();
-    assert_eq!(ast["children"].as_array().unwrap().len(), 1, "{ast}");
+    assert_eq!(ast["children"].as_array().unwrap().len(), 3, "{ast}");
     assert_eq!(
         ast["children"][0]["children"][0]["items"]
             .as_array()
             .unwrap()
             .len(),
-        2,
+        1,
         "{ast}"
     );
 }
@@ -264,7 +264,15 @@ fn existing_fence_verdict_survives_hosted_opaque_shapes() {
         ] {
             let source = format!("{quote}{}", body.replace("{q}", &quote));
             let ast: Value = serde_json::from_str(&carve::to_json(&carve::parse(&source))).unwrap();
-            assert_eq!(ast["children"][1]["type"], "list", "{source}: {ast}");
+            if body.starts_with("- ::: |") {
+                assert_eq!(
+                    ast["children"].as_array().unwrap().len(),
+                    1,
+                    "{source}: {ast}"
+                );
+            } else {
+                assert_eq!(ast["children"][1]["type"], "list", "{source}: {ast}");
+            }
         }
     }
 }
@@ -319,17 +327,12 @@ fn an_item_to_the_left_also_ends_the_previous_colon_scope() {
                 source.to_owned()
             };
             let ast: Value = serde_json::from_str(&carve::to_json(&carve::parse(&source))).unwrap();
-            let expected = if source.contains("- a\n") { 2 } else { 1 };
             assert_eq!(
                 ast["children"].as_array().unwrap().len(),
-                expected,
+                2,
                 "{source}: {ast}"
             );
-            if expected == 2 {
-                assert_eq!(ast["children"][1]["type"], "list", "{source}: {ast}");
-            } else {
-                assert!(carve::to_html(&source).contains("- tail"), "{source}");
-            }
+            assert_eq!(ast["children"][1]["type"], "list", "{source}: {ast}");
         }
     }
 }
@@ -560,5 +563,27 @@ fn folded_fence_paragraphs_keep_the_quoted_item_claim() {
             "{}\n{source}",
             row["id"]
         );
+    }
+}
+
+#[test]
+fn hosted_colon_wave_matches_checker() {
+    // Expected HTML: carve checker 8fde0d1934089def40d8205ca15375eeb7d07d53.
+    let rows: Value =
+        serde_json::from_str(include_str!("fixtures/hosted_colon_wave.json")).unwrap();
+    let whitespace = regex::Regex::new(r">\s+<").unwrap();
+    for row in rows.as_array().unwrap() {
+        let source = row["source"].as_str().unwrap();
+        for html in [
+            carve::to_html(source),
+            carve::render_html(&carve::parse(source)).unwrap(),
+        ] {
+            assert_eq!(
+                whitespace.replace_all(&html, "><").trim(),
+                row["html"].as_str().unwrap(),
+                "{}: {source}",
+                row["id"]
+            );
+        }
     }
 }

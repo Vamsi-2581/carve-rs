@@ -669,3 +669,32 @@ fn wide_active_spans_release_their_columns_for_narrow_rows() {
     assert!(expired.contains("rowspan=\"2\""));
     assert_eq!(expired.matches("<td").count(), 65537);
 }
+
+#[test]
+fn a_span_never_covers_another_cell_as_in_a_pipe_table() {
+    // T5 (markup-carve/carve#3047): the list table runs the pipe-table walk.
+    assert_eq!(
+        h("::: list-table\n- - a\n  - <\n- - ^\n  - b\n:::"),
+        [
+            "<table>",
+            "  <tbody>",
+            "    <tr><td colspan=\"2\">a</td></tr>",
+            "    <tr><td></td><td>b</td></tr>",
+            "  </tbody>",
+            "</table>",
+        ]
+        .join("\n")
+    );
+    assert_eq!(
+        h("::: list-table\n- - a\n  - b\n  - c\n- - p\n  - ^\n  - <\n:::"),
+        [
+            "<table>",
+            "  <tbody>",
+            "    <tr><td>a</td><td rowspan=\"2\">b</td><td>c</td></tr>",
+            "    <tr><td>p</td><td></td></tr>",
+            "  </tbody>",
+            "</table>",
+        ]
+        .join("\n")
+    );
+}

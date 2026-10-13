@@ -94,16 +94,16 @@ fn a_line_carrying_its_own_marker_answers_the_same_way() {
     );
 }
 
-/// Two quote markers. The OUTER quote declines the line - at its level the
-/// item is behind another `>` and no content column is visible - and the
-/// INNER one, whose lines carry no further marker, strips it to the same
-/// place. That is why this reader needs no quote-marker walk of its own.
+/// Two quote markers. The OUTER quote folds the line and hands it down flush,
+/// and to the INNER quote a flush-left `: ` ends the open term (CARVE-P2-028),
+/// so the line stays in the outer quote as text. The layout checker at carve
+/// `ab887d86` reads it this way.
 #[test]
 fn a_deeper_quote_answers_the_same_way() {
     assert_html(
         "> > - :: t\n      :  a\ntail\n",
-        "<blockquote><blockquote><ul><li><dl><dt>t</dt><dd>a tail</dd></dl></li>\
-         </ul></blockquote></blockquote>",
+        "<blockquote><blockquote><ul><li><dl><dt>t</dt></dl></li>\
+         </ul></blockquote><p>: a tail</p></blockquote>",
     );
 }
 
@@ -137,22 +137,14 @@ fn an_open_description_body_takes_the_line() {
 /// change its classification rather than restore it.
 #[test]
 fn a_line_below_the_content_column_still_folds_as_text() {
-    assert_html(
-        "> - - :: t\n>     # h\n :  a\ntail\n",
-        "<blockquote><ul><li><ul><li><dl><dt>t</dt></dl><h1 id=\"h\">h</h1></li></ul> \
-         : a tail</li></ul></blockquote>",
-    );
+    assert_closed_leaf_fixture("a_line_below_the_content_column_still_folds_as_text");
 }
 
 /// A BLOCK WRITTEN INSIDE THE ENTRY CLOSES IT, so there is no open half for the
 /// `:` to attach to and the line is ordinary text.
 #[test]
 fn a_block_between_them_closes_the_entry() {
-    assert_html(
-        "> - :: t\n>   # h\n   :  a\ntail\n",
-        "<blockquote><ul><li><dl><dt>t</dt></dl><h1 id=\"h\">h</h1></li></ul>\
-         <p>: a tail</p></blockquote>",
-    );
+    assert_closed_leaf_fixture("a_block_between_them_closes_the_entry");
 }
 
 /// THE SAME RESET, WHERE ONLY THE RESET CAN ANSWER IT. Above, the entry was on
@@ -163,11 +155,7 @@ fn a_block_between_them_closes_the_entry() {
 /// into the item instead of leaving it - 102 documents of the second sweep.
 #[test]
 fn a_block_closes_an_open_description_body_too() {
-    assert_html(
-        "> - :: t\n>   :  d\n>   # h\n    :  a\ntail\n",
-        "<blockquote><ul><li><dl><dt>t</dt><dd>d</dd></dl><h1 id=\"h\">h</h1></li></ul>\
-         <p>:  a tail</p></blockquote>",
-    );
+    assert_closed_leaf_fixture("a_block_closes_an_open_description_body_too");
 }
 
 /// NO ENTRY OPEN AT ALL: a `:` with no term above it opens nothing and folds.
@@ -201,10 +189,10 @@ fn a_fence_shaped_lazy_line_keeps_its_column() {
 /// The same limit for a TERM-shaped lazy line: `::` is not the description
 /// marker this band is about, and it stays where it was written.
 #[test]
-fn a_term_shaped_lazy_line_keeps_its_column() {
+fn a_term_shaped_unmarked_line_folds_into_the_open_term() {
     assert_html(
         "> - :: t\n    :: u\ntail\n",
-        "<blockquote><ul><li><dl><dt>t</dt><dt>u tail</dt></dl></li></ul></blockquote>",
+        "<blockquote><ul><li><dl><dt>t :: u tail</dt></dl></li></ul></blockquote>",
     );
 }
 
@@ -249,5 +237,22 @@ fn the_stripped_columns_stay_in_the_position_map() {
     assert!(
         flat.contains("\"value\":\"a\",\"pos\":{\"startLine\":2,\"endLine\":2,\"startColumn\":8"),
         "the description text must report the column it was written at; got {json}"
+    );
+}
+
+fn assert_closed_leaf_fixture(id: &str) {
+    let rows: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/quoted_description_closed_leaf_wave.json"
+    ))
+    .unwrap();
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_html(
+        row["source"].as_str().unwrap(),
+        row["html"].as_str().unwrap(),
     );
 }

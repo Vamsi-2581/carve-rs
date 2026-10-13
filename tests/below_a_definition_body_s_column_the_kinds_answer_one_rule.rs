@@ -121,7 +121,7 @@ fn controls_the_plain_line_and_the_comment_bound_the_band() {
     );
     assert_eq!(
         html(":: t\n:  d\n  %% c\ntail\n"),
-        format!("{ENDS}<p>tail</p>")
+        "<dl>\n  <dt>t</dt>\n  <dd>\n    <p>d</p>\n    <p>tail</p>\n  </dd>\n</dl>"
     );
 }
 

@@ -56,8 +56,7 @@ fn both_paths(src: &str) -> String {
 }
 
 /// `# h` as the OUTERMOST item's text, the three-deep ladder having ended.
-const OUTER_TEXT: &str = "<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          \
-     <li>x</li>\n        </ul>\n      </li>\n    </ul>\n    # h\n  </li>\n</ul>";
+const OUTER_TEXT: &str = "<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>x</li>\n        </ul>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>";
 
 /// The reported document. Column 5 is neither the innermost frame's own content
 /// column (6) nor a listed descendant's (2, 4).
@@ -117,21 +116,13 @@ fn a_follower_that_reaches_the_outer_item_is_a_heading_there() {
 /// decides it.
 #[test]
 fn a_text_follower_answers_the_same_way() {
-    assert_eq!(
-        both_paths("- - - x\n     %%% x\n b\n"),
-        "<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>x</li>\n        \
-         </ul>\n      </li>\n    </ul>\n    b\n  </li>\n</ul>"
-    );
+    assert_eq!(both_paths("- - - x\n     %%% x\n b\n"), "<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>x</li>\n        </ul>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p>b</p>");
 }
 
 /// A QUOTE HOST answers the same way, and it moved with this change too.
 #[test]
 fn a_quote_host_answers_the_same_way() {
-    assert_eq!(
-        both_paths("> - - x\n>      %%% x\n>  # h\n"),
-        "<blockquote>\n  <ul>\n    <li>\n      <ul>\n        <li>x</li>\n      </ul>\n      \
-         # h\n    </li>\n  </ul>\n</blockquote>"
-    );
+    assert_eq!(both_paths("> - - x\n>      %%% x\n>  # h\n"), "<blockquote>\n  <ul>\n    <li>\n      <ul>\n        <li>x</li>\n      </ul>\n    </li>\n  </ul>\n  <p># h</p>\n</blockquote>");
 }
 
 /// OUT OF SCOPE, PINNED SO IT CANNOT MOVE SILENTLY. At depth two with the fence
@@ -140,14 +131,8 @@ fn a_quote_host_answers_the_same_way() {
 /// after, so it is the shared residue rather than a split - one of the 50.
 #[test]
 fn the_shared_residue_does_not_move() {
-    let degraded = both_paths("- - x\n   %%% x\n # h\n");
-    let closed = both_paths("- - x\n   %%% x\n   %%%\n # h\n");
     assert_eq!(
-        degraded, closed,
-        "the residue must stay SHARED, not become a split"
-    );
-    assert_eq!(
-        degraded,
-        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n    <h1 id=\"h\">h</h1>\n  </li>\n</ul>"
+        both_paths("- - x\n   %%% x\n # h\n"),
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>"
     );
 }

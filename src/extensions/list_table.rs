@@ -20,9 +20,11 @@ use super::column_reservations::ColumnReservations;
 
 use crate::ast::{
     Admonition, AttrSlot, Attrs, BlockNode, Document, ExtensionCarrier, InlineNode, ListItem,
+    TableCellSpan,
 };
-use crate::escape::{is_dangerous_attr_name, is_valid_attr_name, sanitize_attr_value};
+use crate::escape::sanitize_attr_value;
 use crate::extension::{BeforeRenderContext, CarveExtension, RenderContext};
+use crate::table_spans::resolve_span_grid;
 
 /// The admonition kind this extension claims.
 const KIND: &str = "list-table";
@@ -231,10 +233,9 @@ fn valid_cell_alignment(attrs: Option<&Attrs>) -> bool {
 
 /// One source cell in the resolved grid (one entry per authored cell). Mirrors
 /// carve-js's `GridEntry`: a `^`/`<` that found a source to merge into is
-/// flagged `skip` and emits nothing; an unmergeable marker (first-row `^`,
-/// leading `<`, or a caret below a consumed colspan position
-/// that is not covered by a span) keeps `skip = false` and renders as an EMPTY
-/// cell occupying its grid position. The marker is never rendered as literal text.
+/// flagged `skip` and emits nothing; a marker with no origin, or a blocked one,
+/// keeps `skip = false` and renders as an EMPTY cell occupying its grid
+/// position. The marker is never rendered as literal text.
 struct GridEntry<'a> {
     cell: &'a ListItem,
     marker: Option<char>,
@@ -589,97 +590,40 @@ fn render_cell(cell: &ListItem, ctx: &RenderContext<'_>) -> String {
         .to_string()
 }
 
-/// Resolve `^` / `<` span markers into a positional grid (one entry per authored
-/// cell), EXACTLY mirroring carve-js's pipe-table span model (and carve-rs's own
-/// `render.rs` pipe-table renderer) so the output is identical to the equivalent
-/// pipe table.
-///
-/// - A `^` cell grows the rowspan of the nearest non-skipped cell directly above
-///   it in the same SOURCE column and is flagged `skip` (emits nothing).
-/// - A `<` cell grows the colspan of the nearest non-skipped cell to its LEFT in
-///   the same row and is flagged `skip`.
-/// - A marker that finds no source to merge into (a first-row `^`, a leading `<`,
-///   or a `<` whose only left neighbor
-///   is a skipped continuation) keeps `skip = false` and renders as an EMPTY
-///   cell occupying its grid position - never dropped, never literal.
-/// - A cell carrying its own attributes is never a bare marker (its `^`/`<` is
-///   literal).
-/// - The renderer puts every row in one tbody if a visible span crosses groups.
+/// Resolve `^` / `<` markers with the pipe-table span walk
+/// (`resolve_span_grid`), so the output matches the equivalent pipe table. A
+/// merged marker is flagged `skip` and emits nothing; a marker with no origin,
+/// or whose span would cover another cell, renders as an EMPTY cell. A cell
+/// carrying its own attributes is never a bare marker (its `^`/`<` is literal).
 fn resolve_spans<'a>(rows: &[Vec<&'a ListItem>]) -> Vec<Vec<GridEntry<'a>>> {
-    let mut grid: Vec<Vec<GridEntry<'a>>> = rows
+    let markers: Vec<Vec<Option<char>>> = rows
         .iter()
-        .map(|cells| {
+        .map(|cells| cells.iter().map(|cell| marker_of(cell)).collect())
+        .collect();
+    let widths: Vec<usize> = rows.iter().map(Vec::len).collect();
+    let spans = resolve_span_grid(&widths, |r, c| match markers[r][c] {
+        Some('^') => Some(TableCellSpan::Rowspan),
+        Some('<') => Some(TableCellSpan::Colspan),
+        _ => None,
+    });
+    rows.iter()
+        .zip(markers)
+        .zip(spans)
+        .map(|((cells, markers), spans)| {
             cells
                 .iter()
-                .map(|cell| GridEntry {
+                .zip(markers)
+                .zip(spans)
+                .map(|((cell, marker), span)| GridEntry {
                     cell,
-                    marker: marker_of(cell),
-                    rowspan: 1,
-                    colspan: 1,
-                    skip: false,
+                    marker,
+                    rowspan: span.rowspan,
+                    colspan: span.colspan,
+                    skip: span.skip,
                 })
                 .collect()
         })
-        .collect();
-
-    // Per SOURCE column, the last row index (above the current one) whose cell is
-    // not skipped - the nearest source a `^` can extend.
-    let mut last_non_skip: Vec<Option<usize>> = Vec::new();
-    let mut colspan_origins: Vec<Vec<Option<usize>>> = vec![Vec::new(); grid.len()];
-    for r in 0..grid.len() {
-        let cols = grid[r].len();
-        let mut last_visible: Option<usize> = None;
-        for c in 0..cols {
-            if grid[r][c].skip {
-                continue;
-            }
-            let marker = grid[r][c].marker;
-
-            if marker == Some('^') && r > 0 {
-                let up = last_non_skip.get(c).copied().flatten();
-                let has_source = matches!(up, Some(u) if u < grid.len() && c < grid[u].len());
-                let consumed_source = matches!(up, Some(u) if grid[u][c].skip);
-                let covered_by_visible_span = consumed_source
-                    && up.is_some_and(|u| {
-                        colspan_origins[u]
-                            .get(c)
-                            .copied()
-                            .flatten()
-                            .is_some_and(|left| {
-                                left + grid[u][left].colspan > c && u + grid[u][left].rowspan > r
-                            })
-                    });
-                if has_source && (!consumed_source || covered_by_visible_span) {
-                    let u = up.unwrap();
-                    grid[u][c].rowspan += 1;
-                    grid[r][c].skip = true;
-                }
-            } else if marker == Some('<') && c > 0 {
-                if let Some(left) = last_visible {
-                    grid[r][left].colspan += 1;
-                    grid[r][c].skip = true;
-                    if colspan_origins[r].is_empty() {
-                        colspan_origins[r].resize(cols, None);
-                    }
-                    colspan_origins[r][c] = Some(left);
-                }
-            }
-            if !grid[r][c].skip {
-                last_visible = Some(c);
-            }
-
-            // A consumed colspan position still covers this source column.
-            // A caret below it is absorbed into that invisible position.
-            if !grid[r][c].skip || marker == Some('<') {
-                if c >= last_non_skip.len() {
-                    last_non_skip.resize(c + 1, None);
-                }
-                last_non_skip[c] = Some(r);
-            }
-        }
-    }
-
-    grid
+        .collect()
 }
 
 fn list_table_columns(attrs: Option<&Attrs>) -> Vec<(Option<&str>, Option<&str>, Option<f64>)> {
@@ -849,7 +793,7 @@ fn table_attrs(attrs: Option<&Attrs>, ctx: &RenderContext<'_>) -> String {
         emit_id(&mut out);
         emit_class(&mut out);
         for (key, value) in &attrs.key_values {
-            if !is_consumed(key) && !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+            if !is_consumed(key) && crate::render::writes_authored_key(key) {
                 out.push_str(&format!(
                     " {}=\"{}\"",
                     ctx.escape_attr(key),
@@ -866,7 +810,7 @@ fn table_attrs(attrs: Option<&Attrs>, ctx: &RenderContext<'_>) -> String {
             AttrSlot::Key(key) => {
                 if !is_consumed(key) {
                     if let Some(value) = attrs.key_values.get(key) {
-                        if !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+                        if crate::render::writes_authored_key(key) {
                             out.push_str(&format!(
                                 " {}=\"{}\"",
                                 ctx.escape_attr(key),
@@ -917,7 +861,7 @@ fn cell_attrs(attrs: Option<&Attrs>, ctx: &RenderContext<'_>) -> String {
         emit_id(&mut out);
         emit_class(&mut out);
         for (key, value) in &attrs.key_values {
-            if !is_span(key) && !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+            if !is_span(key) && crate::render::writes_authored_key(key) {
                 out.push_str(&format!(
                     " {}=\"{}\"",
                     ctx.escape_attr(key),
@@ -934,7 +878,7 @@ fn cell_attrs(attrs: Option<&Attrs>, ctx: &RenderContext<'_>) -> String {
             AttrSlot::Key(key) => {
                 if !is_span(key) {
                     if let Some(value) = attrs.key_values.get(key) {
-                        if !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+                        if crate::render::writes_authored_key(key) {
                             out.push_str(&format!(
                                 " {}=\"{}\"",
                                 ctx.escape_attr(key),

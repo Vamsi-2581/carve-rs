@@ -525,7 +525,7 @@
   },
   {
     "source": ">  - ::: box\n>    body\n> - next\n>    :::\n- tail\n",
-    "html": "<blockquote><ul><li><div class=\"box\"><p>body</p></div></li></ul><ul><li>next\n      <div></div></li></ul><p>- tail</p></blockquote>"
+    "html": "<blockquote><ul><li><div class=\"box\"><p>body</p></div></li></ul><ul><li>next\n      <div></div></li></ul></blockquote><ul><li>tail</li></ul>"
   },
   {
     "source": "> - a\n>    - ::: box\n>      body\n>   - next\n>      :::\n- tail\n",
@@ -533,7 +533,7 @@
   },
   {
     "source": "> - ::: |\n>   ```\n>   code\n>   ```\n- tail\n",
-    "html": "<blockquote><ul><li><div class=\"line-block\"><p><code>\ncode\n</code></p></div></li></ul></blockquote><ul><li>tail</li></ul>"
+    "html": "<blockquote><ul><li><div class=\"line-block\"><p><code>\ncode\n</code><br>\n- tail</p></div></li></ul></blockquote>"
   },
   {
     "source": "> - ::: |\n>   roses\n>   :::\n- tail\n",
@@ -541,11 +541,11 @@
   },
   {
     "source": ">   - a\n>\n> para\n>\n> -    :::\n>   body\n>      :::\n- tail\n",
-    "html": "<blockquote><ul><li>a</li></ul><p>para</p><ul><li>:::\nbody\n      <div></div></li></ul></blockquote><ul><li>tail</li></ul>"
+    "html": "<blockquote><ul><li>a</li></ul><p>para</p><ul><li><div></div></li></ul><p>body\n:::\n- tail</p></blockquote>"
   },
   {
     "source": "> -    :::\n>   body\n>      :::\n- tail\n",
-    "html": "<blockquote><ul><li>:::\nbody\n      <div></div></li></ul></blockquote><ul><li>tail</li></ul>"
+    "html": "<blockquote><ul><li><div></div></li></ul><p>body\n:::\n- tail</p></blockquote>"
   },
   {
     "source": "> %%%\n> x\n> %%%\n> :::\n- tail\n",

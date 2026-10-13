@@ -43,6 +43,7 @@ pub(crate) enum MarkdownLossKind {
     RawSpanWhitespaceTrimmed,
     /// PART 11 §10s: a carrier marker set that records no structure.
     CarrierMarkersDamaged,
+    CarrierMarkerDropped,
     RawCodeFallback,
 }
 
@@ -187,10 +188,72 @@ pub(crate) fn markdown_to_carve_with_losses(
     // conversion and written back as the Carve line it is afterwards, so the
     // Markdown reading in between never sees a comment it would carry across as
     // raw HTML.
-    let lift = crate::carrier_markers::lift_carrier_markers(markdown);
+    markdown_to_carve_with_carriers(markdown, true)
+}
+
+fn markdown_to_carve_with_carriers(
+    markdown: &str,
+    enabled: bool,
+) -> Result<(String, Vec<MarkdownImportLoss>, Vec<FrontmatterNotice>), crate::RenderCarveError> {
+    let inline = if enabled {
+        crate::inline_carriers::InlineCarriers::prepare(markdown)
+    } else {
+        crate::inline_carriers::InlineCarriers::plain(markdown)
+    };
+    let lift = if enabled {
+        crate::carrier_markers::lift_carrier_markers(&inline.source)
+    } else {
+        let mut lift = crate::carrier_markers::lift_carrier_markers("");
+        lift.source = markdown.to_owned();
+        lift
+    };
+    if enabled && lift.damaged {
+        let (value, mut losses, notices) = markdown_to_carve_with_carriers(markdown, false)?;
+        losses.push(MarkdownImportLoss {
+            message: CARRIER_MARKERS_DAMAGED.to_owned(),
+            line: None,
+            kind: MarkdownLossKind::CarrierMarkersDamaged,
+        });
+        return Ok((value, losses, notices));
+    }
+    let finish = |value: String,
+                  mut losses: Vec<MarkdownImportLoss>,
+                  notices: Vec<FrontmatterNotice>| {
+        let source = crate::carrier_markers::restore_carrier_markers(&value, &lift);
+        let (restored, dropped) = inline.restore(&source);
+        if let Some(value) = restored {
+            losses.extend(
+                dropped
+                    .into_iter()
+                    .map(|(line, message)| MarkdownImportLoss {
+                        message,
+                        line: Some(line),
+                        kind: MarkdownLossKind::CarrierMarkersDamaged,
+                    }),
+            );
+            Ok((value, losses, notices))
+        } else {
+            let (value, mut losses, notices) = markdown_to_carve_with_carriers(markdown, false)?;
+            losses.push(MarkdownImportLoss {
+                message: CARRIER_MARKERS_DAMAGED.to_owned(),
+                line: None,
+                kind: MarkdownLossKind::CarrierMarkersDamaged,
+            });
+            Ok((value, losses, notices))
+        }
+    };
     let mut code_lines = Vec::new();
     let (mut document, mut losses, notices) =
         markdown_to_ast_with_code_lines(&lift.source, Some(&mut code_lines), Some(&lift.token))?;
+    losses.extend(
+        lift.dropped
+            .iter()
+            .map(|(line, message)| MarkdownImportLoss {
+                message: message.clone(),
+                line: Some(*line),
+                kind: MarkdownLossKind::CarrierMarkerDropped,
+            }),
+    );
     if lift.damaged {
         losses.push(MarkdownImportLoss {
             message: CARRIER_MARKERS_DAMAGED.to_owned(),
@@ -228,11 +291,7 @@ pub(crate) fn markdown_to_carve_with_losses(
             if expected_code.is_empty()
                 || expected_code == crate::parse::parse(&value).markdown_code_values() =>
         {
-            Ok((
-                crate::carrier_markers::restore_carrier_markers(&value, &lift),
-                losses,
-                notices,
-            ))
+            finish(value, losses, notices)
         }
         Ok(_) | Err(crate::RenderCarveError::SourceUnspellable(_)) => {
             losses.extend(preserve_html_code_for_writing(
@@ -266,11 +325,7 @@ pub(crate) fn markdown_to_carve_with_losses(
                     ),
                 ));
             }
-            Ok((
-                crate::carrier_markers::restore_carrier_markers(&value, &lift),
-                losses,
-                notices,
-            ))
+            finish(value, losses, notices)
         }
         Err(error) => Err(error),
     }
@@ -695,8 +750,20 @@ fn markdown_to_ast_with_code_lines(
         .as_ref()
         .map_or(&[][..], |prepared| prepared.1.as_slice());
     let mut bare_url_at = 0;
-    let mut parser = Parser::new_ext(parser_source, options).into_offset_iter();
+    let strikes = crate::markdown_strike::prepare(parser_source, options);
+    let mut reference = |link| strikes.reference(link);
+    let mut parser =
+        Parser::new_with_broken_link_callback(&strikes.text, options, Some(&mut reference))
+            .into_offset_iter();
     while let Some((mut event, range)) = parser.next() {
+        if strikes.synthetic_comment(&event, &range) {
+            continue;
+        }
+        let mut range = strikes.original_range(range);
+        if let Some(literal) = crate::markdown_strike::literal_underscore(&source, &event, &range) {
+            event = Event::Text(source[literal.clone()].into());
+            range = literal;
+        }
         builder.current_line =
             claimed_lines + line_starts.partition_point(|start| *start <= range.start);
         if let Some((kept, rest)) = text_end.take().and_then(|end| {
@@ -772,10 +839,12 @@ fn markdown_to_ast_with_code_lines(
                             .count(),
                     )
                 } else {
-                    parser
-                        .reference_definitions()
-                        .get(id)
-                        .is_some_and(|definition| definition.title.is_some())
+                    strikes.reference_has_title(&range).unwrap_or_else(|| {
+                        parser
+                            .reference_definitions()
+                            .get(id)
+                            .is_some_and(|definition| definition.title.is_some())
+                    })
                 }
             }
             _ => false,

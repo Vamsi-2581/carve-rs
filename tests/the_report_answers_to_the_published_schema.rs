@@ -91,6 +91,39 @@ const KNOWN_KEYWORDS: &[&str] = &[
     "minimum",
 ];
 
+/// Every keyword a schema node uses, walking only the subschema positions this
+/// validator descends into, so a property NAME is never mistaken for a keyword.
+fn keywords_in(schema: &Value, found: &mut Vec<String>) {
+    let Some(object) = schema.as_object() else {
+        return;
+    };
+    found.extend(object.keys().cloned());
+    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+        properties.values().for_each(|sub| keywords_in(sub, found));
+    }
+    for key in ["items", "additionalProperties"] {
+        if let Some(sub) = object.get(key) {
+            keywords_in(sub, found);
+        }
+    }
+}
+
+/// The reverse direction: a listed keyword the schema no longer uses is a
+/// stale entry, not a capability.
+#[test]
+fn every_listed_keyword_is_still_used_by_the_schema() {
+    let mut used = Vec::new();
+    keywords_in(&schema(), &mut used);
+    let stale: Vec<&&str> = KNOWN_KEYWORDS
+        .iter()
+        .filter(|keyword| !used.iter().any(|u| u == *keyword))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "KNOWN_KEYWORDS lists {stale:?}, which html-import-schema.json no longer uses: delete the stale entry"
+    );
+}
+
 /// Validate `instance` against `schema`, collecting human-readable failures.
 fn validate(schema: &Value, instance: &Value, path: &str, errors: &mut Vec<String>) {
     let object = schema

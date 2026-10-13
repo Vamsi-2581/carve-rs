@@ -985,6 +985,9 @@ impl Renderer<'_> {
             || content.ends_with([' ', '\t', '\r', '\n'])
             || content.starts_with(delimiter)
             || content.ends_with(delimiter)
+            || (delimiter == '/'
+                && (pair.start.checked_sub(1).and_then(|at| bytes.get(at)) == Some(&b'/')
+                    || bytes.get(pair.end) == Some(&b'/')))
             || (delimiter == '/' && content.starts_with('*') && content.ends_with('*'));
         if forced {
             format!(

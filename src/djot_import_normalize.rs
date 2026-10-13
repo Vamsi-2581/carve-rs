@@ -118,6 +118,7 @@ pub(super) fn blocks_with_list_attributes(
     let mut in_heading = false;
     let mut in_quote = false;
     let mut quote_paragraph_depth = None;
+    let mut quote_paragraph_item_column = None;
     let mut quote_attribute_depth = None;
     let mut moved_quote_attributes = None;
     let mut pending_item_attributes: Vec<(usize, usize, String)> = Vec::new();
@@ -303,9 +304,7 @@ pub(super) fn blocks_with_list_attributes(
             quote_paragraph_depth = None;
             paragraph = false;
         }
-        if quoted(raw).0 > 0
-            && (in_quote || !paragraph || n > 0 && masks[n - 1].trim_start().starts_with('>'))
-        {
+        if quoted(raw).0 > 0 && (in_quote || !paragraph) {
             let (depth, body) = quoted(raw);
             let block_body = body.trim_start();
             if rejected_comment_starts_block(block_body) {
@@ -355,9 +354,15 @@ pub(super) fn blocks_with_list_attributes(
                 );
                 quote_paragraph_depth = None;
             }
-            if let Some(held) =
-                quote_paragraph_depth.filter(|&held| depth > held && !body.trim().is_empty())
-            {
+            if let Some(held) = quote_paragraph_depth.filter(|&held| {
+                depth > held
+                    && !body.trim().is_empty()
+                    && !quote_paragraph_item_column.is_some_and(|(item_depth, column)| {
+                        item_depth == held
+                            && djot_attribute_line(raw, held)
+                                .is_some_and(|content| leading_indent(content).0 <= column)
+                    })
+            }) {
                 let mut at = 0;
                 for _ in 0..held {
                     let rest = &raw[at..];
@@ -366,6 +371,7 @@ pub(super) fn blocks_with_list_attributes(
                         at += 1;
                     }
                 }
+                at += raw[at..].len() - raw[at..].trim_start_matches([' ', '\t']).len();
                 let mut literal = display.clone();
                 let at = if target_indent == indent {
                     at
@@ -387,9 +393,27 @@ pub(super) fn blocks_with_list_attributes(
             quote_paragraph_depth = (!body.trim().is_empty()
                 && !attribute_only
                 && !heading.is_match(block_body)
-                && !marker.is_match(block_body)
+                && (!marker.is_match(block_body)
+                    || marker.find(block_body).is_some_and(|item| {
+                        let content = block_body[item.end()..].trim_start();
+                        !content.is_empty()
+                            && !heading.is_match(content)
+                            && !(thematic(content)
+                                && !(content.contains('*') && content.contains('-')))
+                            && !rows[n]
+                            && !content.starts_with(['>', ':', '`', '~', '{'])
+                    }))
                 && !block_body.starts_with(":::"))
             .then_some(depth.max(quote_paragraph_depth.unwrap_or(depth)));
+            quote_paragraph_item_column = if quote_paragraph_depth.is_some() {
+                if marker.is_match(block_body) {
+                    Some((depth, leading_indent(body).0))
+                } else {
+                    quote_paragraph_item_column.filter(|&(item_depth, _)| item_depth == depth)
+                }
+            } else {
+                None
+            };
             result.push(if attribute_depth < depth {
                 format!(
                     "{}{}{}",

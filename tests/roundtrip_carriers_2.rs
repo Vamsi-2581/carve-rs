@@ -128,39 +128,31 @@ fn shared_code_label_is_consumed_in_every_html_mode_and_spelling() {
 }
 
 #[test]
-fn damaged_new_marker_sets_fall_back_once_without_partial_restoration() {
-    for markdown in [
-        "<!-- carve: {#id} -->\n\n# heading\n",
-        "<!-- carve: {.c} -->\n<!-- carve: {.d} -->\nbody\n",
-        "<!-- carve: {#id} -->\n",
-        "<!-- carve: :: Term -->\n**Term**\n\n<!-- carve: -->\n",
-        "<!-- carve: : -->\nbody\n<!-- carve: -->\n",
-        "<!-- carve: :: Term -->\n**Term**\n\n<!-- carve: : -->\nbody\n",
-        "<!-- carve: ^ Caption -->\nCaption\n",
-        "<!-- carve: -->\n",
-        "```\nx\n```\n<!-- carve: ^ -->\nrendered\n",
-        "```\nx\n```\n<!-- carve: ^ First -->\n![image](x.png)\n\n<!-- carve: ^ Second -->\nSecond\n",
-        "plain paragraph\n\n<!-- carve: ^ Caption -->\nCaption\n",
-        "text ![image](x.png)\n\n<!-- carve: ^ Caption -->\nCaption\n",
-        "<!-- carve: ::: note -->\nbody\n<!-- carve: ::: -->\n<!-- carve: ^ Caption -->\nCaption\n",
-        "<!-- carve: :: Term -->\n**Term**\n\n<!-- carve: : -->\nbody\n\n<!-- carve: : -->\n<!-- carve: -->\n",
-
-        "```\nx\n```\n\n<!-- carve: ^ Caption -->\nCaption\n\n<!-- carve: ^ Again -->\nAgain\n",
-        "<!-- carve: ::: | -->\nline\n",
-    ] {
-        let result = carve::migrate_markdown(markdown);
+fn new_marker_sets_match_the_reference_recovery() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/previous_marker_recovery_wave.json")).unwrap();
+    for row in rows.as_array().unwrap() {
+        let source = row["source"].as_str().unwrap();
+        let result = carve::migrate_markdown(source);
+        let codes: Vec<_> = result
+            .report
+            .diagnostics
+            .iter()
+            .map(|row| row.code.as_str())
+            .filter(|code| code.starts_with("carrier-"))
+            .collect();
+        let expected: Vec<_> = row["codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|code| code.as_str().unwrap())
+            .collect();
+        assert_eq!(codes, expected, "{source}: {:?}", result.report);
         assert_eq!(
-            result
-                .report
-                .diagnostics
-                .iter()
-                .filter(|row| row.code == "carrier-markers-damaged")
-                .count(),
-            1,
-            "{markdown}: {:?}",
-            result.report
+            carve::to_html(&result.value),
+            carve::to_html(row["imported"].as_str().unwrap()),
+            "{source}"
         );
-        assert!(result.value.contains("<!-- carve:"), "{}", result.value);
         assert!(!result.value.contains("CARVECARRIER"));
     }
 }
@@ -219,7 +211,18 @@ fn html_label_validation_precedence_and_attribute_placement() {
             mode,
             ..Default::default()
         };
-        for bad in ["", "bad]label", "line&#10;break", "line&#13;break"] {
+        let empty = carve::html_to_carve(
+            "<pre data-carve-label=\"\"><code>x\n</code></pre>",
+            &options,
+        )
+        .unwrap();
+        let carve::BlockNode::CodeBlock(code) = &carve::parse(&empty.value).children[0] else {
+            panic!("{}", empty.value);
+        };
+        assert_eq!(code.label.as_deref(), Some(""));
+        assert!(empty.report.diagnostics.is_empty());
+
+        for bad in ["bad]label", "line&#10;break", "line&#13;break"] {
             let html = format!("<pre data-carve-label=\"{bad}\"><code>x\n</code></pre>");
             let imported = carve::html_to_carve(&html, &options).unwrap();
             let carve::BlockNode::CodeBlock(code) = &carve::parse(&imported.value).children[0]
@@ -336,25 +339,30 @@ fn definitions_keep_verbatim_lines_and_container_bodies() {
 }
 
 #[test]
-fn fence_titles_already_present_in_markdown_take_no_attribute_marker() {
+fn fence_titles_take_a_marker_after_any_attribute_marker() {
     let options = Options::default().with_roundtrip(true);
+    let plain = carve::to_markdown_with_options("```rs \"file.rs\"\nx\n```\n", &options);
     assert!(
-        !carve::to_markdown_with_options("```rs \"file.rs\"\nx\n```\n", &options)
-            .contains("<!-- carve:")
+        plain.starts_with("<!-- carve: ```rs \"file.rs\" -->\n"),
+        "{plain}"
     );
     let exported =
         carve::to_markdown_with_options("{.code}\n```rs \"file.rs\"\nx\n```\n", &options);
     assert!(exported.contains("<!-- carve: {.code} -->"), "{exported}");
+    assert!(
+        exported.contains("<!-- carve: ```rs \"file.rs\" -->"),
+        "{exported}"
+    );
 }
 
 #[test]
-fn definition_carriers_cover_only_the_outer_list_and_keep_its_attributes() {
+fn definition_carriers_keep_nested_lists_and_outer_attributes() {
     let options = Options::default().with_roundtrip(true);
     for (source, expected, restored) in [
         (
             ":: Carve\n: A markup language.\n  :: inner\n  : def\n",
-            "<!-- carve: :: Carve -->\n**Carve**\n\n<!-- carve: : -->\nA markup language.\n\n**inner**\n\ndef\n\n<!-- carve: -->\n",
-            ":: Carve\n: A markup language.\n\n  *inner*\n\n  def\n",
+            "<!-- carve: :: Carve -->\n**Carve**\n\n<!-- carve: : -->\nA markup language.\n\n<!-- carve:2 :: inner -->\n**inner**\n\n<!-- carve:2 : -->\ndef\n\n<!-- carve:2 -->\n\n<!-- carve: -->\n",
+            ":: Carve\n: A markup language.\n  :: inner\n  : def\n",
         ),
         (
             ":: Carve\n: A markup language.\n",
@@ -382,6 +390,7 @@ fn marker_placeholders_preserve_breaks_and_list_equation_figures() {
         ("{.x}\n---\n", "{.x}\n---\n"),
         ("{.x}\n***\n", "{.x}\n---\n"),
         ("- {.x}\n  $$`x`\n  ^ Cap\n", "- {.x}\n  $$`x`\n  ^ Cap\n"),
+        ("- $$`x`\n  ^ Cap\n", "- $$`x`\n  ^ Cap\n"),
     ] {
         let exported =
             carve::to_markdown_with_options(source, &Options::default().with_roundtrip(true));

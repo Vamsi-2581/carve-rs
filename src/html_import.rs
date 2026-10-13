@@ -1579,18 +1579,6 @@ impl<'a> Importer<'a> {
         }
     }
 
-    /// Whether `id` sits where `render_heading` writes a GENERATED one: after
-    /// every authored attribute. `data-source-line` is the one thing that
-    /// follows it, because that is a render annotation rather than an authored
-    /// attribute and `render_heading` emits it last on purpose.
-    fn id_in_generated_position(handle: &Handle) -> bool {
-        let mut names = Self::element_attr_names(handle);
-        while names.last().is_some_and(|name| name == "data-source-line") {
-            names.pop();
-        }
-        names.last().is_some_and(|name| name == "id")
-    }
-
     /// Whether `id` is a value the renderer would derive for a heading whose
     /// plain-text projection is `text`.
     ///
@@ -1958,6 +1946,12 @@ impl<'a> Importer<'a> {
         let Some(canonical) = crate::roundtrip::canonical(name) else {
             return false;
         };
+        // §13d: a contradicting pair is consumed whole and restores nothing.
+        if Self::contradictory_carriers(handle, tag, mode)
+            .is_some_and(|(a, b)| canonical == a || canonical == b)
+        {
+            return true;
+        }
         match canonical {
             crate::roundtrip::MARKER => match tag {
                 "ul" => Self::reads_bullet_char(handle).is_some(),
@@ -1966,24 +1960,142 @@ impl<'a> Importer<'a> {
             },
             crate::roundtrip::CHAR => tag == "hr" && Self::reads_break_char(handle).is_some(),
             crate::roundtrip::REF => {
+                // An invalid label beside a standing autolink never reaches
+                // `reference_label`, so the attribute walk is what reports it.
                 matches!(tag, "a" | "img")
                     && Self::attr(handle, name).is_some_and(|v| !v.is_empty())
+                    && !(tag == "a" && Self::reads_autolink(handle))
             }
             crate::roundtrip::EXPLICIT_ID => {
                 matches!(tag, "section" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
                     && Self::reads_explicit_id(handle)
             }
             crate::roundtrip::AUTOLINK => tag == "a" && Self::reads_autolink(handle),
+            crate::roundtrip::XREF => tag == "a" && Self::reads_xref(handle),
+            crate::roundtrip::CAPTION_NUMBER => tag == "span" && Self::reads_caption_number(handle),
             crate::roundtrip::RAW => {
                 tag == "span" && Self::reads_raw_format(handle, mode).is_some()
             }
-            crate::roundtrip::ESCAPED => tag == "span" && Self::reads_escaped(handle).is_some(),
+            crate::roundtrip::ESCAPED => {
+                tag == "span" && Self::reads_escaped(handle, mode).is_some()
+            }
             crate::roundtrip::LABEL => tag == "pre" && Self::reads_code_label(handle).is_some(),
             crate::roundtrip::COL_WIDTHS => {
                 tag == "table" && Self::reads_separator_widths(handle).is_some()
             }
+            crate::roundtrip::GENERATED_ID => {
+                matches!(tag, "section" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+                    && Self::reads_generated_section(handle)
+            }
+            crate::roundtrip::ID_SLOT => {
+                tag == "section"
+                    && Self::reads_explicit_id(handle)
+                    && Self::reads_id_slot(handle).is_some()
+            }
+            crate::roundtrip::TIGHT => {
+                matches!(tag, "ul" | "ol") && Self::reads_tight(handle).is_some()
+            }
             _ => false,
         }
+    }
+
+    /// The two carriers on this element that contradict each other, where both
+    /// values are valid (PART 10 §13d). The footnote pair is resolved where the
+    /// endnotes are collected.
+    fn contradictory_carriers(
+        handle: &Handle,
+        tag: &str,
+        mode: HtmlImportMode,
+    ) -> Option<(&'static str, &'static str)> {
+        use crate::roundtrip::{
+            AUTOLINK, ESCAPED, EXPLICIT_ID, FOOTNOTE_LABEL, GENERATED_ID, RAW, REF, XREF,
+        };
+        if tag == "a" && Self::carries_xref(handle) {
+            if Self::carries_valid_ref(handle) {
+                return Some((XREF, REF));
+            }
+            if Self::carries_autolink(handle) {
+                return Some((XREF, AUTOLINK));
+            }
+            if Self::carrier(handle, FOOTNOTE_LABEL)
+                .is_some_and(|label| valid_footnote_carrier_label(&label))
+            {
+                return Some((XREF, FOOTNOTE_LABEL));
+            }
+        }
+        match tag {
+            "a" if Self::carries_autolink(handle) && Self::carries_valid_ref(handle) => {
+                Some((AUTOLINK, REF))
+            }
+            "section" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                if Self::carries_generated_section(handle) && Self::carries_explicit_id(handle) =>
+            {
+                Some((GENERATED_ID, EXPLICIT_ID))
+            }
+            "span"
+                if Self::carries_escaped(handle).is_some()
+                    && Self::carries_raw_format(handle, mode).is_some() =>
+            {
+                Some((ESCAPED, RAW))
+            }
+            _ => None,
+        }
+    }
+
+    /// One warning for a contradicting pair, which the attribute walk then
+    /// consumes without a row of its own.
+    fn report_contradictory_carriers(&mut self, handle: &Handle, tag: &str, path: &str) {
+        let Some((a, b)) = Self::contradictory_carriers(handle, tag, self.opts.mode) else {
+            return;
+        };
+        self.diag(
+            HtmlImportDiagnosticCode::AttributeDropped,
+            format!("Dropped contradictory {a} and {b} carriers on <{tag}>"),
+            HtmlImportSeverity::Warning,
+            path,
+            handle,
+        );
+    }
+
+    /// Presence marks a generated id on a heading or its wrapper.
+    fn carries_generated_section(handle: &Handle) -> bool {
+        Self::carrier(handle, crate::roundtrip::GENERATED_ID).is_some()
+    }
+
+    /// A generated-id carrier applies unless explicit-id contradicts it.
+    fn reads_generated_section(section: &Handle) -> bool {
+        Self::carries_generated_section(section) && !Self::carries_explicit_id(section)
+    }
+
+    /// The authored id slot is decimal and bounded by the heading attributes.
+    fn reads_id_slot(section: &Handle) -> Option<usize> {
+        if !Self::reads_explicit_id(section) {
+            return None;
+        }
+        let value = Self::carrier(section, crate::roundtrip::ID_SLOT)?;
+        let slot = (!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| value.parse::<usize>().ok())
+            .flatten()?;
+        let heading = section
+            .children
+            .borrow()
+            .iter()
+            .find(|child| {
+                Self::tag(child).is_some_and(|tag| {
+                    matches!(tag.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+                })
+            })
+            .cloned()?;
+        let count = Self::element_attr_names(&heading)
+            .iter()
+            .filter(|name| name.as_str() != "id" && crate::roundtrip::canonical(name).is_none())
+            .count();
+        (slot <= count).then_some(slot)
+    }
+
+    /// Presence takes precedence over paragraph wrappers in the items.
+    fn reads_tight(list: &Handle) -> Option<bool> {
+        Self::carrier(list, crate::roundtrip::TIGHT).map(|_| true)
     }
 
     fn reads_code_label(pre: &Handle) -> Option<String> {
@@ -1996,7 +2108,7 @@ impl<'a> Importer<'a> {
             return None;
         }
         Self::carrier(pre, crate::roundtrip::LABEL)
-            .filter(|label| !label.is_empty() && !label.contains([']', '\r', '\n']))
+            .filter(|label| !label.contains([']', '\r', '\n']))
     }
 
     /// The `<table data-carve-col-widths>` separator row, comma-joined.
@@ -2044,6 +2156,10 @@ impl<'a> Importer<'a> {
 
     /// Presence distinguishes an authored ID from a generated heading slug.
     fn reads_explicit_id(handle: &Handle) -> bool {
+        Self::carries_explicit_id(handle) && !Self::carries_generated_section(handle)
+    }
+
+    fn carries_explicit_id(handle: &Handle) -> bool {
         Self::carrier(handle, crate::roundtrip::EXPLICIT_ID).is_some()
             && Self::attr(handle, "id").is_some_and(|id| !id.is_empty())
     }
@@ -2051,13 +2167,49 @@ impl<'a> Importer<'a> {
     /// Whether the anchor was authored as an autolink. A PRESENCE carrier, so
     /// the value is not compared (§13a), but an anchor with no destination has
     /// no autolink to be.
+    fn carries_xref(handle: &Handle) -> bool {
+        Self::carrier(handle, crate::roundtrip::XREF).is_some()
+            && Self::attr(handle, "href").is_some_and(|href| {
+                href.strip_prefix('#')
+                    .is_some_and(|id| !id.is_empty() && !id.contains(['>', ' ', '\r', '\n']))
+            })
+    }
+
+    fn reads_xref(handle: &Handle) -> bool {
+        Self::carries_xref(handle)
+            && Self::contradictory_carriers(handle, "a", HtmlImportMode::Safe).is_none()
+    }
+
+    fn reads_caption_number(handle: &Handle) -> bool {
+        Self::carrier(handle, crate::roundtrip::CAPTION_NUMBER).is_some()
+            && matches!(&handle.data, NodeData::Element { attrs, .. } if attrs.borrow().iter().all(|attr| crate::roundtrip::canonical(attr.name.local.as_ref()) == Some(crate::roundtrip::CAPTION_NUMBER)))
+            && handle
+                .children
+                .borrow()
+                .iter()
+                .all(|child| matches!(child.data, NodeData::Text { .. }))
+    }
+
     fn reads_autolink(a: &Handle) -> bool {
+        Self::carries_autolink(a) && !Self::carries_valid_ref(a) && !Self::carries_xref(a)
+    }
+
+    fn carries_valid_ref(handle: &Handle) -> bool {
+        Self::carrier(handle, crate::roundtrip::REF)
+            .is_some_and(|label| crate::parse::reference_label_has_definition_spelling(&label))
+    }
+
+    fn carries_autolink(a: &Handle) -> bool {
         Self::carrier(a, crate::roundtrip::AUTOLINK).is_some()
             && Self::attr(a, "href").is_some_and(|href| !href.is_empty())
     }
 
     /// The `<span data-carve-raw>` format, where the value spells one.
     fn reads_raw_format(span: &Handle, mode: HtmlImportMode) -> Option<String> {
+        Self::carries_raw_format(span, mode).filter(|_| Self::carries_escaped(span).is_none())
+    }
+
+    fn carries_raw_format(span: &Handle, mode: HtmlImportMode) -> Option<String> {
         Self::carrier(span, crate::roundtrip::RAW)
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
@@ -2069,7 +2221,12 @@ impl<'a> Importer<'a> {
     /// ONE ESCAPE PER ELEMENT (ruling markup-carve/carve#2902 question 4): a
     /// multi-character payload reassembled as `\a\b\c`, which is not valid
     /// Carve, so a span holding a run is not this carrier and keeps its text.
-    fn reads_escaped(span: &Handle) -> Option<String> {
+    fn reads_escaped(span: &Handle, mode: HtmlImportMode) -> Option<String> {
+        // A raw format this mode declines is no carrier and contradicts nothing.
+        Self::carries_escaped(span).filter(|_| Self::carries_raw_format(span, mode).is_none())
+    }
+
+    fn carries_escaped(span: &Handle) -> Option<String> {
         Self::carrier(span, crate::roundtrip::ESCAPED)?;
         let text = Self::text(span);
         single_char(&text).map(|c| c.to_string())
@@ -2083,6 +2240,12 @@ impl<'a> Importer<'a> {
         path: &str,
     ) -> Option<String> {
         let label = Self::carrier(h, crate::roundtrip::REF)?;
+        if Self::tag(h).as_deref() == Some("a")
+            && (Self::carries_autolink(h) || Self::carries_xref(h))
+        {
+            // §13d: it contradicts the autolink carrier, and `attrs` reported the pair.
+            return None;
+        }
         let valid = crate::parse::reference_label_has_definition_spelling(&label);
         if !valid {
             self.diag(
@@ -2210,6 +2373,7 @@ impl<'a> Importer<'a> {
 
     fn attrs(&mut self, handle: &Handle, path: &str) -> Option<Attrs> {
         let tag = Self::tag(handle).unwrap_or_default();
+        self.report_contradictory_carriers(handle, &tag, path);
         let mut out = Attrs::default();
         // The keys a mapped declaration fills, so a presentational `align` /
         // `valign` beside one can be refused wherever the source put it.
@@ -3029,28 +3193,19 @@ impl<'a> Importer<'a> {
                 return Ok(Vec::new());
             }
             if let Some(held) = attrs.as_mut().filter(|held| held.id.is_some()) {
-                if self.opts.mode == HtmlImportMode::Roundtrip
-                    && !Self::reads_explicit_id(h)
-                    && Self::id_in_generated_position(h)
-                    && held.id.as_deref().is_some_and(|id| {
-                        Self::is_generated_heading_id(id, &crate::render::plain_inlines(&inlines))
-                    })
-                {
-                    // The renderer derives it again from the same text, so
-                    // dropping it is the no-op `drop_derived` documents for
-                    // every other derived attribute. Carrying it would spell an
-                    // authored slot the source never had.
+                if Self::reads_generated_section(h) {
                     held.id = None;
-                } else if self.writing {
+                } else if self.writing || Self::reads_explicit_id(h) {
                     // Authored. A non-empty order is exhaustive, so every
                     // imported slot has to be carried - and carried in the
                     // element's OWN attribute order, which is the order the
                     // writer has to spell to render these bytes back.
                     //
-                    // ON THE WRITING EXIT ONLY. `order` is a source-layout
-                    // field and an import read no source, so the published tree
-                    // records none of them (markup-carve/carve#1647); see
-                    // `Importer::writing` for why the writer still needs it.
+                    // ON THE WRITING EXIT, OR WHERE A CARRIER RECORDED IT. `order`
+                    // is a source-layout field and an import read no source, so
+                    // the published tree records none (markup-carve/carve#1647)
+                    // unless the explicit-id carrier says the slot was authored;
+                    // see `Importer::writing` for why the writer needs it.
                     held.order = Self::slot_order_from_element(h, held);
                 }
             }
@@ -3370,13 +3525,15 @@ impl<'a> Importer<'a> {
                     pos: None,
                 });
             }
-            let tight = !list_items.iter().any(|li| self.holds_paragraph(li))
+            let implied = !list_items.iter().any(|li| self.holds_paragraph(li))
                 && !items.iter().any(|item| {
                     item.children.windows(2).any(|pair| {
                         matches!(pair[0], BlockNode::Paragraph(_))
                             && matches!(pair[1], BlockNode::Paragraph(_))
                     })
                 });
+            // PART 10 §13a `data-carve-tight` wins over what the `<p>`s imply.
+            let tight = Self::reads_tight(h).unwrap_or(implied);
             let start = if ordered {
                 Self::attr(h, "start")
                     .and_then(|s| s.parse().ok())
@@ -3707,7 +3864,7 @@ impl<'a> Importer<'a> {
         // between rows at the same position, and these are not.
         let mut blocks = self.blocks(&children, path, depth + 1)?;
         let mut attrs = attrs;
-        Self::restore_hoisted_section_id(h, &tag, &mut attrs, &mut blocks, self.writing);
+        self.restore_hoisted_section_id(h, &tag, &mut attrs, &mut blocks, path);
         // AN UNWRAPPED ELEMENT TAKES ITS ATTRIBUTES WITH IT. `<section
         // role="region">`, `<article>`, `<aside>`, `<main>`, `<nav>` and
         // `<form>` all land here and keep only their children. The keep list
@@ -3731,11 +3888,12 @@ impl<'a> Importer<'a> {
     /// Put a `<section id>` back on the heading the renderer hoisted it off
     /// (markup-carve/carve-rs#1380).
     fn restore_hoisted_section_id(
+        &mut self,
         handle: &Handle,
         tag: &str,
         attrs: &mut Option<Attrs>,
         blocks: &mut [BlockNode],
-        writing: bool,
+        path: &str,
     ) {
         if tag != "section" {
             return;
@@ -3760,28 +3918,58 @@ impl<'a> Importer<'a> {
         }
         held.id = None;
         let explicit = Self::reads_explicit_id(handle);
+        // PART 10 §13a `data-carve-generated-id` says generated outright; an
+        // unmarked wrapper falls back to comparing against the default slug.
         if !explicit
-            && Self::is_generated_heading_id(&id, &crate::render::plain_inlines(&heading.children))
+            && (Self::reads_generated_section(handle)
+                || Self::is_generated_heading_id(
+                    &id,
+                    &crate::render::plain_inlines(&heading.children),
+                ))
         {
             return;
         }
         let heading_attrs = heading.attrs.get_or_insert_with(Attrs::default);
         heading_attrs.id = Some(id);
-        // The source writer needs the authored ID slot to keep an equal slug.
-        // Published import trees carry no source-layout order.
-        if explicit && writing {
-            if heading_attrs.order.is_empty() {
-                if !heading_attrs.classes.is_empty() {
-                    heading_attrs.order.push(AttrSlot::Class);
-                }
-                heading_attrs
-                    .order
-                    .extend(heading_attrs.key_values.keys().cloned().map(AttrSlot::Key));
-            }
-            if !heading_attrs.order.contains(&AttrSlot::Id) {
-                heading_attrs.order.insert(0, AttrSlot::Id);
-            }
+        if !explicit {
+            return;
         }
+        // The carrier says the id took an authored slot, which the writer needs
+        // to keep an id equal to its slug and which `data-carve-id-slot` places.
+        // The other slots keep the order the heading element spells them in.
+        let element = handle.children.borrow().iter().find_map(|child| {
+            Self::tag(child)
+                .is_some_and(|tag| matches!(tag.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6"))
+                .then(|| child.clone())
+        });
+        let mut order: Vec<AttrSlot> = match &element {
+            Some(element) => Self::slot_order_from_element(element, heading_attrs),
+            None => heading_attrs.order.clone(),
+        };
+        order.retain(|slot| *slot != AttrSlot::Id);
+        if element.is_none() && order.is_empty() {
+            if !heading_attrs.classes.is_empty() {
+                order.push(AttrSlot::Class);
+            }
+            order.extend(heading_attrs.key_values.keys().cloned().map(AttrSlot::Key));
+        }
+        let slot = match Self::reads_id_slot(handle) {
+            Some(slot) if slot > order.len() => {
+                self.diag(
+                    HtmlImportDiagnosticCode::AttributeDropped,
+                    "Dropped data-carve-id-slot beyond the heading's surviving attribute count"
+                        .to_owned(),
+                    HtmlImportSeverity::Info,
+                    path,
+                    handle,
+                );
+                0
+            }
+            Some(slot) => slot,
+            None => 0,
+        };
+        order.insert(slot, AttrSlot::Id);
+        heading_attrs.order = order;
     }
     /// `<details>/<summary>` to a `details` admonition.
     #[allow(clippy::type_complexity)]
@@ -6597,6 +6785,29 @@ impl<'a> Importer<'a> {
             return self.code_span(h, path, depth, attrs);
         }
         let children = self.inlines(&h.children.borrow(), path, depth + 1)?;
+        if tag == "a" && Self::reads_xref(h) {
+            let node = InlineNode::CrossRef(CrossRef {
+                target: Self::attr(h, "href").unwrap()[1..].to_owned(),
+                href: None,
+                pos: None,
+            });
+            return Ok(if attrs.is_some() {
+                vec![InlineNode::Span(Span {
+                    attrs,
+                    children: vec![node],
+                    injected: false,
+                    pos: None,
+                })]
+            } else {
+                vec![node]
+            });
+        }
+        if tag == "span" && Self::reads_caption_number(h) {
+            return Ok(vec![InlineNode::CaptionNumber(CaptionNumber {
+                number: None,
+                pos: None,
+            })]);
+        }
         if tag == "span" {
             // AFTER the children have been walked, which is what keeps the
             // budget honest for free: `inlines` has already charged every node
@@ -6783,10 +6994,12 @@ impl<'a> Importer<'a> {
             // character and its presence says the author wrote the backslash,
             // so the import writes it back instead of letting the character
             // reparse as markup.
-            "span" if Self::reads_escaped(h).is_some() => InlineNode::EscapedText(EscapedText {
-                value: Self::reads_escaped(h).unwrap_or_default(),
-                pos: None,
-            }),
+            "span" if Self::reads_escaped(h, self.opts.mode).is_some() => {
+                InlineNode::EscapedText(EscapedText {
+                    value: Self::reads_escaped(h, self.opts.mode).unwrap_or_default(),
+                    pos: None,
+                })
+            }
             // PART 10 §13a `data-carve-raw`: the span carries the format and
             // holds the content, which is how a `=latex` run survives HTML.
             "span" if Self::reads_raw_format(h, self.opts.mode).is_some() => {
@@ -6834,6 +7047,16 @@ impl<'a> Importer<'a> {
                     injected: false,
                     pos: None,
                 })
+            }
+            // CARVE-P10-021: a generic-span carrier no branch above could read
+            // is consumed in every mode, so roundtrip unwraps it as safe does
+            // instead of keeping the reserved name in raw HTML.
+            "span"
+                if self.opts.mode == HtmlImportMode::Roundtrip
+                    && (Self::carrier(h, crate::roundtrip::RAW).is_some()
+                        || Self::carrier(h, crate::roundtrip::ESCAPED).is_some()) =>
+            {
+                return Ok(children);
             }
             _ if self.opts.mode == HtmlImportMode::Roundtrip
                 && !(self.cell_depth > 0 && Self::html(h).contains(['\r', '\n'])) =>
@@ -6961,6 +7184,7 @@ impl<'a> Importer<'a> {
             .map(|label| crate::parse::label_key(&label))
             .collect();
 
+        let mut labels_in_order = Vec::with_capacity(definitions.len());
         for (index, definition) in definitions.iter().enumerate() {
             let conflicting = conflicting_carriers.contains(&node_key(&definition.block));
             if conflicting {
@@ -7003,6 +7227,39 @@ impl<'a> Importer<'a> {
                 number.to_string()
             };
             used_labels.insert(crate::parse::label_key(&label));
+            labels_in_order.push(label);
+        }
+        debug_assert_eq!(labels_in_order.len(), definitions.len());
+        // Register every site before reading bodies that can reference later notes.
+        for (definition, label) in definitions.iter().zip(&labels_in_order) {
+            for reference in &definition.refs {
+                let site = footnote_reference_site(reference);
+                let attrs = if Self::tag(reference).as_deref() == Some("sup") {
+                    let mut attrs = self.attrs(reference, "footnote").unwrap_or_default();
+                    attrs.id = None;
+                    attrs.order.retain(|slot| !matches!(slot, AttrSlot::Id));
+                    (!attrs.classes.is_empty() || !attrs.key_values.is_empty()).then_some(attrs)
+                } else {
+                    None
+                };
+                self.footnote_refs.insert(
+                    node_key(&site),
+                    (
+                        site,
+                        Footnote {
+                            attrs,
+                            id: Some(label.clone()),
+                            inline: None,
+                            number: None,
+                            ref_id: None,
+                            pos: None,
+                        },
+                    ),
+                );
+            }
+        }
+        for (index, (definition, label)) in definitions.iter().zip(&labels_in_order).enumerate() {
+            let conflicting = conflicting_carriers.contains(&node_key(&definition.block));
             if index == 0 {
                 remove_footnote_separator(&definition.block);
             }
@@ -7052,9 +7309,10 @@ impl<'a> Importer<'a> {
                 None
             };
             if inline.is_some()
-                && labels
-                    .iter()
-                    .any(|label| valid_footnote_carrier_label(label))
+                && std::iter::once(&definition.block)
+                    .chain(definition.refs.iter())
+                    .filter_map(|handle| Self::carrier(handle, crate::roundtrip::FOOTNOTE_LABEL))
+                    .any(|label| valid_footnote_carrier_label(&label))
             {
                 self.diag(
                     HtmlImportDiagnosticCode::AttributeDropped,
@@ -7075,12 +7333,16 @@ impl<'a> Importer<'a> {
 
             for reference in &definition.refs {
                 let site = footnote_reference_site(reference);
+                let attrs = self
+                    .footnote_refs
+                    .get(&node_key(&site))
+                    .and_then(|(_, note)| note.attrs.clone());
                 self.footnote_refs.insert(
                     node_key(&site),
                     (
                         site.clone(),
                         Footnote {
-                            attrs: None,
+                            attrs,
                             id: if inline.is_some() {
                                 None
                             } else {
@@ -7241,15 +7503,104 @@ fn footnote_pair_candidates(
         anchors.push((element.clone(), fragment.to_string()));
     }
 
-    if anchors.is_empty()
-        || (!heuristic
-            && !anchors.iter().any(|(anchor, _)| {
-                Importer::attr(anchor, "role").as_deref() == Some("doc-noteref")
-            }))
-    {
-        return Vec::new();
-    }
     let mut candidates = Vec::new();
+    let mut bare_sites = HashSet::new();
+    let mut bare_targets = Vec::new();
+    let mut bare_target_numbers = HashMap::new();
+    let mut ambiguous_bare_targets = HashSet::new();
+    for backlink in elements {
+        if Importer::tag(backlink).as_deref() != Some("a")
+            || Importer::attr(backlink, "role").as_deref() != Some("doc-backlink")
+        {
+            continue;
+        }
+        let href = Importer::attr(backlink, "href").unwrap_or_default();
+        let Some(identity) = href.strip_prefix("#fnref") else {
+            continue;
+        };
+        if identity.is_empty()
+            || !identity
+                .split('-')
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            || identity.matches('-').count() > 1
+        {
+            continue;
+        }
+        let Some(reference) = targets
+            .get(&href[1..])
+            .filter(|node| Importer::tag(node).as_deref() == Some("sup"))
+        else {
+            continue;
+        };
+        let mut target = parent_handle(backlink);
+        while let Some(node) = target.as_ref() {
+            if Importer::attr(node, "id").is_some() {
+                break;
+            }
+            target = parent_handle(node);
+        }
+        let Some(target) = target else { continue };
+        let mut ancestor = parent_handle(&target);
+        while let Some(node) = ancestor.as_ref() {
+            if Importer::attr(node, "role").as_deref() == Some("doc-endnotes") {
+                break;
+            }
+            ancestor = parent_handle(node);
+        }
+        if ancestor.is_none() {
+            continue;
+        }
+        let fragment = Importer::attr(&target, "id").unwrap();
+        used.insert(fragment.clone());
+        let number = identity.split('-').next().unwrap();
+        let target_key = node_key(&target);
+        if bare_target_numbers
+            .insert(target_key, number.to_string())
+            .is_some_and(|previous| previous != number)
+        {
+            ambiguous_bare_targets.insert(target_key);
+        }
+        bare_targets.push((reference.clone(), target, fragment));
+    }
+    // Count every target before deciding whether a wrapper holds one note.
+    let definition_labels = bare_targets
+        .iter()
+        .map(|(_, _, label)| label.clone())
+        .chain(
+            anchors
+                .iter()
+                .filter(|(anchor, _)| {
+                    Importer::attr(anchor, "role").as_deref() != Some("doc-backlink")
+                        && (heuristic
+                            || Importer::attr(anchor, "role").as_deref() == Some("doc-noteref"))
+                })
+                .map(|(_, fragment)| fragment.clone()),
+        )
+        .collect();
+    let mut bare_lookups = FootnoteLookups::default();
+    for (reference, target, fragment) in bare_targets {
+        if ambiguous_bare_targets.contains(&node_key(&target))
+            || bare_lookups.target_count(&target, elements, &definition_labels) > 1
+        {
+            continue;
+        }
+        let Some(block) = resolve_footnote_definition_block(&target, elements, &used, lookups)
+        else {
+            continue;
+        };
+        if lookups.contains(&block, &reference, elements, order)
+            || !bare_sites.insert(node_key(&reference))
+        {
+            continue;
+        }
+        candidates.push(FootnoteCandidate {
+            reference: reference.clone(),
+            block,
+            fragment,
+            marked: std::cell::Cell::new(Some(true)),
+            backlink: std::cell::Cell::new(Some(false)),
+        });
+    }
     for (anchor, fragment) in anchors {
         // OUTSIDE THE HEURISTIC ONLY THE AUTHORED ROLE OPENS A PAIR. The vendor
         // classes belong to the heuristic: a class is a styling hook, where the
@@ -7327,6 +7678,7 @@ fn resolve_footnote_definition_block(
             .map(|tag| FOOTNOTE_WRAPPER_BLOCKS.contains(&tag.as_str()))
             .unwrap_or(false);
         if wraps
+            && Importer::attr(&parent, "role").as_deref() != Some("doc-endnotes")
             && !Importer::attr(&parent, "id").unwrap_or_default().is_empty()
             && lookups.target_count(&parent, elements, used) == 1
         {
@@ -8318,8 +8670,9 @@ fn dom_text_is_layout_only(node: &Handle) -> bool {
 }
 
 fn collapse(s: &str) -> String {
+    let collapsible = |ch| is_layout_space(ch) && ch != '\t';
     let value = s
-        .split(is_layout_space)
+        .split(collapsible)
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
@@ -8332,17 +8685,9 @@ fn collapse(s: &str) -> String {
     }
     format!(
         "{}{}{}",
-        if s.starts_with(is_layout_space) {
-            " "
-        } else {
-            ""
-        },
+        if s.starts_with(collapsible) { " " } else { "" },
         value,
-        if s.ends_with(is_layout_space) {
-            " "
-        } else {
-            ""
-        }
+        if s.ends_with(collapsible) { " " } else { "" }
     )
 }
 

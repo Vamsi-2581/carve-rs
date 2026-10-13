@@ -117,6 +117,8 @@ fn allow_loss_offers_every_code_but_destination_denied() {
         "ruby-flattened",
         "editorial-comment-flattened",
         "carrier-attribute-dropped",
+        "definition-list-flattened",
+        "list-style-dropped",
     ] {
         let accepted = run_input(&["--plain", "--allow-loss", code], "text\n");
         assert!(accepted.status.success(), "{code}: {:?}", accepted.stderr);
@@ -132,7 +134,7 @@ fn allow_loss_offers_every_code_but_destination_denied() {
         let stderr = String::from_utf8_lossy(&refused.stderr);
         assert_eq!(
             stderr.trim_end(),
-            "carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened or carrier-attribute-dropped"
+            "carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened, carrier-attribute-dropped, definition-list-flattened or list-style-dropped"
         );
     }
     let help = run_input(&["--help"], "");

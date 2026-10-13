@@ -265,8 +265,12 @@ fn main() -> ExitCode {
                 Some("carrier-attribute-dropped") => {
                     allowed_render_losses.push("carrier-attribute-dropped")
                 }
+                Some("definition-list-flattened") => {
+                    allowed_render_losses.push("definition-list-flattened")
+                }
+                Some("list-style-dropped") => allowed_render_losses.push("list-style-dropped"),
                 _ => {
-                    eprintln!("carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened or carrier-attribute-dropped");
+                    eprintln!("carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened, carrier-attribute-dropped, definition-list-flattened or list-style-dropped");
                     return ExitCode::from(2);
                 }
             },
@@ -1181,9 +1185,10 @@ fn render_loss_json(losses: &[carve::RenderLoss], total: usize, truncated: bool)
             pos.start_line, pos.end_line, pos.start_column, pos.end_column, pos.start_offset, pos.end_offset,
         )).unwrap_or_default();
         let attribute_field = loss.attribute.as_ref().map(|attribute| format!(",\"attribute\":{}", json_string(attribute))).unwrap_or_default();
+        let style_field = loss.style.map(|style| format!(",\"style\":{}", json_string(style))).unwrap_or_default();
         let format_field = loss.format.as_ref().map(|format| format!(",\"format\":{}", json_string(format))).unwrap_or_default();
         format!(
-            "{{\"code\":{}{format_field}{attribute_field},\"target\":{},\"nodeType\":{},\"message\":{}{pos}}}",
+            "{{\"code\":{}{format_field}{attribute_field}{style_field},\"target\":{},\"nodeType\":{},\"message\":{}{pos}}}",
             json_string(loss.code), json_string(loss.target.as_str()),
             json_string(loss.node_type.as_str()), json_string(&loss.message),
         )
@@ -1743,7 +1748,8 @@ fn print_usage() {
          --strict-losses             refuse output when rendering loses content or structure\n  \
          --report-losses FILE        write JSON loss report (`-` for stderr)\n  \
          --allow-loss CODE          accept raw-format-dropped, ruby-flattened,\n                              \
-         editorial-comment-flattened or carrier-attribute-dropped\n  \
+         editorial-comment-flattened, carrier-attribute-dropped\n                              \
+         definition-list-flattened, or list-style-dropped\n  \
          --max-render-losses N       bound detailed losses (default 100)\n\n\
          --include-root DIR          containment root for {{ path }} includes.\n                              \
          Defaults to the input file's directory; pass this to widen\n                              \

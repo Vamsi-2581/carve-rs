@@ -158,6 +158,8 @@ mod a_code_blocks_last_newline_is_its_terminator;
 mod a_code_blocks_nbsp_sentinel_is_resolved;
 #[path = "../a_code_span_closer_is_searched_across_the_block.rs"]
 mod a_code_span_closer_is_searched_across_the_block;
+#[path = "../a_code_span_list_continuation_is_written_bare.rs"]
+mod a_code_span_list_continuation_is_written_bare;
 #[path = "../a_colon_container_keeps_a_band_payload_at_its_column.rs"]
 mod a_colon_container_keeps_a_band_payload_at_its_column;
 #[path = "../a_colon_fence_container_owns_a_link_def_past_its_column.rs"]
@@ -326,6 +328,8 @@ mod a_figures_target_keeps_its_own_attributes;
 mod a_flag_shaped_hyphen_run_is_literal;
 #[path = "../a_flatten_preserves_the_boundary_it_dissolves.rs"]
 mod a_flatten_preserves_the_boundary_it_dissolves;
+#[path = "../a_flush_left_description_ends_a_quoted_term.rs"]
+mod a_flush_left_description_ends_a_quoted_term;
 #[path = "../a_flush_left_opener_ends_a_description_body.rs"]
 mod a_flush_left_opener_ends_a_description_body;
 #[path = "../a_folded_lazy_line_leaves_the_container_open.rs"]
@@ -472,6 +476,8 @@ mod a_raw_bracketed_run_is_written_as_authored;
 mod a_raw_kept_element_reports_its_descendants_attributes;
 #[path = "../a_raw_span_ending_a_line_in_whitespace_is_degraded.rs"]
 mod a_raw_span_ending_a_line_in_whitespace_is_degraded;
+#[path = "../roundtrip_import_consumes_an_invalid_span_carrier.rs"]
+mod roundtrip_import_consumes_an_invalid_span_carrier;
 
 #[path = "../a_raw_span_ends_at_the_tag_it_recognized.rs"]
 mod a_raw_span_ends_at_the_tag_it_recognized;
@@ -521,6 +527,8 @@ mod a_table_carries_the_separator_row_it_was_written_with;
 mod a_table_cells_blocks_contribute_only_their_payload;
 #[path = "../a_table_section_keeps_the_attributes_it_has_a_slot_for.rs"]
 mod a_table_section_keeps_the_attributes_it_has_a_slot_for;
+#[path = "../a_table_span_never_covers_another_cell.rs"]
+mod a_table_span_never_covers_another_cell;
 #[path = "../a_table_whose_cells_hold_blocks_imports_as_a_list_table.rs"]
 mod a_table_whose_cells_hold_blocks_imports_as_a_list_table;
 #[path = "../a_task_box_is_content_not_a_prefix.rs"]
@@ -977,6 +985,8 @@ mod derived_display_text_clones_the_nodes;
 mod description_column_closes_overindented_code_fences;
 #[path = "../description_fence_paragraph_boundary.rs"]
 mod description_fence_paragraph_boundary;
+#[path = "../display_math_on_a_marker_line_takes_its_caption.rs"]
+mod display_math_on_a_marker_line_takes_its_caption;
 
 #[path = "../destination_parens.rs"]
 mod destination_parens;
@@ -1797,6 +1807,8 @@ mod ordered_dialect_boundaries;
 
 #[path = "../quoted_attribute_pair_escapes.rs"]
 mod quoted_attribute_pair_escapes;
+#[path = "../quoted_description_flush_left.rs"]
+mod quoted_description_flush_left;
 
 #[path = "../djot_failed_braced_openers.rs"]
 mod djot_failed_braced_openers;
@@ -1907,6 +1919,8 @@ mod markdown_import_dollar_text_stays_text;
 
 #[path = "../a_band_line_under_a_definition_term_is_term_text.rs"]
 mod a_band_line_under_a_definition_term_is_term_text;
+#[path = "../a_band_line_with_no_open_paragraph_ends_the_list.rs"]
+mod a_band_line_with_no_open_paragraph_ends_the_list;
 
 #[path = "../tab_authored_list_code_fences.rs"]
 mod tab_authored_list_code_fences;
@@ -1926,3 +1940,120 @@ mod quoted_document_definition_boundary;
 
 #[path = "../continued_marker_note_code_floor.rs"]
 mod continued_marker_note_code_floor;
+
+#[path = "../definition_term_floor_text.rs"]
+mod definition_term_floor_text;
+
+#[path = "../term_ended_block_wave.rs"]
+mod term_ended_block_wave;
+
+#[path = "../description_band_wave.rs"]
+mod description_band_wave;
+
+#[path = "../closed_container_plus_wave.rs"]
+mod closed_container_plus_wave;
+
+#[path = "../djot_literal_wave.rs"]
+mod djot_literal_wave;
+
+#[path = "../markdown_strike_wave.rs"]
+mod markdown_strike_wave;
+
+#[path = "../djot_empty_item_wave.rs"]
+mod djot_empty_item_wave;
+
+#[path = "../quoted_closed_leaf_wave.rs"]
+mod quoted_closed_leaf_wave;
+
+#[path = "../literal_payload_columns.rs"]
+mod literal_payload_columns;
+
+#[path = "../terminal_colon_content_plus.rs"]
+mod terminal_colon_content_plus;
+
+#[path = "../term_led_description_code.rs"]
+mod term_led_description_code;
+
+#[path = "../held_description_tightness.rs"]
+mod held_description_tightness;
+
+#[path = "../invisible_leaf_after_quote.rs"]
+mod invisible_leaf_after_quote;
+
+#[path = "../quoted_list_opening_spans.rs"]
+mod quoted_list_opening_spans;
+
+#[path = "../djot_parenthesized_words.rs"]
+mod djot_parenthesized_words;
+
+#[path = "../djot_verbatim_quote_payload.rs"]
+mod djot_verbatim_quote_payload;
+
+#[path = "../djot_quote_paragraph_continuations.rs"]
+mod djot_quote_paragraph_continuations;
+
+#[path = "../djot_quoted_thematic_text.rs"]
+mod djot_quoted_thematic_text;
+
+#[path = "../term_intervening_block_payload.rs"]
+mod term_intervening_block_payload;
+
+#[path = "../space_only_inline_slots.rs"]
+mod space_only_inline_slots;
+
+#[path = "../unfinished_nested_fences.rs"]
+mod unfinished_nested_fences;
+
+#[path = "../term_description_code.rs"]
+mod term_description_code;
+
+#[path = "../quoted_item_block_end.rs"]
+mod quoted_item_block_end;
+
+#[path = "../held_container_tightness.rs"]
+mod held_container_tightness;
+
+#[path = "../item_hosted_named_colon.rs"]
+mod item_hosted_named_colon;
+
+#[path = "../retained_paragraphs.rs"]
+mod retained_paragraphs;
+
+#[path = "../descendant_fence_scope.rs"]
+mod descendant_fence_scope;
+
+#[path = "../agreed_comment_retention.rs"]
+mod agreed_comment_retention;
+
+#[path = "../line_block_fence_writer.rs"]
+mod line_block_fence_writer;
+
+#[path = "../spec_wave_parity.rs"]
+mod spec_wave_parity;
+
+#[path = "../wave7_quoted_term.rs"]
+mod wave7_quoted_term;
+
+#[path = "../wave7_html_tabs.rs"]
+mod wave7_html_tabs;
+
+#[path = "../wave7_unused_references.rs"]
+mod wave7_unused_references;
+
+#[path = "../wave7_link_footnotes.rs"]
+mod wave7_link_footnotes;
+
+#[path = "../wave7_2606.rs"]
+mod wave7_2606;
+
+#[path = "../wave7_2607.rs"]
+mod wave7_2607;
+
+#[path = "../wave7_2608.rs"]
+mod wave7_2608;
+
+#[path = "../wave7_2609.rs"]
+mod wave7_2609;
+
+#[path = "../wave7_description_openers.rs"]
+mod wave7_description_openers;

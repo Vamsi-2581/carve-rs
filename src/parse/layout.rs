@@ -315,6 +315,8 @@ fn try_layout_into(
     if !options.extensions.is_empty()
         || options.profile.is_some()
         || options.source_lines
+        // The carriers of PART 10 §13a are the tree renderer's to write.
+        || options.html_carriers()
         || !options.sections
         || options.mode != crate::Mode::Interactive
         || options.smart_typography != crate::extension::SmartTypographyMode::Glyph
@@ -1653,7 +1655,7 @@ mod layout_html_tests {
         // is three new documents, not a widening. The scanner is unchanged and
         // the per-document assertion above proves each byte-identical.
         assert_eq!(
-            accepted, 63,
+            accepted, 65,
             "update the pinned acceptance count only after reviewing the exact-parity widening"
         );
     }

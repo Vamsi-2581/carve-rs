@@ -9,10 +9,12 @@
 //! under a wrong rule: dropping every heading id passes the generated case,
 //! keeping every heading id passes the authored one.
 
-use carve::{html_to_carve, to_html, HtmlImportMode, HtmlImportOptions};
+use carve::{
+    html_to_carve, to_html, to_html_with_options, HtmlImportMode, HtmlImportOptions, Options,
+};
 
 fn roundtrip(source: &str) -> String {
-    let html = to_html(source);
+    let html = to_html_with_options(source, &Options::default().with_roundtrip(true));
     let options = HtmlImportOptions {
         mode: HtmlImportMode::Roundtrip,
         ..HtmlImportOptions::default()
@@ -21,7 +23,7 @@ fn roundtrip(source: &str) -> String {
     // The source coming back is the contract the corpus round trip measures;
     // the render coming back is what the ticket says the re-emitted id broke.
     assert_eq!(
-        to_html(&back),
+        to_html_with_options(&back, &Options::default().with_roundtrip(true)),
         html,
         "re-rendering the imported source did not reproduce the HTML it was imported from"
     );
@@ -65,7 +67,7 @@ fn an_authored_heading_id_keeps_its_slot_wherever_it_was_written() {
 fn a_deduplicated_generated_heading_id_is_still_generated() {
     // `next_heading_id` numbers a repeated slug `H`, `H-2`, ... so the second
     // heading's id is generated too, and must not come back as a slot.
-    let html = r#"<ul><li>a<h1 class="k" id="H-2">H</h1></li></ul>"#;
+    let html = r#"<ul><li>a<h1 class="k" id="H-2" data-carve-generated-id>H</h1></li></ul>"#;
     let options = HtmlImportOptions {
         mode: HtmlImportMode::Roundtrip,
         ..HtmlImportOptions::default()

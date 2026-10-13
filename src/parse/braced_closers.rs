@@ -516,7 +516,7 @@ impl BracedClosers {
                 b'<' => scanned_autolink_end(bytes, at).map(|close| close + 1),
                 b'%' if bytes[at + 1] == b'%'
                     && (at == 0
-                        || matches!(bytes[at - 1], b' ' | b'\t' | b'\n')
+                        || matches!(bytes[at - 1], b' ' | b'\n')
                         || bytes[at - 1] == b'[' && self.opaque.contains_key(&(at - 1))) =>
                 {
                     let end = trailing_comment_end(bytes, at + 2, label_ends.last().copied())

@@ -71,38 +71,11 @@ const NOT_IN_CORPUS: &[(&str, &str)] = &[
 // Comparing against the SOURCE instead would report 749 documents whose `.crv`
 // is simply not in canonical form; `tests/corpus_canonical_form.rs` is where
 // that belongs.
-const SOURCE_LOSSY: &[(&str, &[&str])] = &[
-    (
-        "the sanitized-away `href` attribute is not carried, so \
+const SOURCE_LOSSY: &[(&str, &[&str])] = &[(
+    "the sanitized-away `href` attribute is not carried, so \
          `[safe](https://example.com){href=javascript:steal}` comes back without it",
-        &["108-security-hardening-11.crv"],
-    ),
-    (
-        // `-3` left this set when the comparison started applying PART 11
-        // §10k's normalization list: its two spellings COMMUTE, so the trip
-        // returning the other one is not a loss. `-4` stays, because there the
-        // delimiters reflow around content the list says nothing about.
-        "the nested emphasis delimiters reflow: `/*x*/` comes back `*/x/*`",
-        &["130-bold-italic-delimiter-needs-content-4.crv"],
-    ),
-    (
-        "the combined token is not carried, and with asterisks as its content \
-         `*/*/*` would misparse, so the split marks come back braced: `/***/` \
-         comes back `*{/*/}*`",
-        &[
-            "473-a-run-of-asterisks-inside-a-combined-token-is-content-2.crv",
-            "473-a-run-of-asterisks-inside-a-combined-token-is-content.crv",
-        ],
-    ),
-    (
-        "the combined token is not carried, so punctuation can reverse or \
-         split its reconstructed delimiter pair",
-        &[
-            "486-any-character-is-content-of-the-combined-bold-italic-token-2.crv",
-            "490-a-comment-inside-a-forced-span-or-the-combined-token-ends-at-its-closer-3.crv",
-        ],
-    ),
-];
+    &["108-security-hardening-11.crv"],
+)];
 
 /// Every declared source-lossy document, sorted.
 fn source_lossy_names() -> Vec<String> {
@@ -1620,8 +1593,23 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // All four round-trip strictly; the reported-lossy set is unchanged.
     // Spec fefeb53 adds the three category 555 raw-payload documents.
     // All three round-trip strictly; the reported-lossy set is unchanged.
-    const STRICT: usize = 1774;
-    const LOSSY: usize = 548;
+    // Spec bd667aef adds 54 documents: 39 strict and 15 with existing losses.
+    // Corpus 455, 455-2 and 455-3 move from strict to reported lossy when the
+    // unfinished nested fence releases their flush-left body and closer.
+    // Spec 0df7a782 adds 25 documents: 17 strict and eight with existing losses.
+    // Corpus 364-2, 482-5 and 558-3 enter the strict set. Corpus 510,
+    // 557-4 and 82-5 leave it as the new ownership rules retain soft breaks
+    // that ProseMirror reports as degraded.
+    // Spec ab887d86 adds the two category 576 delimiter documents and category
+    // 577's titled-endnotes document. All three round trip without reported
+    // loss or canonical-source drift. Spec 9acf3525 adds category 578's three
+    // marker-note fence documents. All three round trip without reported loss
+    // or canonical-source drift.
+    // Spec 76c90c04 adds section 579's three table documents and section 580's
+    // first and third note documents to the strict set. Section 580's second
+    // document reports the existing soft-break degradation.
+    const STRICT: usize = 1838;
+    const LOSSY: usize = 575;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in
@@ -2579,6 +2567,24 @@ fn normalized_for_comparison(source: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// The combined form keeps a doubled `/` as text, the nested one does not, so
+/// the two marks must come back as `/*...*/` (corpus 576 row 2).
+#[test]
+fn a_combined_bold_italic_comes_back_without_escapes() {
+    for (source, written) in [
+        ("/*a // b*/\n", "/*a // b*/\n"),
+        ("*/a/*\n", "/*a*/\n"),
+        ("/***/\n", "/***/\n"),
+        // CONTROL. An attributed inner mark is not the combined form.
+        ("*/a/{.c}*\n", "*/a/{.c}*\n"),
+    ] {
+        let doc = parse(source);
+        let returned = from_prosemirror(&to_prosemirror(&doc).json).expect("the document returns");
+        assert_eq!(render_html(&returned).unwrap(), render_html(&doc).unwrap());
+        assert_eq!(render_carve(&returned).unwrap(), written, "{source:?}");
+    }
 }
 
 /// An EMPTY code span has no characters for its mark to sit on, so walking its
