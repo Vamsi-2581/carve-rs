@@ -1605,8 +1605,11 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // loss or canonical-source drift. Spec 9acf3525 adds category 578's three
     // marker-note fence documents. All three round trip without reported loss
     // or canonical-source drift.
-    const STRICT: usize = 1833;
-    const LOSSY: usize = 574;
+    // Spec 76c90c04 adds section 579's three table documents and section 580's
+    // first and third note documents to the strict set. Section 580's second
+    // document reports the existing soft-break degradation.
+    const STRICT: usize = 1838;
+    const LOSSY: usize = 575;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in

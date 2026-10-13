@@ -613,21 +613,53 @@ fn shared_markdown_container_carriers_restore_ast_fields() {
 }
 
 #[test]
-fn shared_nested_definition_marker_without_an_outer_list_is_damaged() {
+fn shared_markdown_import_negative_rows_match_their_contract() {
     for fixture in required_rows(&fixtures(), "markdownImportNegative") {
         let imported = migrate_markdown(fixture["markdown"].as_str().unwrap());
-        assert!(
-            imported.report.diagnostics.iter().any(|diagnostic| {
-                Some(diagnostic.code.as_str()) == fixture["expectedDiagnostic"]["code"].as_str()
-            }),
-            "{:?}",
-            imported.report.diagnostics
-        );
         let imported_ast = ast(&imported.value);
-        let mut imported_nodes = Vec::new();
-        nodes(&imported_ast, &mut imported_nodes);
-        for forbidden in required_rows(fixture, "forbiddenTypes") {
-            assert!(!imported_nodes.iter().any(|node| node["type"] == *forbidden));
+        if let Some(code) = fixture["expectedDiagnostic"]["code"].as_str() {
+            assert!(
+                imported
+                    .report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == code),
+                "{}: {:?}",
+                fixture["id"],
+                imported.report.diagnostics
+            );
+            let mut imported_nodes = Vec::new();
+            nodes(&imported_ast, &mut imported_nodes);
+            for forbidden in required_rows(fixture, "forbiddenTypes") {
+                assert!(!imported_nodes.iter().any(|node| node["type"] == *forbidden));
+            }
+        } else {
+            assert!(
+                projection(&imported_ast, &fixture["expectedNodes"]),
+                "{}: {imported_ast}",
+                fixture["id"]
+            );
+            for forbidden in required_rows(fixture, "forbiddenNodes") {
+                assert!(
+                    !projection(&imported_ast, &Value::Array(vec![forbidden.clone()])),
+                    "{}: forbidden node {forbidden}",
+                    fixture["id"]
+                );
+            }
+            for (code, count) in fixture["expectedDiagnostics"].as_object().unwrap() {
+                let actual = imported
+                    .report
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.code == *code)
+                    .count();
+                assert_eq!(
+                    actual,
+                    count.as_u64().unwrap() as usize,
+                    "{}: {code}",
+                    fixture["id"]
+                );
+            }
         }
     }
 }
