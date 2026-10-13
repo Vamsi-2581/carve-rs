@@ -6866,10 +6866,18 @@ fn escape_plain_line(text: &str) -> String {
 }
 
 /// An image's ALT TEXT, written between `![` and `]`.
-fn escape_image_alt(text: &str, in_table: bool) -> String {
+pub(crate) fn escape_image_alt(text: &str, in_table: bool) -> String {
     let escaped = if crate::parse::raw_bracket_run_closes(text)
         && crate::parse::unescape_title(text) == text
-    {
+        && !text.split('\n').skip(1).any(|line| {
+            let text = line.trim_start_matches([' ', '\t']);
+            text.starts_with("```")
+                || text.strip_prefix('[').is_some_and(|label| {
+                    label
+                        .find(']')
+                        .is_some_and(|end| end > 0 && label[end + 1..].starts_with(':'))
+                })
+        }) {
         text.to_string()
     } else {
         text.replace('\\', "\\\\")
@@ -6877,11 +6885,28 @@ fn escape_image_alt(text: &str, in_table: bool) -> String {
             .replace(']', "\\]")
             .replace('`', "\\`")
     };
-    if in_table {
+    let escaped = if in_table {
         escaped.replace('|', "\\|")
     } else {
         escaped
-    }
+    };
+    static LINES: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static ORDERED: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let lines = LINES.get_or_init(|| regex::Regex::new(r"(?m)(\n[ \t]*)(#{1,6}(?:[ \t]|$)|>(?:[ \t]|$)|[-*](?:[ \t]|[-*]{2})|:{1,3}(?:[ \t]|:|$)|`{3,}|~{3,}|\||\^(?:[ \t]|$)|\{|%%|\[[^\]\n]+\]:)").unwrap());
+    let ordered = ORDERED.get_or_init(|| {
+        regex::Regex::new(r"(\n[ \t]*(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-z]|[A-Z]|))([.)])([ \t])")
+            .unwrap()
+    });
+    let guarded = lines.replace_all(&escaped, "$1\\$2");
+    ordered
+        .replace_all(&guarded, |caps: &regex::Captures<'_>| {
+            if &caps[2] == ")" && caps[1].trim_matches(['\n', ' ', '\t']).is_empty() {
+                caps[0].to_string()
+            } else {
+                format!("{}\\{}{}", &caps[1], &caps[2], &caps[3])
+            }
+        })
+        .into_owned()
 }
 
 /// Which characters the destination scan would read differently if emitted
