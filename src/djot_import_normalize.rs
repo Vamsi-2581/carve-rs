@@ -2866,7 +2866,11 @@ pub(super) fn quote_spellings(source: &str) -> String {
     .1;
     let mut source = source.to_owned();
     for (start, end) in comments.into_iter().rev() {
-        source.replace_range(start..end, "{%%}");
+        let attrs = read_djot_word_attributes(&source, start);
+        if attrs.as_ref().is_some_and(|(_, attrs)| attrs != "{}") {
+            continue;
+        }
+        source.replace_range(start..attrs.map_or(end, |(end, _)| end), "{%%}");
     }
     let source = source.as_str();
     let mut mask = mask_code_and_destinations(source).into_bytes();
