@@ -7573,15 +7573,9 @@ fn footnote_pair_candidates(
             continue;
         }
         let href = Importer::attr(backlink, "href").unwrap_or_default();
-        let Some(identity) = href.strip_prefix("#fnref") else {
-            continue;
-        };
-        if identity.is_empty()
-            || !identity
-                .split('-')
-                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-            || identity.matches('-').count() > 1
-        {
+        // An authored id can replace `fnref{n}` (PART 9 §16), so the target
+        // decides, not the spelling.
+        if href.len() < 2 || !href.starts_with('#') {
             continue;
         }
         let Some(reference) = targets
@@ -7610,13 +7604,19 @@ fn footnote_pair_candidates(
         }
         let fragment = Importer::attr(&target, "id").unwrap();
         used.insert(fragment.clone());
-        let number = identity.split('-').next().unwrap();
+        // Only a generated `fnref{n}` names its note number.
+        let number = href
+            .strip_prefix("#fnref")
+            .and_then(|identity| identity.split('-').next())
+            .filter(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()));
         let target_key = node_key(&target);
-        if bare_target_numbers
-            .insert(target_key, number.to_string())
-            .is_some_and(|previous| previous != number)
-        {
-            ambiguous_bare_targets.insert(target_key);
+        if let Some(number) = number {
+            if bare_target_numbers
+                .insert(target_key, number.to_string())
+                .is_some_and(|previous| previous != number)
+            {
+                ambiguous_bare_targets.insert(target_key);
+            }
         }
         bare_targets.push((reference.clone(), target, fragment));
     }

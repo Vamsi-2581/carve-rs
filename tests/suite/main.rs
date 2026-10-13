@@ -480,6 +480,8 @@ mod a_raw_bracketed_run_is_written_as_authored;
 mod a_raw_kept_element_reports_its_descendants_attributes;
 #[path = "../a_raw_span_ending_a_line_in_whitespace_is_degraded.rs"]
 mod a_raw_span_ending_a_line_in_whitespace_is_degraded;
+#[path = "../an_authored_footnote_reference_id_replaces_the_generated_one.rs"]
+mod an_authored_footnote_reference_id_replaces_the_generated_one;
 #[path = "../roundtrip_import_consumes_an_invalid_span_carrier.rs"]
 mod roundtrip_import_consumes_an_invalid_span_carrier;
 #[path = "../table_continuation_lines_are_cell_wrap_markers.rs"]
