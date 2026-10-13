@@ -121,3 +121,15 @@ fn below_column_comments_keep_definition_bands_and_fences() {
         );
     }
 }
+
+#[test]
+fn a_tab_before_a_comment_does_not_hide_an_emphasis_closer() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/tab_comment_closers.json")).unwrap();
+    for row in rows.as_array().unwrap() {
+        assert_eq!(
+            carve::to_html(row["source"].as_str().unwrap()),
+            row["html"].as_str().unwrap()
+        );
+    }
+}

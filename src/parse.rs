@@ -28728,7 +28728,7 @@ fn find_emphasis_close(
         let run = bounds.bracket_run_at(j);
         if ch == b'%'
             && bytes.get(j + 1) == Some(&b'%')
-            && (j == run.map_or(0, |open| open + 1) || is_carve_ws(bytes[j - 1]))
+            && (j == run.map_or(0, |open| open + 1) || matches!(bytes[j - 1], b' ' | b'\n'))
         {
             j = trailing_comment_end(bytes, j + 2, run.map(|open| bounds.matches[open]))?;
             continue;
