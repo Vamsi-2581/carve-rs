@@ -383,10 +383,17 @@ fn render_block(node: &BlockNode, depth: usize) -> String {
             }) {
                 return String::new();
             }
+            let mut emitted = definition.clone();
+            emitted.href = crate::escape::sanitize_destination(
+                &definition.href,
+                definition.pos.as_ref(),
+                crate::render_loss::DeniedSink::Destination,
+            )
+            .into_owned();
             format!(
                 "{}\n\n",
                 strip_controls(&crate::render_carve::render_link_reference_definition(
-                    definition
+                    &emitted
                 ))
             )
         }

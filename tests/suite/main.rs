@@ -939,6 +939,8 @@ mod constructed_figure_invariants;
 mod container_scoped_content_columns;
 #[path = "../corpus.rs"]
 mod corpus;
+#[path = "../plain_unused_definition_denied.rs"]
+mod plain_unused_definition_denied;
 
 #[path = "../corpus_canonical_form.rs"]
 mod corpus_canonical_form;

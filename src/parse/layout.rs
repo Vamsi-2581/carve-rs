@@ -1658,8 +1658,10 @@ mod layout_html_tests {
         // layout path accepts both, and the assertion above checks their exact
         // HTML against the authoritative parser. Spec 46b3d3f7 adds 589-...-32,
         // a blank header row over a delimiter row (CARVE-P9-082).
+        // Spec 32125a78 adds corpus 108-12. This path accepts it, and the
+        // per-document assertion above checks its HTML against the parser.
         assert_eq!(
-            accepted, 68,
+            accepted, 69,
             "update the pinned acceptance count only after reviewing the exact-parity widening"
         );
     }
