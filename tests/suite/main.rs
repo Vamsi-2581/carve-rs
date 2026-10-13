@@ -2085,3 +2085,6 @@ mod wave7_description_openers;
 
 #[path = "../a_continuation_on_a_span_marker_joins_its_origin.rs"]
 mod a_continuation_on_a_span_marker_joins_its_origin;
+
+#[path = "../djot_image_quote_child_text.rs"]
+mod djot_image_quote_child_text;

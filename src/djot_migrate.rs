@@ -78,8 +78,15 @@ pub fn djot_to_carve(djot: &str) -> String {
 }
 
 pub(crate) fn djot_to_carve_prepared(stripped_definitions: &DjotFootnoteAttributeStrip) -> String {
+    djot_to_carve_prepared_with_quotes(stripped_definitions, false)
+}
+
+fn djot_to_carve_prepared_with_quotes(
+    stripped_definitions: &DjotFootnoteAttributeStrip,
+    omit_quote_delimiters: bool,
+) -> String {
     if !stripped_definitions.source.contains('\0') {
-        return convert_djot_document(stripped_definitions);
+        return convert_djot_document(stripped_definitions, omit_quote_delimiters);
     }
     let token = "\0U\0";
     let pattern = cached_regex!(r"\x00DJOTNOTEATTR\x00([0-9]+)\x00").unwrap();
@@ -104,10 +111,13 @@ pub(crate) fn djot_to_carve_prepared(stripped_definitions: &DjotFootnoteAttribut
         losses: stripped_definitions.losses.clone(),
         comments: stripped_definitions.comments.clone(),
     };
-    convert_djot_document(&protected).replace(token, "\0")
+    convert_djot_document(&protected, omit_quote_delimiters).replace(token, "\0")
 }
 
-fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> String {
+fn convert_djot_document(
+    stripped_definitions: &DjotFootnoteAttributeStrip,
+    omit_quote_delimiters: bool,
+) -> String {
     let normalized = &stripped_definitions.source;
     let (frontmatter, separator, body) = split_frontmatter(normalized);
     let table_attributes = escape_djot_table_attribute_boundaries(body);
@@ -125,17 +135,27 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
     } else {
         std::borrow::Cow::Borrowed(body)
     };
-    let carried = carry_djot_attributes_across_div_closers(&caret_references);
+    let carried = carry_djot_attributes_across_quote_exits(
+        &carry_djot_attributes_across_div_closers(&caret_references),
+    );
     let (literal_attributes, inherited) = escape_invalid_djot_attributes(&carried);
     let attributes = normalize_djot_attribute_lines(&literal_attributes);
     let owned_references = fold_djot_references(&attributes);
     let fences = normalize_djot_fences(&owned_references);
     let empty_note = djot_placeholder_prefix(body, "\0DJOTEMPTYNOTE\0");
     let item_markers = convert_djot_block_markers_with(&fences, true);
-    let blocks = normalize::note_blocks(&item_markers, stripped_definitions, &empty_note);
+    let item_attribute_prefix = djot_placeholder_prefix(&item_markers, "\0DJOTITEMATTR\0");
+    let mut item_attributes = Vec::new();
+    let blocks = normalize::note_blocks(
+        &item_markers,
+        stripped_definitions,
+        &empty_note,
+        &item_attribute_prefix,
+        &mut item_attributes,
+    );
     let fence_closers = normalize::table_edges(&blocks);
     let folded_references = fold_djot_references(&fence_closers);
-    let inline = normalize::inline(&folded_references);
+    let inline = image_quote_layout(&folded_references, omit_quote_delimiters);
     // Carve has no empty footnote body: `[^b]:` alone is a paragraph, not a
     // definition, so an empty Djot body needs a body that renders nothing - a
     // comment. It travels as a NUL token so the text escaper cannot reach it and
@@ -238,8 +258,10 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
             key = collapsed_space
                 .replace_all(
                     child_text_cache
-                        .entry(normalized.clone())
-                        .or_insert_with(|| djot_image_label_child_text(&normalized, &inherited))
+                        .entry(format!("0:{normalized}"))
+                        .or_insert_with(|| {
+                            djot_image_label_child_text(&normalized, &inherited, false)
+                        })
                         .trim_matches([' ', '\t', '\r', '\n']),
                     " ",
                 )
@@ -277,6 +299,11 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         }
         if !label.contains('\n')
             && !label.bytes().any(|byte| b"_*`{^~[]".contains(&byte))
+            && !b"\"'"
+                .iter()
+                .any(|quote| label.bytes().filter(|byte| byte == quote).take(2).count() >= 2)
+            && !label.contains("\"}")
+            && !label.contains("'}")
             && !label.as_bytes().windows(2).enumerate().any(|(at, pair)| {
                 pair[0] == b'\\'
                     && matches!(pair[1], b' ' | b'\t')
@@ -302,8 +329,8 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
             return format!("{paragraph}![{alt_prefix}{}\0]", alts.len() - 1);
         }
         let plain = child_text_cache
-            .entry(normalized_label.clone())
-            .or_insert_with(|| djot_image_label_child_text(&normalized_label, &inherited));
+            .entry(format!("1:{normalized_label}"))
+            .or_insert_with(|| djot_image_label_child_text(&normalized_label, &inherited, true));
         let plain = crate::render_carve::escape_image_alt(plain, in_table);
         let mut alt = String::new();
         for (index, line) in plain.split('\n').enumerate() {
@@ -332,8 +359,9 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         regex::escape(&alt_prefix),
     ))
     .unwrap();
-    let converted =
-        rewrite_djot_body_with(&convert_definition_lists(&words, &empty_term), |chunk| {
+    let converted = rewrite_djot_body_with_quotes(
+        &convert_definition_lists(&words, &empty_term),
+        |chunk| {
             restore
                 .replace_all(
                     &chunk.replace(&empty_term, "%%"),
@@ -352,10 +380,63 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
                     },
                 )
                 .into_owned()
-        });
+        },
+        omit_quote_delimiters,
+    );
     let converted = converted
         .replace(&empty_note, "%%%%")
         .replace(&image_paragraph, "{%%}");
+    let converted = if item_attributes.is_empty() {
+        converted
+    } else {
+        let fence_pattern = regex::Regex::new(&format!(
+            r"(?m)^([ \t>]*)(\[\^[^\]\n]+\]:[ \t]*)?{}(B?)([0-9]+)\x00\n(?:[ \t>]*\n)*([ \t>]*)([-*+]|[^ \t\n]+)([ \t]+)",
+            regex::escape(&item_attribute_prefix)
+        ))
+        .unwrap();
+        let converted = fence_pattern.replace_all(&converted, |caps: &regex::Captures<'_>| {
+            caps[4]
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| item_attributes.get(index))
+                .map_or_else(
+                    || caps[0].to_string(),
+                    |attrs| {
+                        let header = caps.get(2).map_or("", |header| header.as_str());
+                        if &caps[3] == "B" {
+                            let prefix = if header.is_empty() {
+                                &caps[5]
+                            } else {
+                                &caps[1]
+                            };
+                            format!(
+                                "{prefix}{header}{attrs}\n{}{}{}",
+                                &caps[5], &caps[6], &caps[7]
+                            )
+                        } else {
+                            format!("{}{header}{}{attrs}{}", &caps[5], &caps[6], &caps[7])
+                        }
+                    },
+                )
+        });
+        let pattern = regex::Regex::new(&format!(
+            r"([ \t]+)((?:\[[ xX]\][ \t]+)?){}([0-9]+)\x00",
+            regex::escape(&item_attribute_prefix)
+        ))
+        .unwrap();
+        pattern
+            .replace_all(&converted, |caps: &regex::Captures<'_>| {
+                caps[3]
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|index| item_attributes.get(index))
+                    .map_or_else(
+                        || caps[0].to_string(),
+                        |attrs| format!("{attrs}{}{}", &caps[1], &caps[2]),
+                    )
+            })
+            .into_owned()
+    };
     let converted = cached_regex!(r"\x00DJOTINVALIDATTR\x00[0-9]+\x00")
         .unwrap()
         .replace_all(&converted, |caps: &regex::Captures<'_>| {
@@ -526,14 +607,21 @@ impl ImageBoundaryIndex {
     }
 }
 
-fn djot_image_label_child_text(label: &str, inherited: &HashSet<String>) -> String {
+fn djot_image_label_child_text(
+    label: &str,
+    inherited: &HashSet<String>,
+    omit_quote_delimiters: bool,
+) -> String {
     let options = crate::Options {
         smart_typography: crate::SmartTypographyMode::Source,
         ..crate::Options::default()
     };
     let (protected_label, scalars, scalar_prefix) = protect_image_alt_scalars(label);
-    let native =
-        djot_to_carve(&format!("DJOTALT {} DJOTEND", protected_label)).replace("\0U\0", "\0");
+    let native = djot_to_carve_prepared_with_quotes(
+        &strip_footnote_definition_attributes(&format!("DJOTALT {} DJOTEND", protected_label)),
+        omit_quote_delimiters,
+    )
+    .replace("\0U\0", "\0");
     let native = remove_inherited_attribute_markers(&native, inherited);
     let mut document = crate::parse_with_options(&native, &options);
     use crate::include_walk::SubtreeVisitor;
@@ -570,10 +658,91 @@ fn djot_image_label_child_text(label: &str, inherited: &HashSet<String>) -> Stri
     plain.into_owned()
 }
 
+fn image_quote_layout(source: &str, omit_quote_delimiters: bool) -> String {
+    let has_forced_quotes = source.contains("{\"")
+        || source.contains("{'")
+        || source.contains("\"}")
+        || source.contains("'}");
+    if !omit_quote_delimiters && (!source.contains("![") || !has_forced_quotes) {
+        return normalize::inline(source);
+    }
+    let source = if !omit_quote_delimiters {
+        replace_image_labels_with_targets(
+            source,
+            &mask_code_and_destinations(source),
+            |image, label, _, complete| {
+                if complete
+                    || label.contains("![")
+                    || !(label.contains("{\"")
+                        || label.contains("{'")
+                        || label.contains("\"}")
+                        || label.contains("'}"))
+                {
+                    image.to_owned()
+                } else {
+                    format!("![{}]", normalize::quote_spellings(label))
+                }
+            },
+            true,
+        )
+    } else {
+        source.to_owned()
+    };
+    let mut positions = HashSet::new();
+    if !omit_quote_delimiters {
+        let mask = mask_code_and_destinations(&source);
+        let (_, image_lines) = image_line_owners(&source, &mask);
+        let mut line = 0;
+        replace_image_labels(
+            &source,
+            &mask_code_and_destinations(&source),
+            |image, label, at| {
+                if source[at + image.len()..].starts_with("[]")
+                    || label.starts_with('^')
+                    || cached_regex!(r"\n[ \t]*\n").unwrap().is_match(label)
+                {
+                    return image.to_owned();
+                }
+                while image_lines[line].0 <= at {
+                    line += 1;
+                }
+                let (_, quotes, item_column, item_quote, div, _) = image_lines[line];
+                if !image_alt_layout(label, quotes, item_column, item_quote, div).2 {
+                    return image.to_owned();
+                }
+                for (i, byte) in label.bytes().enumerate() {
+                    if matches!(byte, b'"' | b'\'') {
+                        positions.insert(at + 2 + i);
+                        positions.insert(at + 1 + i);
+                    }
+                }
+                image.to_owned()
+            },
+        );
+    }
+    normalize::inline_with_quote_preservation(&source, |at| {
+        omit_quote_delimiters || positions.contains(&at)
+    })
+}
+
 fn replace_image_labels(
     source: &str,
     mask: &str,
     mut replace: impl FnMut(&str, &str, usize) -> String,
+) -> String {
+    replace_image_labels_with_targets(
+        source,
+        mask,
+        |image, label, at, _| replace(image, label, at),
+        false,
+    )
+}
+
+fn replace_image_labels_with_targets(
+    source: &str,
+    mask: &str,
+    mut replace: impl FnMut(&str, &str, usize, bool) -> String,
+    allow_incomplete: bool,
 ) -> String {
     if !source.contains("![") {
         return source.to_owned();
@@ -586,6 +755,17 @@ fn replace_image_labels(
     for blank in cached_regex!(r"\n[ \t]*\n").unwrap().find_iter(source) {
         boundaries.insert(blank.start());
     }
+    let mut reference_ends = vec![None; bytes.len()];
+    let mut reference_end = None;
+    for at in (0..bytes.len()).rev() {
+        if boundaries.contains(&at) {
+            reference_end = None;
+        }
+        if bytes[at] == b']' && !is_escaped(bytes, at) {
+            reference_end = Some(at);
+        }
+        reference_ends[at] = reference_end;
+    }
     for at in 0..bytes.len() {
         if boundaries.contains(&at) {
             opens.clear();
@@ -594,13 +774,23 @@ fn replace_image_labels(
             opens.push(at);
         } else if visible[at] == b']' && !is_escaped(bytes, at) {
             if let Some(open) = opens.pop() {
+                let complete_target = match bytes.get(at + 1) {
+                    Some(b'(') => visible.get(at + 1) == Some(&b' '),
+                    Some(b'[') => reference_ends
+                        .get(at + 2)
+                        .copied()
+                        .flatten()
+                        .is_some_and(|end| end >= at + 2),
+                    _ => false,
+                };
                 if open > 0
                     && bytes[open - 1] == b'!'
                     && visible[open - 1] == b'!'
                     && !is_escaped(bytes, open - 1)
-                    && matches!(bytes.get(at + 1), Some(b'(' | b'['))
+                    && (complete_target
+                        || allow_incomplete && matches!(bytes.get(at + 1), Some(b'(' | b'[')))
                 {
-                    closes.insert(open - 1, at);
+                    closes.insert(open - 1, (at, complete_target));
                 }
             }
         }
@@ -612,9 +802,9 @@ fn replace_image_labels(
     let mut cursor = 0;
     let mut at = 0;
     while at < bytes.len() {
-        if let Some(&end) = closes.get(&at) {
+        if let Some(&(end, complete_target)) = closes.get(&at) {
             let image = &source[at..end + 1];
-            let replaced = replace(image, &source[at + 2..end], at);
+            let replaced = replace(image, &source[at + 2..end], at, complete_target);
             if replaced == image {
                 at += 1;
                 continue;
@@ -3345,6 +3535,10 @@ fn consume_orphan_djot_attributes(source: &str) -> (String, OrphanAttributeSpans
         let first = quote_prefix.find(line).unwrap().end();
         let depth = line[..first].bytes().filter(|&byte| byte == b'>').count();
         if line[first..].trim().is_empty() {
+            if depth != 0 {
+                follows_blank = true;
+                next_depth = Some(depth);
+            }
             continue;
         }
         let visible = masked_lines[index].as_bytes().get(first);
@@ -3650,6 +3844,14 @@ fn rewrite_djot_body(djot: &str) -> String {
 }
 
 fn rewrite_djot_body_with(djot: &str, transform: impl FnMut(&str) -> String) -> String {
+    rewrite_djot_body_with_quotes(djot, transform, false)
+}
+
+fn rewrite_djot_body_with_quotes(
+    djot: &str,
+    transform: impl FnMut(&str) -> String,
+    omit_quote_delimiters: bool,
+) -> String {
     let source = convert_djot_block_markers(&djot.replace("\r\n", "\n").replace('\r', "\n"));
     // Before anything else, and deliberately as a same-length rewrite: `+` and
     // `-` are one byte each, so every offset the mask and the rules below
@@ -3662,7 +3864,11 @@ fn rewrite_djot_body_with(djot: &str, transform: impl FnMut(&str) -> String) -> 
     let (source, orphan_spans) = consume_orphan_djot_attributes(&source);
     let mask = emphasis_mask(&source);
     orphan_spans.restore_with(
-        &emphasis::convert(&source, &mask, rewrite_djot_inline),
+        &if omit_quote_delimiters {
+            emphasis::convert_image_child(&source, &mask, rewrite_djot_inline)
+        } else {
+            emphasis::convert(&source, &mask, rewrite_djot_inline)
+        },
         transform,
     )
 }
@@ -4086,7 +4292,7 @@ fn mask_djot_fences(
     strict: bool,
 ) -> String {
     let mut mask = source.as_bytes().to_vec();
-    let opener = cached_regex!(r"^([ \t]*)(?:(\[\^[^\]\n]+\]:[ \t]*|(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+))?(`{3,}|~{3,})[ \t]*=?[A-Za-z0-9_+#.-]*[ \t]*$").unwrap();
+    let opener = cached_regex!(r"^([ \t]*)(?:(\[\^[^\]\n]+\]:[ \t]*|[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|(?:(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)|:)[ \t]+))?(`{3,}|~{3,})[ \t]*=?[A-Za-z0-9_+#.-]*[ \t]*$").unwrap();
     let boundary = cached_regex!(r"^[ \t]*(?:[-*+] |[0-9]+[.)] |:{1,2} |#{1,6} )").unwrap();
     let nested_note_header = cached_regex!(r"\[\^[^\]\n]+\]:[ \t]*").unwrap();
     let mut fence: Option<(u8, usize, usize, Option<usize>, usize)> = None;
@@ -4294,6 +4500,16 @@ fn mask_djot_fences(
                     .encode_utf16()
                     .count()
             });
+            let task_start = cached_regex!(r"\[[ xX]\][ \t]+$")
+                .unwrap()
+                .find(marker)
+                .map_or(marker.len(), |task| task.start());
+            let marker_base = &marker[..task_start];
+            let native_prefix = format!(
+                "{}{}",
+                native_marker.replace(marker_base, "$1.$2"),
+                &marker[task_start..]
+            );
             if (!marker.starts_with(':') || previous_block)
                 && (!strict || can_normalize || !marker.is_empty())
             {
@@ -4311,7 +4527,7 @@ fn mask_djot_fences(
                 } else if marker.starts_with("[^") {
                     opening_indent.len() + 2
                 } else if !marker.is_empty() {
-                    opening_indent.len() + native_marker.replace(marker, "$1.$2").len()
+                    opening_indent.len() + native_marker.replace(marker_base, "$1.$2").len()
                 } else if nested {
                     owner_column
                 } else {
@@ -4324,7 +4540,6 @@ fn mask_djot_fences(
                     opening_indent.len() + marker.len()
                 };
                 fence_target = " ".repeat(target_column);
-                let native_prefix = native_marker.replace(marker, "$1.$2");
                 if fence_normalize && (marker.is_empty() || native_prefix != marker) {
                     if let Some(callback) = on_fence_line.as_mut() {
                         callback(
@@ -7234,7 +7449,12 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
             } else {
                 format!("{definitions}\n\n")
             };
-            let converted = djot_to_carve(&format!("{definitions}DJOTALT {raw} DJOTEND"));
+            let converted = djot_to_carve_prepared_with_quotes(
+                &strip_footnote_definition_attributes(&format!(
+                    "{definitions}DJOTALT {raw} DJOTEND"
+                )),
+                true,
+            );
             let options = crate::Options {
                 smart_typography: crate::SmartTypographyMode::Source,
                 ..Default::default()
@@ -7253,6 +7473,8 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
                 .replace('\\', "\\\\")
                 .replace('[', "\\[")
                 .replace(']', "\\]")
+                .replace('"', "\\\"")
+                .replace('\'', "\\'")
                 .into_bytes();
         }
         let mut target = String::new();
@@ -7514,6 +7736,137 @@ fn carry_djot_attributes_across_div_closers(source: &str) -> std::borrow::Cow<'_
         }
     }
     std::borrow::Cow::Owned(out.join("\n"))
+}
+
+fn carry_djot_attributes_across_quote_exits(source: &str) -> String {
+    if !source.contains('>') || !source.contains('{') {
+        return source.to_owned();
+    }
+    let _paragraph_cache = ParagraphCacheScope::new(source);
+    let mask = mask_djot_attribute_source(source);
+    let masks: Vec<_> = mask.split('\n').collect();
+    let mut lines: Vec<_> = source.split('\n').map(str::to_owned).collect();
+    let quote = cached_regex!(r"^(?:[ \t]*>(?:[ \t]|$))*").unwrap();
+    let marker = cached_regex!(r"^(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
+    let mut columns: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut contexts = Vec::new();
+    let mut offset = 0;
+    let mut previous_depth = 0;
+    for (n, line) in lines.iter().enumerate() {
+        let prefix = quote.find(line).unwrap().end();
+        let depth = line[..prefix].bytes().filter(|byte| *byte == b'>').count();
+        let body = &line[prefix..];
+        let indent = body.len() - body.trim_start_matches([' ', '\t']).len();
+        let attributes = masks[n].as_bytes().get(prefix + indent) == Some(&b'{')
+            && read_djot_word_attributes(body, indent)
+                .is_some_and(|(end, _)| end == body.trim_end().len());
+        let mut continued = false;
+        let mut list_owned = false;
+        if !body.trim().is_empty() {
+            let held = columns.entry(depth).or_default();
+            if marker.is_match(&body[indent..]) {
+                while held.last().is_some_and(|column| *column >= indent) {
+                    held.pop();
+                }
+                held.push(indent);
+            }
+            if attributes {
+                continued = comment_continues_paragraph(source, offset + prefix + indent);
+                list_owned = held.iter().any(|column| *column < indent);
+            } else if held.last().is_some_and(|column| indent <= *column)
+                && !marker.is_match(&body[indent..])
+            {
+                held.clear();
+            }
+        }
+        contexts.push((
+            prefix,
+            depth,
+            indent,
+            attributes,
+            continued,
+            list_owned,
+            body.trim().is_empty(),
+            depth > previous_depth,
+        ));
+        previous_depth = depth;
+        offset += line.len() + 1;
+    }
+    let mut moved: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut following = None;
+    let mut next_content: Option<usize> = None;
+    let mut destination_depth: Option<usize> = None;
+    for n in (0..lines.len()).rev() {
+        let (prefix, depth, indent, attributes, continued, list_owned, empty, opens) = contexts[n];
+        if attributes {
+            if let (Some(target), Some(destination)) = (following, destination_depth) {
+                if depth > destination
+                    && !next_content.is_some_and(|next| contexts[next].7)
+                    && !continued
+                    && !list_owned
+                {
+                    let target_line: &String = &lines[target];
+                    let mut end = 0;
+                    for _ in 0..destination {
+                        let rest = &target_line[end..];
+                        end += rest.len() - rest.trim_start_matches([' ', '\t']).len() + 1;
+                        if target_line
+                            .as_bytes()
+                            .get(end)
+                            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+                        {
+                            end += 1;
+                        }
+                    }
+                    end += target_line[end..].len()
+                        - target_line[end..].trim_start_matches([' ', '\t']).len();
+                    let mut owner_end = 0;
+                    for _ in 0..destination {
+                        let rest = &lines[n][owner_end..prefix];
+                        owner_end += rest.len() - rest.trim_start_matches([' ', '\t']).len() + 1;
+                        if lines[n]
+                            .as_bytes()
+                            .get(owner_end)
+                            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+                        {
+                            owner_end += 1;
+                        }
+                    }
+                    let owner_rest = &lines[n][owner_end..prefix];
+                    let owner_indent =
+                        owner_rest.len() - owner_rest.trim_start_matches([' ', '\t']).len();
+                    let target_prefix = if owner_indent > 0 {
+                        format!("{}{}", &lines[n][..owner_end], " ".repeat(owner_indent))
+                    } else {
+                        target_line[..end].to_owned()
+                    };
+                    moved
+                        .entry(target)
+                        .or_default()
+                        .push(format!("{target_prefix}{}", &lines[n][prefix + indent..]));
+                    lines[n] = lines[n][..prefix].trim_end().to_owned();
+                } else if depth <= destination {
+                    following = Some(n);
+                }
+            }
+        } else if empty {
+            destination_depth = destination_depth.map(|destination| destination.min(depth));
+        } else {
+            following = Some(n);
+            destination_depth = Some(depth);
+        }
+        if !empty || opens {
+            next_content = Some(n);
+        }
+    }
+    let mut output = Vec::new();
+    for (n, line) in lines.into_iter().enumerate() {
+        if let Some(attributes) = moved.remove(&n) {
+            output.extend(attributes.into_iter().rev());
+        }
+        output.push(line);
+    }
+    output.join("\n")
 }
 
 fn normalize_djot_attribute_lines(source: &str) -> String {
@@ -9356,7 +9709,18 @@ fn close_djot_table_code(
     let mut divs: Vec<(usize, usize, usize, usize)> = Vec::new();
     let mut output = String::new();
     for line in source.split('\n') {
-        let at = djot_content_start(line);
+        let mut at = djot_content_start(line);
+        if cached_regex!(r"[-*+][ \t]+$")
+            .unwrap()
+            .is_match(&line[..at])
+        {
+            if let Some(task) = cached_regex!(r"^\[[ xX]\][ \t]+")
+                .unwrap()
+                .find(&line[at..])
+            {
+                at += task.end();
+            }
+        }
         let line_end = offset + line.len();
         let (parsed_depth, content) = quoted(line);
         let mut code_depth = 0;
@@ -10410,7 +10774,9 @@ pub(crate) fn strip_footnote_definition_attributes(input: &str) -> DjotFootnoteA
                     }
                 }
             }
-            pending.clear();
+            if !content.is_empty() {
+                pending.clear();
+            }
         }
         let reference = block_allowed
             && mask.as_bytes().get(offset + prefix.len()) == Some(&b'[')
