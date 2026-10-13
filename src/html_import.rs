@@ -5950,22 +5950,13 @@ impl<'a> Importer<'a> {
         false
     }
 
-    /// Drop every row whose cells are all blank, which Carve reads as text
-    /// (markup-carve/carve#1954). Returns the source index of the last row
-    /// dropped. Writing exit only: the tree renders such a row, and only the
-    /// writer has no spelling for it (carve-rs#1735). The writing exit adjusts
-    /// group counts before removing the rows.
+    /// Drop every row with no cells, which Carve cannot spell. A row of empty
+    /// cells is a row (CARVE-P9-082) and is kept. Returns the source index of
+    /// the last row dropped. Writing exit only: the tree renders such a row, and
+    /// only the writer has no spelling for it (carve-rs#1735). The writing exit
+    /// adjusts group counts before removing the rows.
     fn blank_table_row(row: &TableRow) -> bool {
-        row.cells.iter().all(|cell| {
-            cell.children.is_empty()
-                && cell.span.is_none()
-                && cell.align.is_none()
-                && cell.valign.is_none()
-                && cell
-                    .attrs
-                    .as_ref()
-                    .map_or(true, |attrs| *attrs == Attrs::default())
-        })
+        row.cells.is_empty()
     }
 
     fn drop_blank_rows(
@@ -5987,7 +5978,7 @@ impl<'a> Importer<'a> {
             }
             self.diag(
                 HtmlImportDiagnosticCode::StructureUnspellable,
-                "Dropped a row whose every cell is empty: Carve reads such a row as text".into(),
+                "Dropped a row with no cells: Carve has no spelling for it".into(),
                 HtmlImportSeverity::Warning,
                 &format!("{path}/tr[{}]", r + 1),
                 tr,

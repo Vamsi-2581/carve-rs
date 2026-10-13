@@ -392,8 +392,12 @@ fn smart_typography_tokenizes_overlapping_arrows_and_dashes_left_to_right() {
 }
 
 #[test]
-fn bare_two_pipe_empty_content_is_paragraph_not_table() {
-    assert_eq!(html("||"), "<p>||</p>");
+fn bare_two_pipe_is_one_empty_cell() {
+    // CARVE-P9-082: `||` is one cell slot, so it is a table row.
+    assert_eq!(
+        html("||"),
+        "<table>\n  <tbody>\n    <tr><td></td></tr>\n  </tbody>\n</table>"
+    );
 }
 
 #[test]

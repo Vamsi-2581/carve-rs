@@ -71,17 +71,11 @@ const NOT_IN_CORPUS: &[(&str, &str)] = &[
 // Comparing against the SOURCE instead would report 749 documents whose `.crv`
 // is simply not in canonical form; `tests/corpus_canonical_form.rs` is where
 // that belongs.
-const SOURCE_LOSSY: &[(&str, &[&str])] = &[
-    (
-        "the sanitized-away `href` attribute is not carried, so \
+const SOURCE_LOSSY: &[(&str, &[&str])] = &[(
+    "the sanitized-away `href` attribute is not carried, so \
          `[safe](https://example.com){href=javascript:steal}` comes back without it",
-        &["108-security-hardening-11.crv"],
-    ),
-    (
-        "carve-rs#2642: a fence that leaves a closed nested item is still misread",
-        &["581-a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in-4.crv"],
-    ),
-];
+    &["108-security-hardening-11.crv"],
+)];
 
 /// Every declared source-lossy document, sorted.
 fn source_lossy_names() -> Vec<String> {
@@ -1619,8 +1613,13 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // once its link definition registers.
     // The spec pin adds eight corpus 588 documents. The moved 437 footnote
     // row also round trips strictly after the first-block parser change.
-    const STRICT: usize = 1865;
-    const LOSSY: usize = 577;
+    // Reading a fence that leaves a closed nested item as the checker does
+    // moves one document from the strict to the lossy set.
+    // Spec 46b3d3f7 adds section 589's 36 documents (CARVE-P9-082): 34 round
+    // trip strictly, and 589-18 and 589-19, which hold an escaped pipe, report
+    // existing losses.
+    const STRICT: usize = 1898;
+    const LOSSY: usize = 580;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in

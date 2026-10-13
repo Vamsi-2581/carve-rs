@@ -4036,31 +4036,21 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
                 "An empty definition description cannot be written in Carve.",
             ));
         }
-        if rows[n] && text.len() >= 2 {
-            if separator(text) {
-                if n > table_start + 1 {
-                    findings.push((offset, "A table separator inside the table loses the preceding header row and alignment change."));
-                }
-                if (n == 0 || !rows[n - 1])
-                    && lines
-                        .iter()
-                        .enumerate()
-                        .skip(n)
-                        .take_while(|(k, _)| rows[*k])
-                        .all(|(_, row)| separator(row.trim()))
-                {
-                    findings.push((
-                        offset,
-                        "A table containing only separator rows cannot be written in Carve.",
-                    ));
-                }
-            } else if text.trim_matches('|').trim().is_empty()
-                && (n == 0 || !rows[n - 1])
-                && rows.get(n + 1) != Some(&true)
+        if rows[n] && text.len() >= 2 && separator(text) {
+            if n > table_start + 1 {
+                findings.push((offset, "A table separator inside the table loses the preceding header row and alignment change."));
+            }
+            if (n == 0 || !rows[n - 1])
+                && lines
+                    .iter()
+                    .enumerate()
+                    .skip(n)
+                    .take_while(|(k, _)| rows[*k])
+                    .all(|(_, row)| separator(row.trim()))
             {
                 findings.push((
                     offset,
-                    "A table containing only blank cells cannot be written in Carve.",
+                    "A table containing only separator rows cannot be written in Carve.",
                 ));
             }
         }
@@ -4346,7 +4336,6 @@ mod tests {
             (": apple\n fruit\n\n  Paragraph one\n\n  Paragraph two\n\n  - sub\n  - list\n\n: orange\n", 11, "empty definition description"),
             ("|a|b|\n|:-|---:|\n|c|d|\n|cc|dd|\n|-:|:-:|\n|e|f|\n|g|h|\n", 5, "separator inside the table"),
             ("|--|--|\n", 1, "only separator rows"),
-            ("| |\n", 1, "only blank cells"),
         ] {
             // Heading folding removes a source line before the loss location.
             for (prefix, shift) in [("", 0), ("# Heading\nlazy continuation\n\n", 3),
