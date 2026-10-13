@@ -103,3 +103,19 @@ fn nested_fence_content_dedents_to_the_item_content_column() {
         "<ul>\n  <li>item\n    <pre><code>  deep\ncode\n</code></pre>\n  </li>\n</ul>"
     );
 }
+
+#[test]
+fn a_closed_fence_below_an_open_sublist_opens_in_the_outer_item() {
+    assert_eq!(
+        carve::to_html("- a\n    - child\n    ```\n    code\n    ```\nafter").trim(),
+        "<ul>\n  <li>a\n    <ul>\n      <li>child</li>\n    </ul>\n    <pre><code>code\n</code></pre>\n  </li>\n</ul>\n<p>after</p>"
+    );
+    assert_eq!(
+        carve::to_html("> - a\n>     - child\n>     ```\n>     code\n>     ```\nafter").trim(),
+        "<blockquote>\n  <ul>\n    <li>a\n      <ul>\n        <li>child</li>\n      </ul>\n      <pre><code>code\n</code></pre>\n    </li>\n  </ul>\n</blockquote>\n<p>after</p>"
+    );
+    assert_eq!(
+        carve::to_html("- a\n    - child\n    ```\n    code\nafter").trim(),
+        "<ul>\n  <li>a\n    <ul>\n      <li>child\n<code>\ncode\nafter</code></li>\n    </ul>\n  </li>\n</ul>"
+    );
+}
