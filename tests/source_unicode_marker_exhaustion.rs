@@ -111,6 +111,7 @@ fn occupied_pool_keeps_the_footnote_code_refusal_specific() {
         panic!("expected a footnote paragraph");
     };
     paragraph.children = vec![carve::InlineNode::Code(carve::Code {
+        cell_wraps: None,
         value: "x\n> tail".into(),
         attrs: None,
         pos: None,

@@ -364,6 +364,8 @@ mod a_headings_trailing_hash_run_is_escaped;
 mod a_hoisted_definition_stays_on_an_emptied_item_marker;
 #[path = "../a_hoisted_section_id_comes_back_on_its_heading.rs"]
 mod a_hoisted_section_id_comes_back_on_its_heading;
+#[path = "../a_join_inside_a_verbatim_inline_is_a_cell_wraps_entry.rs"]
+mod a_join_inside_a_verbatim_inline_is_a_cell_wraps_entry;
 #[path = "../a_line_block_hardens_at_every_depth.rs"]
 mod a_line_block_hardens_at_every_depth;
 #[path = "../a_line_block_round_trips_every_three_line_shape.rs"]

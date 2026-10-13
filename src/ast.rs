@@ -1291,6 +1291,7 @@ impl InlineNode {
         Self::Code(Code {
             value: value.into(),
             attrs,
+            cell_wraps: None,
             pos: None,
         })
     }
@@ -1347,6 +1348,8 @@ pub struct EscapedText {
 pub struct Code {
     pub value: String,
     pub attrs: Option<Attrs>,
+    /// The `+` continuation joins inside `value` (CARVE-P12-069).
+    pub cell_wraps: Option<Vec<VerbatimCellWrap>>,
     /// Span in the original source, when the parser could determine it.
     pub pos: Option<Pos>,
 }
@@ -1355,6 +1358,15 @@ pub struct Code {
 pub struct NonBreakingSpace {
     pub attrs: Option<Attrs>,
     pub pos: Option<Pos>,
+}
+
+/// A `+` continuation join inside a verbatim payload (CARVE-P12-069):
+/// `offset` counts codepoints up to the joining space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerbatimCellWrap {
+    pub offset: usize,
+    pub line: usize,
+    pub row: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1617,6 +1629,8 @@ pub struct Math {
     pub attrs: Option<Attrs>,
     pub display: bool,
     pub content: String,
+    /// The `+` continuation joins inside `content` (CARVE-P12-069).
+    pub cell_wraps: Option<Vec<VerbatimCellWrap>>,
     /// Authored equation-number label: the visible numbering prefix and the
     /// counter bucket (CARVE-P12-051). Carve 0.1 source has no spelling for
     /// one, so the parser never sets it; it arrives on ingest.
@@ -1632,6 +1646,8 @@ pub struct Math {
 pub struct RawInline {
     pub format: String,
     pub content: String,
+    /// The `+` continuation joins inside `content` (CARVE-P12-069).
+    pub cell_wraps: Option<Vec<VerbatimCellWrap>>,
     /// True when a render-stage transform injected this node rather than the
     /// author writing it - today, the anchor `headingPermalinks` appends to a
     /// heading.

@@ -178,6 +178,7 @@ impl InlineCarriers {
                             }));
                         }
                         out.push(InlineNode::RawInline(RawInline {
+                            cell_wraps: None,
                             format: "html".to_owned(),
                             content: marker.clone(),
                             injected: false,

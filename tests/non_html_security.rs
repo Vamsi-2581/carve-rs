@@ -270,6 +270,7 @@ fn markdown_emits_control_bytes_from_author_leaf_fields_and_still_refuses_del_an
                     carve::InlineNode::text(format!("text{c}")),
                     carve::InlineNode::code(format!("code{c}"), None),
                     carve::InlineNode::Math(carve::Math {
+                        cell_wraps: None,
                         attrs: None,
                         display: false,
                         content: format!("math{c}"),

@@ -1489,6 +1489,7 @@ impl<'a> Importer<'a> {
             return None;
         }
         Some(Math {
+            cell_wraps: None,
             attrs: Self::math_attrs(attrs, display),
             display,
             content,
@@ -6595,7 +6596,12 @@ impl<'a> Importer<'a> {
         }
         let pos = Some(candidate_mark(self.empty_code_spans.len()));
         self.empty_code_spans.push((h.clone(), path.to_owned()));
-        Ok(vec![InlineNode::Code(Code { value, attrs, pos })])
+        Ok(vec![InlineNode::Code(Code {
+            cell_wraps: None,
+            value,
+            attrs,
+            pos,
+        })])
     }
 
     fn inline(
@@ -6736,6 +6742,7 @@ impl<'a> Importer<'a> {
                     }
                 }
                 return Ok(vec![InlineNode::Math(Math {
+                    cell_wraps: None,
                     attrs,
                     display: Self::attr(h, "display").as_deref() == Some("block"),
                     content,
@@ -7008,6 +7015,7 @@ impl<'a> Importer<'a> {
                     Self::text(h)
                 };
                 InlineNode::RawInline(RawInline {
+                    cell_wraps: None,
                     format,
                     content,
                     injected: false,
@@ -7055,6 +7063,7 @@ impl<'a> Importer<'a> {
             {
                 self.keep_raw(h, path, &tag);
                 InlineNode::RawInline(RawInline {
+                    cell_wraps: None,
                     format: "html".into(),
                     content: Self::html(h),
                     injected: false,

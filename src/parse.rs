@@ -19990,6 +19990,45 @@ thread_local! {
     static CELL_WRAPS: RefCell<Vec<(usize, CellWrap)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// The `+` joins inside the verbatim payload of the span whose backtick run
+/// starts at `tick`, as codepoint offsets into `value` (CARVE-P12-069). A join
+/// the padding strip consumed has no space left to name and is dropped.
+fn verbatim_cell_wraps(
+    bytes: &[u8],
+    base: usize,
+    tick: usize,
+    value: &str,
+) -> Option<Vec<VerbatimCellWrap>> {
+    let run = bytes[tick..].iter().take_while(|&&b| b == b'`').count();
+    let region = &bytes[tick + run..];
+    let start = if region.starts_with(value.as_bytes()) && !region.starts_with(b" ") {
+        tick + run
+    } else if region
+        .get(1..)
+        .is_some_and(|rest| rest.starts_with(value.as_bytes()))
+    {
+        tick + run + 1
+    } else if region.starts_with(value.as_bytes()) {
+        tick + run
+    } else {
+        return None;
+    };
+    let mut wraps = Vec::new();
+    for (offset, (at, ch)) in value.char_indices().enumerate() {
+        if ch != ' ' {
+            continue;
+        }
+        if let Some(wrap) = cell_wrap_at(base + start + at) {
+            wraps.push(VerbatimCellWrap {
+                offset,
+                line: wrap.line,
+                row: wrap.row,
+            });
+        }
+    }
+    (!wraps.is_empty()).then_some(wraps)
+}
+
 fn cell_wrap_at(offset: usize) -> Option<CellWrap> {
     CELL_WRAPS.with(|wraps| {
         let wraps = wraps.borrow();
@@ -23986,9 +24025,15 @@ fn parse_inline_context_with_pairs(
         // Inline code spans
         if c == b'`' {
             if let Some((value, consumed)) = parse_inline_code(bytes, i) {
-                if let Some((raw, raw_consumed)) =
+                let cell_wraps = if wraps_live {
+                    verbatim_cell_wraps(bytes, base, i, &value)
+                } else {
+                    None
+                };
+                if let Some((mut raw, raw_consumed)) =
                     parse_raw_inline_after_code(bytes, i, &value, consumed)
                 {
+                    raw.cell_wraps = cell_wraps;
                     flush_text(
                         &mut out,
                         &mut buf,
@@ -24022,6 +24067,7 @@ fn parse_inline_context_with_pairs(
                 // checks -- so `` `c`{_u_} `` is a code span + forced underline,
                 // not a bogus `_u_` attribute. Matches carve-js / carve-php.
                 out.push(InlineNode::Code(Code {
+                    cell_wraps,
                     value,
                     attrs: None,
                     pos: inline_pos(positions, base + i, base + i + consumed),
@@ -24032,7 +24078,11 @@ fn parse_inline_context_with_pairs(
         }
 
         if c == b'$' {
-            if let Some((math, consumed)) = parse_math(bytes, i, &bounds) {
+            if let Some((mut math, consumed)) = parse_math(bytes, i, &bounds) {
+                if wraps_live {
+                    let tick = if math.display { i + 2 } else { i + 1 };
+                    math.cell_wraps = verbatim_cell_wraps(bytes, base, tick, &math.content);
+                }
                 flush_text(
                     &mut out,
                     &mut buf,
@@ -25001,6 +25051,7 @@ fn parse_raw_inline_after_code(
     }
     Some((
         RawInline {
+            cell_wraps: None,
             format: format.to_string(),
             content: value.to_string(),
             injected: false,
@@ -25065,6 +25116,7 @@ fn parse_math(bytes: &[u8], start: usize, bounds: &InlineBounds<'_>) -> Option<(
     }
     Some((
         Math {
+            cell_wraps: None,
             attrs,
             display,
             content,

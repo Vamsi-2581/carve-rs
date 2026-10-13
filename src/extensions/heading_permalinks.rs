@@ -162,6 +162,7 @@ impl HeadingPermalinks {
             format!(" {marker_html}")
         };
         let anchor = InlineNode::RawInline(RawInline {
+            cell_wraps: None,
             format: "html".into(),
             content,
             injected: true,
