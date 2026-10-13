@@ -249,6 +249,27 @@ fn nested_inline_elements_become_marks_on_text() {
 }
 
 #[test]
+fn a_continuation_row_is_a_stated_loss() {
+    const REASON: &str = "the editor does not retain a table cell's continuation-row boundary";
+    for source in ["| a | b |\n+ c | d |\n", "| a | b |\n+ | |\n"] {
+        let report = to_prosemirror(&parse(source));
+        assert_eq!(
+            report.degraded.get("cell_wrap").map(String::as_str),
+            Some(REASON),
+            "{source:?}"
+        );
+        assert_eq!(
+            report.degraded.len(),
+            1,
+            "{source:?}: {:?}",
+            report.degraded
+        );
+    }
+    let control = to_prosemirror(&parse("| a | b |\n| c | d |\n"));
+    assert!(control.degraded.is_empty() && control.dropped.is_empty());
+}
+
+#[test]
 fn soft_break_survives_as_text_and_is_reported() {
     let (value, report) = pm("left\nright");
     assert_eq!(
@@ -1620,8 +1641,11 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // existing losses.
     // Spec 0af1cf1a adds 581-8, 581-9 and 581-10. All three round trip
     // strictly once a colon run past the box's column stays code.
-    const STRICT: usize = 1901;
-    const LOSSY: usize = 580;
+    // CARVE-P12-069 records `+` rows as `continuationLines` and `cell_wrap`,
+    // which the bridge has no slot for, so the 27 documents holding a
+    // continuation row now report a degradation.
+    const STRICT: usize = 1874;
+    const LOSSY: usize = 607;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in
