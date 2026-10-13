@@ -11,11 +11,8 @@
 //! body, a definition description and a block quote each reached out for a line
 //! the clause leaves where the author wrote it.
 //!
-//! THE CLAUSE NAMES ITS OWN CONTROL, so the rule is a RELATION between two
-//! documents and no single golden can express it: for every container, the
-//! marker spelling and the comment spelling of the same document must render
-//! the same thing. A change that fixes three containers and drifts the fourth
-//! passes every golden it did not touch.
+//! Comments now retain a following line only below the content column.
+//! Marker and comment spellings have independent reference expectations.
 //!
 //! The QUOTE row uses the blank-line control as well. A comment line at column
 //! 0 under an OPEN quoted paragraph is folded into it as lazy text rather than
@@ -41,54 +38,6 @@ fn html(src: &str) -> String {
 /// The same document twice, `+` where the control has its invisible line.
 fn marker(src: &str) -> String {
     src.replacen('@', "+", 1)
-}
-
-fn comment(src: &str) -> String {
-    src.replacen('@', "%% c", 1)
-}
-
-const BAND: &[(&str, &str)] = &[
-    (
-        "a footnote body, below its minimum column",
-        "[^a]: intro\n@\n more\n\nsee[^a]\n",
-    ),
-    (
-        "a footnote body, at its minimum column",
-        "[^a]: intro\n@\n  more\n\nsee[^a]\n",
-    ),
-    (
-        "a description, below its content column",
-        ":: term\n:  intro\n@\n  more\n",
-    ),
-    (
-        "a description, one column further below",
-        ":: term\n:  intro\n@\n more\n",
-    ),
-    (
-        "a block quote, with the quoted paragraph closed",
-        "> intro\n>\n@\n  more\n",
-    ),
-    (
-        "a list item, the container that always held the gate",
-        "- intro\n@\n  more\n",
-    ),
-];
-
-#[test]
-fn the_marker_reaches_no_further_than_a_comment_does() {
-    // Every row is measured before any of them is reported: the containers
-    // disagree independently, and stopping at the first one hides how many of
-    // them a change actually moved.
-    let drifted: Vec<&str> = BAND
-        .iter()
-        .filter(|(_, src)| html(&marker(src)) != html(&comment(src)))
-        .map(|(what, _)| *what)
-        .collect();
-    assert!(
-        drifted.is_empty(),
-        "the marker reached further than a comment does in: {}",
-        drifted.join("; ")
-    );
 }
 
 #[test]

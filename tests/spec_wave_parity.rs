@@ -42,3 +42,37 @@ fn a_tab_before_a_trailing_comment_stays_content() {
 fn a_colon_opener_on_an_item_marker_line_opens() {
     corpus_category("161-");
 }
+
+#[test]
+fn comments_retain_only_below_the_content_column() {
+    corpus_category("557-");
+    corpus_category("570-");
+    let rows: serde_json::Value = serde_json::from_str(include_str!("fixtures/comment_retention_wave.json")).unwrap();
+    let compact = regex::Regex::new(r">\s+<").unwrap();
+    for row in rows.as_array().unwrap() {
+        assert_eq!(compact.replace_all(&carve::to_html(row["source"].as_str().unwrap()), "><").trim(), row["html"].as_str().unwrap(), "{}", row["id"]);
+    }
+}
+
+#[test]
+fn below_column_comments_keep_definition_bands_and_fences() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/comment_fence_review_wave.json")).unwrap();
+    for row in rows.as_array().unwrap() {
+        assert_eq!(
+            carve::to_html(row["source"].as_str().unwrap()),
+            row["html"].as_str().unwrap()
+        );
+        let positioned = carve::parse_with_options(
+            row["source"].as_str().unwrap(),
+            &carve::Options {
+                positions: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            carve::render_html(&positioned).unwrap(),
+            row["html"].as_str().unwrap()
+        );
+    }
+}

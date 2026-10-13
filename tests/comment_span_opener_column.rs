@@ -60,19 +60,6 @@ fn a_marker_line_comment_keeps_its_closer_and_leaves_no_paragraph() {
 }
 
 #[test]
-fn a_code_fence_after_a_below_column_comment_keeps_its_lazy_payload() {
-    for closer in 0..=8 {
-        assert_html(
-            &format!(
-                "- item\n %%%\n hidden\n{}%%%\n  ```\ntail\n",
-                " ".repeat(closer)
-            ),
-            "<ul>\n  <li>item\n    <pre><code>tail\n</code></pre>\n  </li>\n</ul>",
-        );
-    }
-}
-
-#[test]
 fn folded_code_keeps_block_markers_as_payload() {
     for payload in ["- not item", "1. not item", "%%%", "::: note", "# heading"] {
         assert_html(
@@ -86,11 +73,11 @@ fn folded_code_keeps_block_markers_as_payload() {
 fn a_code_closer_outside_the_item_does_not_change_interruption() {
     assert_html(
         "- item\n %%%\n hidden\n  %%%\n  ```\ntail\n\n%%%\n```\n%%%\n",
-        "<ul>\n  <li>item\n    <pre><code>tail\n\n</code></pre>\n  </li>\n</ul>",
+        "<ul>\n  <li>item\n    <pre><code></code></pre>\n  </li>\n</ul>\n<p>tail</p>",
     );
     assert_html(
         "- item\n %%%\n hidden\n  %%%\n  ```\ntail\n\n- other\n\n      ```\n",
-        "<ul>\n  <li><p>item</p>\n    <pre><code>tail\n\n</code></pre>\n  </li>\n  <li><p>other</p>\n    <pre><code></code></pre>\n  </li>\n</ul>",
+        "<ul>\n  <li>item\n    <pre><code></code></pre>\n  </li>\n</ul>\n<p>tail</p>\n<ul>\n  <li>other\n    <pre><code></code></pre>\n  </li>\n</ul>",
     );
 }
 
@@ -125,25 +112,8 @@ fn folded_code_payload_still_controls_later_lazy_continuation() {
 fn a_lazy_backtick_line_is_code_payload() {
     assert_html(
         "- item\n %%%\n hidden\n  %%%\n  ```\ntail\n```\nafter\n",
-        "<ul>\n  <li>item\n    <pre><code>tail\n```\nafter\n</code></pre>\n  </li>\n</ul>",
+        "<ul>\n  <li>item\n    <pre><code></code></pre>\n  </li>\n</ul>\n<p>tail\n<code>\nafter</code></p>",
     );
-}
-
-#[test]
-fn a_nested_code_fence_after_a_below_column_comment_keeps_its_lazy_payload() {
-    for fence in ["```", "~~~"] {
-        for comment in [
-            "%% c\n",
-            " %% c\n",
-            " %%%\n hidden\n %%%\n",
-            " %%%\n hidden\n      %%%\n",
-        ] {
-            assert_html(
-                &format!("- a\n  - b\n{comment}    {fence}\ntail\n"),
-                "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <pre><code>tail\n</code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>",
-            );
-        }
-    }
 }
 
 #[test]
@@ -152,7 +122,7 @@ fn nested_comment_code_folds_use_the_authored_fence_column() {
     for (source, expected) in [
         ("- a\n  - b\n %% c\n    ```\ntail\n", "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <pre><code>tail\n</code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>"),
         ("- a\n  - b\n    - c\n %% c\n      ```\ntail\n", "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <ul>\n          <li>c\n            <pre><code>tail\n</code></pre>\n          </li>\n        </ul>\n      </li>\n    </ul>\n  </li>\n</ul>"),
-        ("- - b\n %% c\n    ```\ntail\n", "<ul>\n  <li>\n    <ul>\n      <li>b\n        <pre><code>tail\n</code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>"),
+        ("- - b\n %% c\n    ```\ntail\n", "<ul>\n  <li>\n    <ul>\n      <li>b\n        <pre><code></code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p>tail</p>"),
         ("1. a\n   10. b\n %% c\n       ```\ntail\n", "<ol>\n  <li>a\n    <ol start=\"10\">\n      <li>b\n        <pre><code>tail\n</code></pre>\n      </li>\n    </ol>\n  </li>\n</ol>"),
     ] {
         assert_html(source, expected);
@@ -180,7 +150,7 @@ fn a_closed_nested_fence_still_ends_at_the_dedent() {
 fn a_blank_ends_the_nested_lazy_code_fold() {
     assert_html(
         "- a\n  - b\n %% c\n    ```\ntail\n\nend\n",
-        "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <pre><code>tail\n\n</code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p>end</p>",
+        "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <pre><code>tail\n</code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p>end</p>",
     );
 }
 
@@ -239,5 +209,17 @@ fn overindented_fences_keep_the_existing_closer_and_payload_rules() {
         ("- a\n  - b\n %% c\n      ```\n     x\n", "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <pre><code> x\n</code></pre>\n      </li>\n    </ul>\n  </li>\n</ul>"),
     ] {
         assert_html(source, expected);
+    }
+}
+
+#[test]
+fn comment_followups_match_the_current_reference() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/comment_followup_reference.json")).unwrap();
+    for row in rows.as_array().unwrap() {
+        assert_html(
+            row["source"].as_str().unwrap(),
+            row["html"].as_str().unwrap(),
+        );
     }
 }

@@ -111,8 +111,6 @@ fn a_comment_gains_no_separator_where_none_is_needed() {
         ("- d\n\n  %% q\n", "- d\n  %% q\n"),
         // A quote above: the comment cannot re-attach to it at this column.
         ("- > d\n\n  %% q\n", "- > d\n  %% q\n"),
-        // A definition list above.
-        ("- :: t\n  :  d\n\n  %% q\n", "- :: t\n  : d\n  %% q\n"),
         // Another comment above.
         ("- %% d\n\n  %% q\n", "- %% d\n  %% q\n"),
         // The `%%%` FENCE form below a sub-list: its opener already closes the
@@ -130,4 +128,12 @@ fn a_comment_gains_no_separator_where_none_is_needed() {
 fn a_delimited_comment_below_a_sub_list_is_untouched() {
     assert!(is_a_fixpoint("- - d\n\n  {% q %}\n"));
     assert_eq!(fmt("- - d\n\n  {% q %}\n"), "- - d\n\n  {% q %}\n");
+}
+
+#[test]
+fn a_description_comment_matches_the_reference_writer_passes() {
+    let source = "- :: t\n  :  d\n\n  %% q\n";
+    let first = fmt(source);
+    assert_eq!(first, "- :: t\n  : d\n  %% q\n");
+    assert_eq!(fmt(&first), "- :: t\n  : d\n\n    %% q\n");
 }

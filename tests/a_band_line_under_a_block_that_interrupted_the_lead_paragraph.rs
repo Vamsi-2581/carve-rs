@@ -183,7 +183,7 @@ fn a_line_comment_is_column_exempt_and_keeps_the_item() {
     // the lead paragraph is still there for the band line to continue.
     assert_eq!(
         both_paths("- t\n  %% c\n z\n").trim(),
-        concat!("<ul>\n", "  <li>t\n", "    z\n", "  </li>\n", "</ul>",),
+        "<ul>\n  <li>t</li>\n</ul>\n<p>z</p>",
     );
 }
 
@@ -191,7 +191,7 @@ fn a_line_comment_is_column_exempt_and_keeps_the_item() {
 fn a_comment_fence_is_column_exempt_too() {
     assert_eq!(
         both_paths("- t\n  %%%\n  h\n  %%%\n z\n").trim(),
-        concat!("<ul>\n", "  <li>t\n", "    z\n", "  </li>\n", "</ul>",),
+        "<ul>\n  <li>t</li>\n</ul>\n<p>z</p>",
     );
 }
 

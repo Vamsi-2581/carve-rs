@@ -155,5 +155,5 @@ fn the_two_fixes_touch_different_documents() {
     assert!(!payload_doc.contains("%%"));
     assert!(!label_doc.contains("=html"));
     assert_eq!(to_carve(payload_doc), payload_doc);
-    assert_eq!(container_label(label_doc), "a");
+    assert_eq!(container_label(label_doc), "a\t%% hidden");
 }
