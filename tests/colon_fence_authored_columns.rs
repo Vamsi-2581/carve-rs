@@ -236,7 +236,7 @@ fn guard_codefence_close2() {
 fn guard_codefence_close3() {
     let source = "- x\n\n    ```\n    a\n   ```\n\nafter\n";
     let expected =
-        "<ul>\n  <li>x\n    <pre><code>a\n ```\n\n</code></pre>\n  </li>\n</ul>\n<p>after</p>";
+        "<ul>\n  <li>x\n    <pre><code>a\n```\n\n</code></pre>\n  </li>\n</ul>\n<p>after</p>";
     assert_eq!(to_html(source), expected);
     assert_eq!(
         to_html_with_options(source, &Options::default().with_positions(true)),

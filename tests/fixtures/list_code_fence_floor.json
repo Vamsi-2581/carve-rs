@@ -182,12 +182,12 @@
   {
     "id": "floor-body-4-3-0",
     "source": "- term\n  : payload\n    ```\n   code\n  ```\nafter\n",
-    "html": "<ul><li>term\n: payload\n    <pre><code> code\n</code></pre></li></ul><p>after</p>"
+    "html": "<ul><li>term\n: payload\n    <pre><code>code\n</code></pre></li></ul><p>after</p>"
   },
   {
     "id": "floor-body-4-3-1",
     "source": "> - term\n>   : payload\n>     ```\n>    code\n>   ```\n> after\n",
-    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code> code\n</code></pre></li></ul><p>after</p></blockquote>"
+    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>"
   },
   {
     "id": "floor-body-4-4-0",
@@ -252,22 +252,22 @@
   {
     "id": "floor-body-6-3-0",
     "source": "- term\n  : payload\n      ```\n   code\n  ```\nafter\n",
-    "html": "<ul><li>term\n: payload\n    <pre><code> code\n</code></pre></li></ul><p>after</p>"
+    "html": "<ul><li>term\n: payload\n    <pre><code>code\n</code></pre></li></ul><p>after</p>"
   },
   {
     "id": "floor-body-6-3-1",
     "source": "> - term\n>   : payload\n>       ```\n>    code\n>   ```\n> after\n",
-    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code> code\n</code></pre></li></ul><p>after</p></blockquote>"
+    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>"
   },
   {
     "id": "floor-body-6-4-0",
     "source": "- term\n  : payload\n      ```\n    code\n  ```\nafter\n",
-    "html": "<ul><li>term\n: payload\n    <pre><code>  code\n</code></pre></li></ul><p>after</p>"
+    "html": "<ul><li>term\n: payload\n    <pre><code>code\n</code></pre></li></ul><p>after</p>"
   },
   {
     "id": "floor-body-6-4-1",
     "source": "> - term\n>   : payload\n>       ```\n>     code\n>   ```\n> after\n",
-    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code>  code\n</code></pre></li></ul><p>after</p></blockquote>"
+    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>"
   },
   {
     "id": "floor-body-6-6-0",
@@ -322,32 +322,32 @@
   {
     "id": "floor-body-8-3-0",
     "source": "- term\n  : payload\n        ```\n   code\n  ```\nafter\n",
-    "html": "<ul><li>term\n: payload\n    <pre><code> code\n</code></pre></li></ul><p>after</p>"
+    "html": "<ul><li>term\n: payload\n    <pre><code>code\n</code></pre></li></ul><p>after</p>"
   },
   {
     "id": "floor-body-8-3-1",
     "source": "> - term\n>   : payload\n>         ```\n>    code\n>   ```\n> after\n",
-    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code> code\n</code></pre></li></ul><p>after</p></blockquote>"
+    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>"
   },
   {
     "id": "floor-body-8-4-0",
     "source": "- term\n  : payload\n        ```\n    code\n  ```\nafter\n",
-    "html": "<ul><li>term\n: payload\n    <pre><code>  code\n</code></pre></li></ul><p>after</p>"
+    "html": "<ul><li>term\n: payload\n    <pre><code>code\n</code></pre></li></ul><p>after</p>"
   },
   {
     "id": "floor-body-8-4-1",
     "source": "> - term\n>   : payload\n>         ```\n>     code\n>   ```\n> after\n",
-    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code>  code\n</code></pre></li></ul><p>after</p></blockquote>"
+    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>"
   },
   {
     "id": "floor-body-8-6-0",
     "source": "- term\n  : payload\n        ```\n      code\n  ```\nafter\n",
-    "html": "<ul><li>term\n: payload\n    <pre><code>    code\n</code></pre></li></ul><p>after</p>"
+    "html": "<ul><li>term\n: payload\n    <pre><code>code\n</code></pre></li></ul><p>after</p>"
   },
   {
     "id": "floor-body-8-6-1",
     "source": "> - term\n>   : payload\n>         ```\n>       code\n>   ```\n> after\n",
-    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code>    code\n</code></pre></li></ul><p>after</p></blockquote>"
+    "html": "<blockquote><ul><li>term\n: payload\n      <pre><code>code\n</code></pre></li></ul><p>after</p></blockquote>"
   },
   {
     "id": "floor-body-8-8-0",

@@ -485,6 +485,8 @@ mod table_continuation_lines_are_cell_wrap_markers;
 
 #[path = "../a_block_past_a_box_column_in_a_list_item_opens.rs"]
 mod a_block_past_a_box_column_in_a_list_item_opens;
+#[path = "../a_code_line_left_of_an_authored_base_loses_its_prefix.rs"]
+mod a_code_line_left_of_an_authored_base_loses_its_prefix;
 #[path = "../a_continuation_under_a_caret_joins_the_spanning_cell.rs"]
 mod a_continuation_under_a_caret_joins_the_spanning_cell;
 #[path = "../a_raw_span_ends_at_the_tag_it_recognized.rs"]
