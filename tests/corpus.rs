@@ -14,6 +14,9 @@ use std::path::PathBuf;
 
 const IMPLEMENTED: &[&str] = &[
     "a-below-column-line-continues-a-paragraph-only-where-one-is-open",
+    "a-closed-fence-in-a-nested-child-leaves-no-paragraph-open",
+    "a-code-line-left-of-an-authored-base-fence-opener-is-measured-from-that-base",
+    "a-fence-closer-below-the-authored-base-is-measured-as-its-payload",
     "a-caption-scope-resets-at-a-structural-only-line",
     "a-dash-run-opens-frontmatter-only-at-the-start-and-only-a-dash-run",
     "an-ordered-list-carries-its-authored-delimiter",

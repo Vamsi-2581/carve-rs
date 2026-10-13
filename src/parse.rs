@@ -17656,6 +17656,15 @@ fn collect_indented_block_mapped_with_columns(
             _ if authored_code_base.is_some_and(|base| indent >= base) => {
                 authored_code_base.unwrap()
             }
+            // A line below the opener's base loses its available prefix.
+            _ if literal_colon.is_none()
+                && fence.is_some_and(|open| {
+                    indent < open.content_col
+                        && is_fence_close(trim_ascii_start(payload_line), open)
+                }) =>
+            {
+                indent
+            }
             _ if lazy_code_line
                 || lazy_list_marker
                 || definition_comment_band
