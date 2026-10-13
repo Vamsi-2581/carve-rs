@@ -54,6 +54,12 @@ struct CarveContext {
     /// Inside a definition term, where a comment opening a line keeps its
     /// separator instead of joining a `%`-leading content into a fence.
     in_term: bool,
+    /// The blocks being written sit at a list item's or a description's
+    /// content column; cleared for anything nested deeper.
+    at_item_content_column: bool,
+    /// The paragraph being written sits at that column, so a list marker on a
+    /// continuation line below it would end the item (CARVE-P11-007).
+    item_paragraph: bool,
     in_footnote_body: bool,
     footnote_guard_types: Vec<&'static str>,
     escape_mode: EscapeMode,
@@ -1123,6 +1129,8 @@ fn render_with_escapes_once(
         after_caption_host: false,
         paragraph_starts_after_caption_host: false,
         in_term: false,
+        at_item_content_column: false,
+        item_paragraph: false,
         in_footnote_body: false,
         footnote_guard_types: Vec::new(),
         escape_mode,
@@ -2161,8 +2169,25 @@ fn render_item_blocks(
 fn render_block(session: &RenderSession, node: &BlockNode, ctx: &mut CarveContext) -> String {
     let previous = ctx.escape_unit;
     ctx.escape_unit = next_escape_unit(session);
+    let at_item = std::mem::replace(&mut ctx.at_item_content_column, false);
+    let item_paragraph = std::mem::replace(
+        &mut ctx.item_paragraph,
+        at_item && matches!(node, BlockNode::Paragraph(_)),
+    );
     let out = render_block_body(session, node, ctx);
+    ctx.item_paragraph = item_paragraph;
+    ctx.at_item_content_column = at_item;
     ctx.escape_unit = previous;
+    out
+}
+
+fn at_item_content_column<T>(
+    ctx: &mut CarveContext,
+    render: impl FnOnce(&mut CarveContext) -> T,
+) -> T {
+    let outer = std::mem::replace(&mut ctx.at_item_content_column, true);
+    let out = render(ctx);
+    ctx.at_item_content_column = outer;
     out
 }
 
@@ -2698,7 +2723,9 @@ fn render_list(session: &RenderSession, node: &List, ctx: &mut CarveContext) -> 
                 .and_then(|pos| definition_at_line(session, pos.start_line, ctx))
                 .unwrap_or_default()
         } else {
-            render_item_blocks(session, &item.children, node.tight, ctx)
+            at_item_content_column(ctx, |ctx| {
+                render_item_blocks(session, &item.children, node.tight, ctx)
+            })
         };
         // EMPTINESS is the only thing that earns `+`. A second, text-shaped test
         // (content starts with `[^` and holds a colon-space) stood for "the item
@@ -2877,7 +2904,10 @@ fn render_definition_list(
                     continue;
                 }
             }
-            let body = trim_non_nbsp(&render_blocks(session, def, ctx)).to_string();
+            let body = trim_non_nbsp(&at_item_content_column(ctx, |ctx| {
+                render_blocks(session, def, ctx)
+            }))
+            .to_string();
             if body.is_empty() {
                 out.push(": {empty}".to_string());
                 continue;
@@ -5260,8 +5290,14 @@ fn guard_code_lines(
         return written.to_owned();
     }
     static MARKER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let marker =
-        MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|\[[^\]\n]+\]:[ \t]|[-*] +|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-z]|[A-Z])[.)] +)").unwrap());
+    static BLOCK_MARKER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    // A list marker on a continuation line does not interrupt a paragraph, so
+    // it stays bare unless the line would end an item, description or term.
+    let marker = if ctx.in_term || ctx.item_paragraph {
+        MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|\[[^\]\n]+\]:[ \t]|[-*] +|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-z]|[A-Z])[.)] +)").unwrap())
+    } else {
+        BLOCK_MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|\[[^\]\n]+\]:[ \t])").unwrap())
+    };
     written
         .split('\n')
         .enumerate()

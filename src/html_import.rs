@@ -7048,6 +7048,16 @@ impl<'a> Importer<'a> {
                     pos: None,
                 })
             }
+            // CARVE-P10-021: a generic-span carrier no branch above could read
+            // is consumed in every mode, so roundtrip unwraps it as safe does
+            // instead of keeping the reserved name in raw HTML.
+            "span"
+                if self.opts.mode == HtmlImportMode::Roundtrip
+                    && (Self::carrier(h, crate::roundtrip::RAW).is_some()
+                        || Self::carrier(h, crate::roundtrip::ESCAPED).is_some()) =>
+            {
+                return Ok(children);
+            }
             _ if self.opts.mode == HtmlImportMode::Roundtrip
                 && !(self.cell_depth > 0 && Self::html(h).contains(['\r', '\n'])) =>
             {
