@@ -2283,7 +2283,7 @@ fn render_block_body(session: &RenderSession, node: &BlockNode, ctx: &mut CarveC
             let body = inner
                 .split('\n')
                 .map(|line| {
-                    if line.is_empty() {
+                    if line.trim_end_matches(' ').is_empty() {
                         ">".to_string()
                     } else {
                         format!("> {line}")
