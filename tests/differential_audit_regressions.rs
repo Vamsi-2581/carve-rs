@@ -6,8 +6,11 @@ fn a_single_table_row_on_a_list_marker_line_is_a_nested_table() {
 }
 
 #[test]
-fn a_whitespace_only_one_cell_row_is_literal() {
-    assert!(carve::to_html("* | |\n").contains("<li>| |</li>"));
+fn a_whitespace_only_one_cell_row_is_a_nested_table() {
+    // CARVE-P9-082: `| |` is one empty cell, so it opens a table in the item.
+    let html = carve::to_html("* | |\n");
+    assert!(html.contains("<li>\n    <table>"), "{html}");
+    assert!(html.contains("<tr><td></td></tr>"), "{html}");
 }
 
 #[test]

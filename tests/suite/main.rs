@@ -495,8 +495,8 @@ mod a_refused_declaration_in_style_is_a_refused_attribute;
 mod a_report_is_ordered_by_the_losing_elements_position;
 #[path = "../a_roundtrip_figure_rebuilds_only_where_a_carve_spelling_reproduces_it.rs"]
 mod a_roundtrip_figure_rebuilds_only_where_a_carve_spelling_reproduces_it;
-#[path = "../a_row_of_blank_cells_is_unspellable.rs"]
-mod a_row_of_blank_cells_is_unspellable;
+#[path = "../a_row_of_blank_cells_is_written_as_a_row.rs"]
+mod a_row_of_blank_cells_is_written_as_a_row;
 #[path = "../a_row_splitter_carries_a_multi_backtick_run.rs"]
 mod a_row_splitter_carries_a_multi_backtick_run;
 #[path = "../a_sliced_include_keeps_its_own_file_s_coordinates.rs"]
@@ -615,8 +615,6 @@ mod admonition_tier1_trust_class;
 mod admonition_title_before_label;
 #[path = "../an_aligned_text_block_renders_a_style_declaration.rs"]
 mod an_aligned_text_block_renders_a_style_declaration;
-#[path = "../an_all_blank_table_row_is_not_a_table.rs"]
-mod an_all_blank_table_row_is_not_a_table;
 #[path = "../an_attribute_dropped_row_counts_attributes_not_class_names.rs"]
 mod an_attribute_dropped_row_counts_attributes_not_class_names;
 #[path = "../an_attribute_less_div_unwraps_to_its_content.rs"]
@@ -673,6 +671,8 @@ mod an_escaped_marker_ends_no_delimiter_run;
 mod an_escaped_marker_leaves_the_next_run_spelled;
 #[path = "../an_escaped_raw_block_is_held_by_pre_code.rs"]
 mod an_escaped_raw_block_is_held_by_pre_code;
+#[path = "../an_explicitly_delimited_row_of_blank_cells_is_a_table.rs"]
+mod an_explicitly_delimited_row_of_blank_cells_is_a_table;
 #[path = "../an_html_comment_imports_as_a_carve_comment.rs"]
 mod an_html_comment_imports_as_a_carve_comment;
 #[path = "../an_html_import_drops_a_denied_scheme_destination.rs"]

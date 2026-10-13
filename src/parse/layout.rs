@@ -1656,9 +1656,10 @@ mod layout_html_tests {
         // the per-document assertion above proves each byte-identical.
         // The new 588-3 and 588-4 controls contain no attached block. The
         // layout path accepts both, and the assertion above checks their exact
-        // HTML against the authoritative parser.
+        // HTML against the authoritative parser. Spec 46b3d3f7 adds 589-...-32,
+        // a blank header row over a delimiter row (CARVE-P9-082).
         assert_eq!(
-            accepted, 67,
+            accepted, 68,
             "update the pinned acceptance count only after reviewing the exact-parity widening"
         );
     }

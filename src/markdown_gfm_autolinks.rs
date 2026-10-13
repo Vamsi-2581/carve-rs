@@ -1051,13 +1051,10 @@ mod tests {
         }
         let source = "| a |\n|---|\n| []() |\n";
         let result = crate::migrate_markdown(source);
-        assert!(result
-            .report
-            .diagnostics
-            .iter()
-            .any(|row| row.message.contains("blank cell")));
+        // The emptied body row is a row of one empty cell (CARVE-P9-082).
+        assert_eq!(result.value, "|= a |\n| |\n");
         let document = crate::markdown_import::try_markdown_to_ast(source).unwrap();
-        assert!(matches!(&document.children[0], BlockNode::Table(table) if table.rows.len() == 1));
+        assert!(matches!(&document.children[0], BlockNode::Table(table) if table.rows.len() == 2));
     }
 
     #[test]

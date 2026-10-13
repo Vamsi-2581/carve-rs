@@ -162,26 +162,18 @@ fn a_shared_inverse_with_many_classes_keeps_all_references() {
 }
 
 #[test]
-fn dropping_blank_table_rows_preserves_survivors_and_diagnostic_order() {
+fn blank_table_rows_are_kept_in_order() {
     let result = html_to_carve(
         "<table><tr><td></td></tr><tr><td>A</td></tr><tr><td></td></tr><tr><td>B</td></tr></table>",
         &Default::default(),
     )
     .unwrap();
-    assert!(result.value.contains('A'));
-    assert!(result.value.contains('B'));
-    let losses: Vec<_> = result
+    assert_eq!(result.value, "| |\n| A |\n| |\n| B |\n");
+    assert!(!result
         .report
         .diagnostics
         .iter()
-        .filter(|row| {
-            row.message
-                .starts_with("Dropped a row whose every cell is empty")
-        })
-        .collect();
-    assert_eq!(losses.len(), 2);
-    assert!(losses[0].path.as_deref().unwrap().ends_with("/tr[1]"));
-    assert!(losses[1].path.as_deref().unwrap().ends_with("/tr[3]"));
+        .any(|row| row.message.starts_with("Dropped a row")));
 }
 
 #[test]

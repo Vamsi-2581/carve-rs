@@ -46,7 +46,10 @@ fn a_lone_pipe_followed_by_other_blocks_renders() {
 /// reached the layout pass at all.
 #[test]
 fn the_neighboring_shapes_are_unchanged() {
-    assert_eq!(to_html("||\n"), "<p>||</p>");
+    assert_eq!(
+        to_html("||\n"),
+        "<table>\n  <tbody>\n    <tr><td></td></tr>\n  </tbody>\n</table>"
+    );
     assert_eq!(
         to_html("| a |\n"),
         "<table>\n  <tbody>\n    <tr><td>a</td></tr>\n  </tbody>\n</table>"
