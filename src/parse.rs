@@ -7277,7 +7277,7 @@ fn rebase_named_colon_extent(
         let mut strip = frame_base;
         let mut opaque = false;
         if let Some((open, opener_column, payload)) = code {
-            if !is_blank_line(line) && column < frame_base && !payload {
+            if !is_blank_line(line) && column < opener_column && !payload {
                 code = None;
             } else {
                 if (payload || column == opener_column) && is_fence_close(local, open) {
@@ -7330,11 +7330,12 @@ fn rebase_named_colon_extent(
                     }
                     comment = Some(open.fence_len);
                 } else if let Some(open) =
-                    detect_fence_open(local).filter(|_| literal || column == frame_base || in_item)
+                    detect_fence_open(local).filter(|_| literal || column >= frame_base || in_item)
                 {
-                    code = Some((open, column, literal));
+                    let inline_code = !literal && !in_item && column > frame_base;
+                    code = Some((open, column, literal || inline_code));
                     if let Some(frame) = frames.last_mut() {
-                        frame.4 = false;
+                        frame.4 = inline_code;
                     }
                 } else if !held_by_item && !literal {
                     if exact_colon_fence_len(local) == Some(frame_width)
@@ -7342,7 +7343,7 @@ fn rebase_named_colon_extent(
                     {
                         strip = column;
                         frames.pop();
-                    } else if column >= frame_base && (column == frame_base || !paragraph) {
+                    } else if column >= frame_base {
                         if let Some(next_width) = detect_container_open(local)
                             .map(|open| open.fence_len)
                             .or_else(|| detect_line_block_open(local))
@@ -7445,6 +7446,9 @@ fn rebase_overindented_blocks(
                 descendant_code = None;
                 closed_descendant_code = true;
             }
+        }
+        if base == 0 && heading_content_starts(&local_at_base) {
+            orphaned_code = None;
         }
         if orphaned_code
             .is_some_and(|(open, column)| base == column && is_fence_close(&local_at_base, open))
@@ -7740,7 +7744,17 @@ fn rebase_overindented_blocks(
                         comment_retains_frame = false;
                     }
                     if comment_line {
-                        comment_retains_frame = body_items.last().is_some_and(|column| base < *column);
+                        comment_retains_frame =
+                            body_items.last().is_some_and(|column| base < *column);
+                    }
+                    if comment_retains_frame
+                        && !comment_line
+                        && base > 0
+                        && source.reached.get(i).copied().unwrap_or(false)
+                        && item_block_opener(trim_ascii_start(&lines[i]))
+                    {
+                        comment_retains_frame = false;
+                        body_paragraph = false;
                     }
                     while !comment_retains_frame
                         && body_items.last().is_some_and(|column| base < *column)
@@ -7749,6 +7763,59 @@ fn rebase_overindented_blocks(
                         body_items.pop();
                     }
                     let owned_by_item = body_items.last().is_some_and(|column| base >= *column);
+                    if !include_sublists
+                        && base > 0
+                        && !owned_by_item
+                        && !comment_retains_frame
+                        && source.reached.get(i).copied().unwrap_or(false)
+                    {
+                        let local = trim_ascii_start(&lines[i]).to_owned();
+                        let code = detect_fence_open(&local);
+                        let colon = detect_container_open(&local)
+                            .map(|open| open.fence_len)
+                            .or_else(|| detect_line_block_open(&local))
+                            .or_else(|| detect_hardbreaks_block_open(&local))
+                            .or_else(|| detect_quote_block_open(&local));
+                        let end = if let Some(open) = code {
+                            let end = rebased_code_fence_end(&lines, i, base, open);
+                            (!body_paragraph || is_fence_close(trim_ascii_start(&lines[end]), open))
+                                .then_some(end)
+                        } else if let Some(width) =
+                            colon.filter(|_| exact_colon_fence_len(&local).is_none())
+                        {
+                            Some(rebased_colon_group_end(&lines, i, base, width))
+                        } else if heading_content_starts(&local) || detect_thematic_break(&local) {
+                            Some(i)
+                        } else {
+                            None
+                        };
+                        if let Some(end) = end {
+                            if let Some(width) = colon {
+                                rebase_named_colon_extent(
+                                    &mut lines,
+                                    &mut source.col_map,
+                                    i,
+                                    end,
+                                    base,
+                                    width,
+                                );
+                            } else {
+                                for (at, line) in lines.iter_mut().enumerate().take(end + 1).skip(i)
+                                {
+                                    let (residue, consumed, synthetic) =
+                                        slice_columns_mapped(line, base, true);
+                                    *line = Cow::Owned(residue);
+                                    if let Some(Some(col)) = source.col_map.get_mut(at) {
+                                        *col += consumed as isize - synthetic as isize;
+                                    }
+                                }
+                            }
+                            source.marker_colon_rebased = true;
+                            body_paragraph = false;
+                            i = end + 1;
+                            continue;
+                        }
+                    }
                     if let Some(open) = detect_fence_open(trim_ascii_start(&lines[i]))
                         .filter(|_| base == 0 || owned_by_item)
                     {
@@ -7772,6 +7839,7 @@ fn rebase_overindented_blocks(
                             comment_retains_frame = false;
                         }
                         body_comment = Some(open.fence_len);
+                        body_paragraph = false;
                         i += 1;
                         continue;
                     }
@@ -13980,7 +14048,6 @@ fn parse_list(
                 && detect_line_block_open(marker.content).is_none();
             let swallowed_blank_separator =
                 cur.pos > before_block && is_blank_line(cur.lines.at(cur.pos - 1));
-            let marker_line_was_the_whole_block = cur.pos == before_block;
             // A paired delimiter beyond the item's column belongs to the quote.
             // Its literal opener must not let trailing prose reclaim that line.
             let literal_comment_handoff = trim_ascii_start(marker.content).starts_with(':')
@@ -14034,11 +14101,6 @@ fn parse_list(
                         {
                             return false;
                         }
-                        if marker_line_was_the_whole_block
-                            || !is_definition_list_start(marker.content)
-                        {
-                            return body_ends_with_open_paragraph(&src.source, options);
-                        }
                         let mut rebased = src.clone();
                         rebase_overindented_blocks(&mut rebased, false, options);
                         body_ends_with_open_paragraph(&rebased.source, options)
@@ -14056,14 +14118,11 @@ fn parse_list(
             }
             // A heading, a fence or a table on the marker line leaves the item
             // holding no paragraph - see `item_paragraph_open`.
-            item_paragraph_open = !literal_comment_handoff && !definition_comment_handoff
-                && if is_definition_list_start(marker.content) {
-                    let mut rebased = stream.clone();
-                    rebase_overindented_blocks(&mut rebased, false, options);
-                    body_ends_with_open_paragraph(&rebased.source, options)
-                } else {
-                    body_ends_with_open_paragraph(&stream.source, options)
-                };
+            item_paragraph_open = !literal_comment_handoff && !definition_comment_handoff && {
+                let mut rebased = stream.clone();
+                rebase_overindented_blocks(&mut rebased, false, options);
+                body_ends_with_open_paragraph(&rebased.source, options)
+            };
             let children = item_body(deferred, items.len(), stream, None, false, options);
             items.push(ListItem {
                 attrs: item_attrs,

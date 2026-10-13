@@ -55,6 +55,13 @@ fn comments_retain_only_below_the_content_column() {
 }
 
 #[test]
+fn a_hosted_colon_body_opens_blocks_past_its_column() {
+    corpus_category("566-");
+    corpus_category("571-");
+    corpus_category("572-");
+}
+
+#[test]
 fn below_column_comments_keep_definition_bands_and_fences() {
     let rows: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/comment_fence_review_wave.json")).unwrap();

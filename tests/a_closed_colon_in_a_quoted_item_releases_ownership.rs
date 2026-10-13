@@ -264,7 +264,15 @@ fn existing_fence_verdict_survives_hosted_opaque_shapes() {
         ] {
             let source = format!("{quote}{}", body.replace("{q}", &quote));
             let ast: Value = serde_json::from_str(&carve::to_json(&carve::parse(&source))).unwrap();
-            assert_eq!(ast["children"][1]["type"], "list", "{source}: {ast}");
+            if body.starts_with("- ::: |") {
+                assert_eq!(
+                    ast["children"].as_array().unwrap().len(),
+                    1,
+                    "{source}: {ast}"
+                );
+            } else {
+                assert_eq!(ast["children"][1]["type"], "list", "{source}: {ast}");
+            }
         }
     }
 }
