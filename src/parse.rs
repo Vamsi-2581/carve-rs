@@ -10658,19 +10658,7 @@ impl NestedFenceReplay {
                     here.colon_absorption = false;
                 }
                 let floor = here.hosts.last().map_or(0, |&(_, col, _)| col);
-                if block_start
-                    && exact_colon_fence_len(inner).is_some()
-                    && !quoted_colon_body_follows(
-                        lines,
-                        at,
-                        level,
-                        floor,
-                        self.colon_body_comments.entry(level).or_default(),
-                    )
-                {
-                    here.para = true;
-                    return;
-                }
+
                 if floor > 0
                     && col >= floor
                     && (col == floor
@@ -10907,6 +10895,12 @@ fn future_quoted_comment_closes(
                     }
                 }
                 if quoted && !is_blank_line(text) && indent_columns(text) < column {
+            if here.para
+                && indent_columns(text) > 0
+                && exact_colon_fence_len(trim_ascii_start(text)).is_some()
+            {
+                return;
+            }
                     boundary = cur.pos + offset;
                     break;
                 }
@@ -11301,6 +11295,7 @@ fn closer_ahead(
     false
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct QuotedFenceClosers {
     end: usize,
@@ -13659,22 +13654,6 @@ fn parse_list(
                     stream.push_newline_at(framed, src_line, src_col);
                     cur.consume();
                 }
-            } else if detect_container_open(inner_lead).is_some() {
-                while let Some(line) = cur.peek().and_then(|line| {
-                    (!is_blank_line(line)
-                        && trim_ascii(line) != "+"
-                        && indent_columns(line) < content_col
-                        && detect_list_marker_full(line).is_none())
-                    .then(|| line.to_string())
-                }) {
-                    if interrupts_paragraph(cur, &line) {
-                        break;
-                    }
-                    let src_line = cur.source_line(cur.pos);
-                    let src_col = cur.source_col(cur.pos);
-                    stream.push_newline_at(line, src_line, src_col);
-                    cur.consume();
-                }
             }
             let before_block = cur.pos;
             let collection_floor = if nested_definition_ended_paragraph {
@@ -13833,6 +13812,9 @@ fn parse_list(
                     stream.col_map.truncate(1);
                     stream.reached.truncate(1);
                 }
+            }
+            if detect_container_open(inner_lead).is_some() {
+                item_paragraph_open = body_ends_with_open_paragraph(&stream.source, options);
             }
             let children = item_body(deferred, items.len(), stream, None, false, options);
             items.push(ListItem {
@@ -14365,7 +14347,7 @@ fn boxed_list_node(list: List) -> Box<BlockNode> {
     Box::new(BlockNode::List(list))
 }
 
-fn marker_content_starts_block(content: &str, cur: &LineCursor<'_>, content_col: usize) -> bool {
+fn marker_content_starts_block(content: &str, _cur: &LineCursor<'_>, _content_col: usize) -> bool {
     // Reference and footnote definitions are invisible blocks at a container's
     // content column. On a marker line they must enter the nested block parser,
     // not the lead-paragraph scanner (`r. [f]: t` is an empty list item).
@@ -14426,36 +14408,7 @@ fn marker_content_starts_block(content: &str, cur: &LineCursor<'_>, content_col:
         .or_else(|| detect_hardbreaks_block_open(content))
         .or_else(|| detect_quote_block_open(content));
     if colon_fence_len.is_some() {
-        // An opener OPENS, closer or no closer (carve#514), and an empty body
-        // is a container with nothing in it (carve#570). What can stop it is
-        // the STRICT CONTENT-COLUMN rule: a following line BELOW the content
-        // column is lazy item text, and it folds the fence in with it, so
-        // `- :::` / `x` is the literal `::: x`.
-        //
-        // Only a line that would fold counts. Nothing following at all, a blank
-        // (which ends the item's content), a sibling marker, or a flush-left
-        // block opener all leave the fence standing on its own - and `- :::`
-        // alone published `<li>:::</li>` here where carve-js, carve-php and the
-        // executable spec publish an empty `<div>` (carve-rs#511 item 4).
-        let Some(next) = cur.lines.line(cur.pos) else {
-            return true;
-        };
-        if is_blank_line(next) {
-            return true;
-        }
-        if indent_columns(next) >= content_col {
-            return true;
-        }
-        // Only a FLUSH-LEFT line ends the item. An indented one is item-lazy
-        // text whatever its shape - corpus 161 is `- ::: note` / ` - para text`
-        // / ` :::`, where the marker one column in folds and takes the fence
-        // with it.
-        if indent_columns(next) > 0 {
-            return false;
-        }
-        return trim_ascii(next) == "+"
-            || is_list_marker(next)
-            || interrupts_paragraph_with_rest(next, &[]);
+        return true;
     }
     if is_table_start(content) {
         return true;

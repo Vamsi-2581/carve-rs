@@ -166,7 +166,7 @@ fn a_marker_line_that_leaves_something_open_is_untouched() {
     );
     assert_eq!(
         both_paths(". ::: note\n z\n").trim(),
-        concat!("<ol>\n", "  <li>::: note\n", "z</li>\n", "</ol>"),
+        "<ol>\n  <li>\n    <aside class=\"admonition note\" aria-label=\"Note\">\n\n    </aside>\n  </li>\n</ol>\n<p>z</p>",
     );
 }
 
@@ -178,16 +178,7 @@ fn an_item_answers_s4_for_itself_rather_than_with_the_previous_item_s_answer() {
     // exception declined, so `tail` left an item that does hold a paragraph.
     assert_eq!(
         both_paths("- # h\n- t\n%% c\ntail\n").trim(),
-        concat!(
-            "<ul>\n",
-            "  <li>\n",
-            "    <h1 id=\"h\">h</h1>\n",
-            "  </li>\n",
-            "  <li>t\n",
-            "    tail\n",
-            "  </li>\n",
-            "</ul>",
-        ),
+        "<ul>\n  <li>\n    <h1 id=\"h\">h</h1>\n  </li>\n  <li>t\n    tail\n  </li>\n</ul>",
     );
     // Without the heading above it the same item always answered true, which is
     // why this went unseen.

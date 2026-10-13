@@ -37,3 +37,8 @@ fn a_tab_before_a_trailing_comment_stays_content() {
     corpus_category("516-");
     assert_eq!(carve::to_html("a\t %% c"), "<p>a\t</p>");
 }
+
+#[test]
+fn a_colon_opener_on_an_item_marker_line_opens() {
+    corpus_category("161-");
+}
