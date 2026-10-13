@@ -5,7 +5,7 @@
 //! The payload is Carve source, so Carve's own escape is the one the reader
 //! already has and only the comment's own terminator is rewritten.
 
-use crate::ast::{BlockNode, Document};
+use crate::ast::{BlockNode, Document, OrderedListType};
 
 pub(crate) const CARRIER_PREFIX: &str = "<!-- carve: ";
 const CARRIER_STEM: &str = "<!-- carve:";
@@ -329,10 +329,125 @@ fn carrier_set_closers(payloads: &[String]) -> Option<Vec<bool>> {
     open.is_empty().then_some(closers)
 }
 
+fn list_style(payload: &str, start: Option<usize>) -> Option<OrderedListType> {
+    let markers: Vec<&str> = payload.split(' ').collect();
+    if markers.is_empty()
+        || markers.len() > 2
+        || markers.iter().any(|marker| {
+            let Some(stem) = marker.strip_suffix(['.', ')']) else {
+                return true;
+            };
+            stem.is_empty() || !stem.bytes().all(|ch| ch.is_ascii_alphabetic())
+        })
+    {
+        return None;
+    }
+    if markers.len() == 1 {
+        let letter = markers[0].as_bytes()[0] as char;
+        if markers[0].len() == 2 && "ivxlcdmIVXLCDM".contains(letter) {
+            if let Some(start) = start {
+                let roman = match letter.to_ascii_lowercase() {
+                    'i' => 1,
+                    'v' => 5,
+                    'x' => 10,
+                    'l' => 50,
+                    'c' => 100,
+                    'd' => 500,
+                    'm' => 1000,
+                    _ => unreachable!(),
+                };
+                if roman == start {
+                    return Some(if letter.is_ascii_lowercase() {
+                        OrderedListType::LowerRoman
+                    } else {
+                        OrderedListType::UpperRoman
+                    });
+                }
+                if letter.to_ascii_lowercase() as usize - 'a' as usize + 1 == start {
+                    return Some(if letter.is_ascii_lowercase() {
+                        OrderedListType::LowerAlpha
+                    } else {
+                        OrderedListType::UpperAlpha
+                    });
+                }
+            }
+        }
+    }
+    let sample = markers
+        .iter()
+        .map(|marker| format!("{marker} item\n"))
+        .collect::<String>();
+    let parsed = crate::parse::parse(&sample);
+    match parsed.children.as_slice() {
+        [BlockNode::List(list)] if list.ordered && list.items.len() == markers.len() => {
+            list.ol_type
+        }
+        _ => None,
+    }
+}
+
+fn host_opens_list(host: &str) -> bool {
+    let tail = host.split_whitespace().last().unwrap_or_default();
+    if matches!(tail, "-" | "+" | "*") {
+        return true;
+    }
+    let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+    digits > 0 && digits + 1 == tail.len() && matches!(tail.as_bytes()[digits], b'.' | b')')
+}
+
+fn style_in_empty_footnote(lines: &[&str]) -> bool {
+    let mut fence: Option<(u8, usize)> = None;
+    for (at, line) in lines.iter().enumerate() {
+        let body = line.trim_start_matches(' ');
+        let indent = line.len() - body.len();
+        if indent <= 3 {
+            let run = body
+                .bytes()
+                .take_while(|ch| *ch == b'`' || *ch == b'~')
+                .count();
+            if run >= 3
+                && body.as_bytes()[..run]
+                    .iter()
+                    .all(|ch| *ch == body.as_bytes()[0])
+            {
+                let current = (body.as_bytes()[0], run);
+                if fence.is_none() {
+                    fence = Some(current);
+                } else if fence.is_some_and(|(ch, width)| {
+                    ch == current.0 && run >= width && body[run..].trim().is_empty()
+                }) {
+                    fence = None;
+                }
+                continue;
+            }
+        }
+        if fence.is_some() || indent > 3 || !body.starts_with("[^") {
+            continue;
+        }
+        let Some((label, rest)) = body.split_once("]:") else {
+            continue;
+        };
+        if label.len() <= 2 || !rest.trim().is_empty() {
+            continue;
+        }
+        if lines
+            .get(at + 1)
+            .and_then(|next| next.strip_prefix("    "))
+            .and_then(carrier_payload)
+            .is_some_and(|payload| list_style(&payload, None).is_some())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 struct MarkdownBlock {
     range: std::ops::Range<usize>,
     parent: Vec<usize>,
     paragraph: bool,
+    ordered_list: bool,
+    item: bool,
     captionable: bool,
     host: bool,
     caption_units: usize,
@@ -374,6 +489,8 @@ fn markdown_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                     range: range.clone(),
                     parent: hosts.clone(),
                     paragraph: true,
+                    ordered_list: false,
+                    item: false,
                     captionable: false,
                     host: false,
                     caption_units: 0,
@@ -421,6 +538,8 @@ fn markdown_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                         other_inline: false,
                         math: None,
                         paragraph: matches!(tag, Tag::Paragraph),
+                        ordered_list: matches!(tag, Tag::List(Some(_))),
+                        item: matches!(tag, Tag::Item),
                         captionable: matches!(
                             tag,
                             Tag::BlockQuote(_) | Tag::CodeBlock(_) | Tag::Table(_)
@@ -467,6 +586,8 @@ fn markdown_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 range,
                 parent: hosts.clone(),
                 paragraph: false,
+                ordered_list: false,
+                item: false,
                 captionable: false,
                 host: false,
                 caption_units: 0,
@@ -602,7 +723,8 @@ fn validate_markers(
                     && marker_parent(next, &blocks) == parent
                     && (carrier_fence_width(&next.payload) > 0
                         || next.payload.starts_with(":: ")
-                        || code_fence_marker_info(&next.payload).is_some())
+                        || code_fence_marker_info(&next.payload).is_some()
+                        || list_style(&next.payload, None).is_some())
                     && !next.closer
             });
             if !container_prelude && directly_below.is_none() {
@@ -709,6 +831,18 @@ fn validate_markers(
             {
                 return None;
             }
+        } else if list_style(payload, None).is_some() {
+            if marker.depth != 1
+                || host_opens_list(&marker.host)
+                || !directly_below.is_some_and(|block| block.ordered_list)
+                || !lines.get(marker.line + 1).is_some_and(|line| {
+                    let line = strip_host_prefix(line, &marker.host);
+                    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+                    digits > 0 && matches!(line.as_bytes().get(digits), Some(b'.' | b')'))
+                })
+            {
+                return None;
+            }
         } else if payload == ":" {
             if !definitions.contains(&(parent.clone(), fences.len(), marker.depth)) {
                 return None;
@@ -756,6 +890,7 @@ pub(crate) struct CarrierLift {
     /// Each lifted payload and whether it is a bare closer, in marker order.
     slots: Vec<(String, bool, usize, String)>,
     pub(crate) token: String,
+    styles: Vec<String>,
     /// A set that does not balance records no structure, so nothing is lifted
     /// and the reader is told.
     pub(crate) damaged: bool,
@@ -781,6 +916,7 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         source: source.to_owned(),
         slots: Vec::new(),
         token: String::new(),
+        styles: Vec::new(),
         damaged,
         dropped: Vec::new(),
     };
@@ -793,6 +929,9 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         markdown.to_owned()
     };
     let lines: Vec<&str> = normalized.split('\n').collect();
+    if style_in_empty_footnote(&lines) {
+        return none(markdown, true);
+    }
     let mut payloads = parsed_carrier_markers(&normalized, &lines);
     if payloads.is_empty() {
         return none(markdown, false);
@@ -831,7 +970,9 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         } else if payload.starts_with('{') && payload.ends_with('}') {
             let tree = crate::parse::parse(&format!("{payload}\nx\n"));
             matches!(tree.children.first(), Some(BlockNode::Paragraph(paragraph)) if paragraph.attrs.is_some())
-        } else if code_fence_marker_info(payload).is_some() {
+        } else if code_fence_marker_info(payload).is_some()
+            || (list_style(payload, None).is_some() && !host_opens_list(&marker.host))
+        {
             true
         } else {
             width > 0
@@ -879,6 +1020,16 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         token.push('X');
     }
     let mut slots = Vec::new();
+    let mut styles = Vec::new();
+    let blocks = if payloads
+        .iter()
+        .any(|found| list_style(&found.payload, None).is_some())
+    {
+        markdown_blocks(&normalized)
+    } else {
+        Vec::new()
+    };
+    let mut pending_style: Option<(usize, String)> = None;
     let mut out: Vec<String> = Vec::new();
     let mut drop_bold = 0usize;
     let mut skip_blank = false;
@@ -891,6 +1042,15 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         if next < payloads.len() && payloads[next].line == at {
             let found = &payloads[next];
             next += 1;
+            if list_style(&found.payload, None).is_some()
+                && blocks.iter().any(|block| {
+                    block.item && marker_parent(found, &blocks).contains(&block.range.start)
+                })
+            {
+                pending_style = Some((styles.len(), found.host.clone()));
+                styles.push(found.payload.clone());
+                continue;
+            }
             // The placeholder keeps the host prefix the marker line carried, so
             // a marker inside a list item or a block quote stays in that host
             // when the lifted source is parsed.
@@ -947,6 +1107,24 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
             continue;
         }
         skip_blank = false;
+        if let Some((index, prefix)) = pending_style.take() {
+            let body = line.strip_prefix(&prefix).unwrap_or(line);
+            let digits = body.bytes().take_while(u8::is_ascii_digit).count();
+            let start = digits + 2;
+            if digits > 0
+                && matches!(body.as_bytes().get(digits), Some(b'.' | b')'))
+                && matches!(body.as_bytes().get(digits + 1), Some(b' ' | b'\t'))
+            {
+                out.push(format!(
+                    "{}{}{}STYLE{index}Z {}",
+                    prefix,
+                    &body[..start],
+                    token,
+                    &body[start..]
+                ));
+                continue;
+            }
+        }
         out.push((*line).to_owned());
     }
 
@@ -954,6 +1132,7 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         source: out.join("\n"),
         slots,
         token,
+        styles,
         damaged: false,
         dropped: notices,
     }
@@ -1144,7 +1323,145 @@ pub(crate) fn restore_carrier_markers(carve: &str, lift: &CarrierLift) -> String
 
     let separated = separate_carrier_lines(&items);
     let continued = restore_container_continuations(&separated);
-    restore_definition_lines(&restore_fence_markers(&continued)).join("\n")
+    let restored = restore_list_styles(&restore_fence_markers(&continued));
+    restore_definition_lines(&restored).join("\n")
+}
+
+pub(crate) fn restore_nested_list_styles(carve: &str, lift: &CarrierLift) -> Option<String> {
+    if lift.styles.is_empty() {
+        return Some(carve.to_owned());
+    }
+    let mut lines: Vec<String> = carve.split('\n').map(str::to_owned).collect();
+    for (style_index, payload) in lift.styles.iter().enumerate() {
+        let token = format!("{}STYLE{style_index}Z", lift.token);
+        let at = lines.iter().position(|line| line.contains(&token))?;
+        let token_at = lines[at].find(&token)?;
+        let before = &lines[at][..token_at];
+        let prefix_len = before
+            .bytes()
+            .take_while(|ch| matches!(ch, b' ' | b'\t' | b'>'))
+            .count();
+        let prefix = before[..prefix_len].to_owned();
+        let marker = &before[prefix_len..];
+        let digits = marker.bytes().take_while(u8::is_ascii_digit).count();
+        let delimiter = marker.as_bytes().get(digits).copied()?;
+        if digits == 0
+            || !matches!(delimiter, b'.' | b')')
+            || !marker[digits + 1..].chars().all(char::is_whitespace)
+        {
+            return None;
+        }
+        let start = marker[..digits].parse::<usize>().ok()?;
+        let style = list_style(payload, Some(start))?;
+        let token_end = token_at + token.len();
+        let end = token_end + usize::from(lines[at].as_bytes().get(token_end) == Some(&b' '));
+        lines[at].replace_range(token_at..end, "");
+        let mut counter = start;
+        for line in lines.iter_mut().skip(at) {
+            let Some(rest) = line.strip_prefix(&prefix) else {
+                break;
+            };
+            if line.contains(&lift.token) {
+                if rest.starts_with([' ', '\t']) {
+                    continue;
+                }
+                break;
+            }
+            let width = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if width == 0
+                || rest.as_bytes().get(width) != Some(&delimiter)
+                || !matches!(rest.as_bytes().get(width + 1), Some(b' ' | b'\t'))
+            {
+                if rest.is_empty() || rest.starts_with([' ', '\t']) {
+                    continue;
+                }
+                break;
+            }
+            if rest[..width].parse::<usize>().ok() != Some(counter) {
+                break;
+            }
+            *line = format!(
+                "{}{}{}{}",
+                prefix,
+                crate::render_carve::ordered_marker(counter, Some(style)),
+                delimiter as char,
+                &rest[width + 1..]
+            );
+            counter = counter.saturating_add(1);
+        }
+    }
+    let restored = lines.join("\n");
+    (!restored.contains(&lift.token)).then_some(restored)
+}
+
+fn restore_list_styles(lines: &[RestoredLine]) -> Vec<RestoredLine> {
+    let mut written = lines.to_vec();
+    let mut remove = vec![false; lines.len()];
+    for (at, marker) in lines.iter().enumerate() {
+        if marker.kind != Some(false) || list_style(&marker.text, None).is_none() {
+            continue;
+        }
+        let Some(first) = lines.get(at + 1) else {
+            continue;
+        };
+        let line = first.spelled();
+        let Some(rest) = line.strip_prefix(&marker.lead) else {
+            continue;
+        };
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let Some(delimiter) = rest.as_bytes().get(digits).copied() else {
+            continue;
+        };
+        if digits == 0
+            || !matches!(delimiter, b'.' | b')')
+            || !matches!(rest.as_bytes().get(digits + 1), Some(b' ' | b'\t'))
+        {
+            continue;
+        }
+        let Ok(start) = rest[..digits].parse::<usize>() else {
+            continue;
+        };
+        let Some(style) = list_style(&marker.text, Some(start)) else {
+            continue;
+        };
+        let mut counter = start;
+        for item in written.iter_mut().skip(at + 1) {
+            if item.kind.is_some() {
+                break;
+            }
+            let spelled = item.spelled();
+            let Some(rest) = spelled.strip_prefix(&marker.lead) else {
+                break;
+            };
+            let width = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if width == 0
+                || rest.as_bytes().get(width) != Some(&delimiter)
+                || !matches!(rest.as_bytes().get(width + 1), Some(b' ' | b'\t'))
+            {
+                if rest.is_empty() || rest.starts_with([' ', '\t']) {
+                    continue;
+                }
+                break;
+            }
+            if rest[..width].parse::<usize>().ok() != Some(counter) {
+                break;
+            }
+            item.lead = marker.lead.clone();
+            item.text = format!(
+                "{}{}{}",
+                crate::render_carve::ordered_marker(counter, Some(style)),
+                delimiter as char,
+                &rest[width + 1..]
+            );
+            counter = counter.saturating_add(1);
+        }
+        remove[at] = true;
+    }
+    written
+        .into_iter()
+        .enumerate()
+        .filter_map(|(at, line)| (!remove[at]).then_some(line))
+        .collect()
 }
 
 fn restore_fence_markers(lines: &[RestoredLine]) -> Vec<RestoredLine> {
