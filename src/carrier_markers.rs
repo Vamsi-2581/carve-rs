@@ -944,13 +944,16 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         marker.closer = closer;
     }
     let mut pairs = std::collections::HashMap::new();
+    let mut reverse_pairs = std::collections::HashMap::new();
     let mut open = Vec::new();
     for (index, marker) in payloads.iter().enumerate() {
         if carrier_fence_width(&marker.payload) == 0 {
             continue;
         }
         if marker.closer {
-            pairs.insert(open.pop().unwrap(), index);
+            let opener = open.pop().unwrap();
+            pairs.insert(opener, index);
+            reverse_pairs.insert(index, opener);
         } else {
             open.push(index);
         }
@@ -963,7 +966,13 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
         }
         let payload = &marker.payload;
         let width = carrier_fence_width(payload);
-        let valid = if width > 0 && !marker.closer {
+        let valid = if marker.depth > 1
+            && !payload.starts_with(":: ")
+            && payload != ":"
+            && !payload.is_empty()
+        {
+            false
+        } else if width > 0 && !marker.closer {
             let closer = &payloads[*pairs.get(&index).unwrap()].payload;
             let tree = crate::parse::parse(&format!("{payload}\n{closer}\n"));
             tree.children.len() == 1 && !matches!(tree.children[0], BlockNode::Paragraph(_))
@@ -985,6 +994,28 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
             continue;
         }
         invalid.insert(index);
+        if let Some(opener) = reverse_pairs.get(&index) {
+            invalid.insert(*opener);
+        }
+        let pair_closer = pairs
+            .get(&index)
+            .copied()
+            .or_else(|| reverse_pairs.contains_key(&index).then_some(index));
+        if let Some(closer) = pair_closer {
+            let mut caption_line = payloads[closer].line + 1;
+            while caption_line < lines.len()
+                && strip_host_prefix(lines[caption_line], &payloads[closer].host).is_empty()
+            {
+                caption_line += 1;
+            }
+            if let Some((caption_index, _)) = payloads.iter().enumerate().find(|(_, found)| {
+                found.line == caption_line
+                    && found.host == payloads[closer].host
+                    && found.payload.starts_with("^ ")
+            }) {
+                invalid.insert(caption_index);
+            }
+        }
         let message = if let Some(closer) = pairs.get(&index) {
             invalid.insert(*closer);
             "Dropped carrier marker pair with an invalid opener"
