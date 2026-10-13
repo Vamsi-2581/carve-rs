@@ -40,7 +40,9 @@ fn blocked_colspan_marker_is_empty_cell() {
 }
 
 #[test]
-fn colspan_marker_scans_left_past_consumed_rowspan_cell() {
+fn colspan_marker_beside_a_cell_from_an_earlier_row_is_blocked() {
+    // T5 (markup-carve/carve#3047): the position left of `<` belongs to `b`,
+    // which started a row earlier, so widening it would cover `c`.
     assert_eq!(
         carve::to_html(
             "| p | q | r | s |\n|---|---|---|---|\n| a | b | c | d |\n| p | ^ | < | e |"
@@ -50,7 +52,7 @@ fn colspan_marker_scans_left_past_consumed_rowspan_cell() {
             "  <thead>\n    <tr><th scope=\"col\">p</th><th scope=\"col\">q</th><th scope=\"col\">r</th><th scope=\"col\">s</th></tr>\n  </thead>\n",
             "  <tbody>\n",
             "    <tr><td>a</td><td rowspan=\"2\">b</td><td>c</td><td>d</td></tr>\n",
-            "    <tr><td colspan=\"2\">p</td><td>e</td></tr>\n",
+            "    <tr><td>p</td><td></td><td>e</td></tr>\n",
             "  </tbody>\n",
             "</table>"
         )

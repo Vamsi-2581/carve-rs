@@ -33,10 +33,11 @@ fn cells(source: &str) -> Vec<Vec<CellSpans>> {
 
 #[test]
 fn the_counts_sit_on_the_origin_and_the_markers_stay() {
-    let grid = cells("| a | < | b |\n| ^ | c | d |\n");
+    let grid = cells("| a | < | b |\n| ^ | < | d |\n");
     assert_eq!(grid[0][0], (None, Some(2), Some(2)));
     assert_eq!(grid[0][1], (Some("colspan".into()), None, None));
     assert_eq!(grid[1][0], (Some("rowspan".into()), None, None));
+    assert_eq!(grid[1][1], (Some("colspan".into()), None, None));
 }
 
 #[test]
@@ -58,7 +59,7 @@ fn a_marker_that_found_no_origin_extends_nobody() {
 
 #[test]
 fn the_html_the_shared_walk_produces_is_unchanged() {
-    let html = carve::render_html(&carve::parse("| a | < | b |\n| ^ | c | d |\n")).expect("render");
+    let html = carve::render_html(&carve::parse("| a | < | b |\n| ^ | < | d |\n")).expect("render");
     assert!(html.contains("rowspan=\"2\""), "{html}");
     assert!(html.contains("colspan=\"2\""), "{html}");
 }

@@ -527,6 +527,8 @@ mod a_table_carries_the_separator_row_it_was_written_with;
 mod a_table_cells_blocks_contribute_only_their_payload;
 #[path = "../a_table_section_keeps_the_attributes_it_has_a_slot_for.rs"]
 mod a_table_section_keeps_the_attributes_it_has_a_slot_for;
+#[path = "../a_table_span_never_covers_another_cell.rs"]
+mod a_table_span_never_covers_another_cell;
 #[path = "../a_table_whose_cells_hold_blocks_imports_as_a_list_table.rs"]
 mod a_table_whose_cells_hold_blocks_imports_as_a_list_table;
 #[path = "../a_task_box_is_content_not_a_prefix.rs"]
