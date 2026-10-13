@@ -11723,6 +11723,7 @@ fn collect_blockquote_body(
     // (`quote_prefix_calls`). Only a `:`-shaped lazy line asks, and the scan
     // resumes where it stopped, so the whole walk is one pass over the lines.
     let mut open_entry = QuotedEntryScan::default();
+    let mut lazy_description_open = false;
     let mut may_have_term = false;
     // THE QUOTE'S OWN LAST BLOCK IS WHAT S4 ASKS ABOUT, and a continuation row
     // belongs to the table above it (§5 T6, markup-carve/carve#1348). `ParaOpen`
@@ -11755,6 +11756,9 @@ fn collect_blockquote_body(
     let mut literal_quote_body = None;
     while let Some(line) = cur.peek() {
         if let Some(stripped) = strip_blockquote_prefix(line) {
+            if strip_description_prefix(trim_ascii_start(stripped)).is_some() {
+                lazy_description_open = false;
+            }
             if !may_have_term && stripped.contains(":: ") {
                 let trimmed = trim_ascii_start(stripped);
                 may_have_term = (inner.lines.is_empty()
@@ -12071,18 +12075,20 @@ fn collect_blockquote_body(
         //   half == Term, `::` -> a second term: keep AS-IS (the item re-parse
         //                         dedents it to its own column)
         //   half == Description, `::` -> a new term: keep AS-IS
-        //   half == Description, `:`  -> the open description's continuation:
-        //                         keep AS-IS so it folds into the `<dd>`
+        //   half == Description, flush-left `:` -> escaped lazy text in the `<dd>`
+        //   half == Description, indented `:` -> keep its authored column
         //   below the content column -> reached no entry: keep AS-IS as lazy text
         //
         // Every line that is NOT a definition marker is framed so its
         // indentation cannot re-open a block on re-parse (carve-rs#1538).
-        // A flush-left `: ` ends an open term (CARVE-P2-028), and a lazy line
-        // opens no block inside the quote, so the quote ends there and the line
-        // is read where it stands.
+        // A flush-left description ends an open term. A description first
+        // supplied by a lazy line cannot itself keep the quote open for another
+        // flush-left description.
         if indent_columns(line) == 0 && strip_definition_marker(line).is_some() {
             open_entry.advance(&inner.lines);
-            if open_entry.half == Some(DefHalf::Term) {
+            if open_entry.half == Some(DefHalf::Term)
+                || (open_entry.half == Some(DefHalf::Description) && lazy_description_open)
+            {
                 break;
             }
         }
@@ -12131,10 +12137,15 @@ fn collect_blockquote_body(
                 // frame to read it at column 0 wherever the container depth put
                 // it - `> > - :: t` / `:: u` keeps the second term inside the
                 // nested item instead of ejecting it (markup-carve/carve-rs#1538).
-                Some(DefHalf::Term) if is_desc => (false, true),
+                Some(DefHalf::Term) if is_desc => {
+                    lazy_description_open = true;
+                    (false, true)
+                }
                 Some(DefHalf::Term) => (true, false),
-                // A `::` opens a new term; a `:` is the open description's own
-                // continuation. Both keep their line as-is.
+                // A flush-left `:` below an explicitly quoted description is
+                // lazy text in that description. It cannot open another entry.
+                Some(DefHalf::Description) if is_desc && indent_columns(line) == 0 => (true, false),
+                // A `::` opens a new term; an indented `:` keeps its column.
                 Some(DefHalf::Description) => (false, false),
             }
         } else {
@@ -19122,7 +19133,7 @@ fn collect_definition_body(
             // picks it up). An EMPTY term marker opens nothing, whatever
             // whitespace trails it, so it folds like a bare `::`.
             if is_definition_list_start(strip_lazy(line))
-                || strip_definition_marker(strip_lazy(line)).is_some()
+                || (!line.starts_with(LAZY) && strip_definition_marker(strip_lazy(line)).is_some())
             {
                 break;
             }
