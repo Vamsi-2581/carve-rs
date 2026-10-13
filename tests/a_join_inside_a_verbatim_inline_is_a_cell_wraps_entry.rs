@@ -127,6 +127,19 @@ fn an_offset_that_names_no_space_is_refused() {
     let carve::InlineNode::Code(code) = &mut table.rows[0].cells[0].children[0] else {
         panic!("a code span");
     };
-    code.cell_wraps.as_mut().unwrap()[0].offset = 0;
+    // `b` is no space, and offset 2 is neither padding boundary of `a b`.
+    code.cell_wraps.as_mut().unwrap()[0].offset = 2;
     assert!(carve::render_carve(&doc).is_err());
+}
+
+#[test]
+fn a_join_stripped_as_padding_sits_at_the_boundary_and_writes_back() {
+    for (source, value, offset) in [("| ` |\n+ b ` |\n", "b", 0), ("| ` a |\n+ ` |\n", "a", 1)] {
+        assert_eq!(
+            cell(source),
+            serde_json::json!([{"type": "code", "value": value, "cellWraps": [{"offset": offset, "line": 1}]}]),
+            "{source:?}"
+        );
+        assert_eq!(carve::to_carve(source), source);
+    }
 }

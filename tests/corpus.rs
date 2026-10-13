@@ -845,6 +845,9 @@ const IMPLEMENTED: &[&str] = &[
     "a-link-definition-or-an-attribute-line-past-a-box-s-column-opens-on-its-authored-base",
     // CARVE-P9-082: an explicitly delimited row of blank cells is a table row.
     "an-explicitly-delimited-row-of-blank-cells-is-a-table",
+    // carve#3139, arrived with the bump to carve dc8e6905.
+    "a-closed-fence-in-a-nested-child-leaves-no-paragraph-open",
+    "a-code-line-left-of-an-authored-base-fence-opener-is-measured-from-that-base",
 ];
 
 // Spec-main categories tracked by separate implementation work. Keep them
@@ -924,7 +927,19 @@ const AHEAD_OF_PIN: &[(&str, &str, &str)] = &[];
 /// Empty again. Its three entries were corpus 519's first three documents, and
 /// carve-rs#2170 made them match, so the `assert_ne!` in `check_pair` is what
 /// removed them.
-const BEHIND_ON_PAIR: &[(&str, &str, &str)] = &[];
+const BEHIND_ON_PAIR: &[(&str, &str, &str)] = &[(
+    "591-a-code-line-left-of-an-authored-base-fence-opener-is-measured-from-that-base-4",
+    "the code line left of the authored base keeps its indent, carve-rs#2680",
+    r#"<dl>
+  <dt>t</dt>
+  <dd>
+    <p>x</p>
+    <pre><code>  a
+b
+</code></pre>
+  </dd>
+</dl>"#,
+)];
 
 fn check_pair(slug: &str) {
     let slug = &resolve_slug(slug);

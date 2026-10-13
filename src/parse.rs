@@ -20014,6 +20014,17 @@ fn verbatim_cell_wraps(
         return None;
     };
     let mut wraps = Vec::new();
+    let padded = start > tick + run;
+    // A join the padding strip consumed sits at the boundary (carve#3138).
+    if padded {
+        if let Some(wrap) = cell_wrap_at(base + tick + run) {
+            wraps.push(VerbatimCellWrap {
+                offset: 0,
+                line: wrap.line,
+                row: wrap.row,
+            });
+        }
+    }
     for (offset, (at, ch)) in value.char_indices().enumerate() {
         if ch != ' ' {
             continue;
@@ -20021,6 +20032,15 @@ fn verbatim_cell_wraps(
         if let Some(wrap) = cell_wrap_at(base + start + at) {
             wraps.push(VerbatimCellWrap {
                 offset,
+                line: wrap.line,
+                row: wrap.row,
+            });
+        }
+    }
+    if padded && bytes.get(start + value.len()) == Some(&b' ') {
+        if let Some(wrap) = cell_wrap_at(base + start + value.len()) {
+            wraps.push(VerbatimCellWrap {
+                offset: value.chars().count(),
                 line: wrap.line,
                 row: wrap.row,
             });

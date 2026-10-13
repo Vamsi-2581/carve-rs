@@ -1623,8 +1623,10 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // CARVE-P12-069 records `+` rows as `continuationLines` and `cell_wrap`,
     // which the bridge has no slot for, so the 27 documents holding a
     // continuation row now report a degradation.
-    const STRICT: usize = 1874;
-    const LOSSY: usize = 607;
+    // Spec dc8e6905 adds eight documents: six round trip strictly, two report
+    // a loss.
+    const STRICT: usize = 1880;
+    const LOSSY: usize = 609;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in

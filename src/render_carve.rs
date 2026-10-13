@@ -4390,17 +4390,12 @@ fn render_inline_body(
             let verbatim = if raw.format.eq_ignore_ascii_case("html") {
                 let fence = code_span_fence(&content);
                 let pad = verbatim_needs_padding(&content);
-                let content = with_verbatim_wraps(
+                with_verbatim_wraps(
                     &raw.cell_wraps,
                     ctx.table_cell_depth > 0,
                     "raw_inline",
-                    || mark_verbatim_wraps(&content).into_owned(),
-                );
-                if pad {
-                    format!("{fence} {content} {fence}")
-                } else {
-                    format!("{fence}{content}{fence}")
-                }
+                    || spell_verbatim(&fence, &content, pad),
+                )
             } else {
                 with_verbatim_wraps(
                     &raw.cell_wraps,
@@ -5456,29 +5451,60 @@ fn with_verbatim_wraps<T>(
     written
 }
 
-/// Replaces each joining space a `cellWraps` entry names with the marker the
-/// table writer cuts the row at. Runs after the pad is decided on the joined
-/// value.
-fn mark_verbatim_wraps(content: &str) -> std::borrow::Cow<'_, str> {
-    let Some((wraps, node_type)) = VERBATIM_WRAPS.with(|slot| slot.borrow_mut().take()) else {
-        return std::borrow::Cow::Borrowed(content);
+/// Writes a verbatim span, turning each joining space a `cellWraps` entry
+/// names into the marker the table writer cuts the row at. The pad is decided
+/// on the joined value; an entry at a padding boundary (carve#3138) forces the
+/// pad and marks that pad space instead.
+fn spell_verbatim(fence: &str, content: &str, needs_pad: bool) -> String {
+    let pending = VERBATIM_WRAPS.with(|slot| slot.borrow_mut().take());
+    let Some((wraps, node_type)) = pending else {
+        return if needs_pad {
+            format!("{fence} {content} {fence}")
+        } else {
+            format!("{fence}{content}{fence}")
+        };
+    };
+    let marker = |wrap: &crate::ast::VerbatimCellWrap| {
+        format!("\u{2}{},{}\u{3}", wrap.row.unwrap_or(0), wrap.line)
     };
     let mut chars: Vec<String> = content.chars().map(String::from).collect();
+    let len = chars.len();
+    let (mut lead, mut tail) = (None, None);
     let mut previous = None;
-    for wrap in &wraps {
-        if previous.is_some_and(|at| wrap.offset <= at)
-            || chars.get(wrap.offset).map(String::as_str) != Some(" ")
-        {
+    for (index, wrap) in wraps.iter().enumerate() {
+        let names_space = chars.get(wrap.offset).map(String::as_str) == Some(" ");
+        if previous.is_some_and(|at| wrap.offset <= at) {
             crate::render_carve_error::record_unspellable(
                 node_type,
                 "a cellWraps offset does not name a joining space in ascending order",
             );
-            return std::borrow::Cow::Borrowed(content);
+            return format!("{fence}{content}{fence}");
         }
-        chars[wrap.offset] = format!("\u{2}{},{}\u{3}", wrap.row.unwrap_or(0), wrap.line);
+        if wrap.offset == 0 && index == 0 && !names_space && len > 0 {
+            lead = Some(marker(wrap));
+        } else if wrap.offset == len && len > 0 && index + 1 == wraps.len() {
+            tail = Some(marker(wrap));
+        } else if names_space {
+            chars[wrap.offset] = marker(wrap);
+        } else {
+            crate::render_carve_error::record_unspellable(
+                node_type,
+                "a cellWraps offset does not name a joining space in ascending order",
+            );
+            return format!("{fence}{content}{fence}");
+        }
         previous = Some(wrap.offset);
     }
-    std::borrow::Cow::Owned(chars.concat())
+    let body = chars.concat();
+    if needs_pad || lead.is_some() || tail.is_some() {
+        format!(
+            "{fence}{}{body}{}{fence}",
+            lead.as_deref().unwrap_or(" "),
+            tail.as_deref().unwrap_or(" ")
+        )
+    } else {
+        format!("{fence}{body}{fence}")
+    }
 }
 
 fn render_code(content: &str, ctx: &CarveContext, node_type: &'static str) -> String {
@@ -5572,12 +5598,7 @@ fn render_code_with_unclosed(
     } else {
         content
     };
-    let content = mark_verbatim_wraps(content);
-    if needs_pad {
-        format!("{fence} {content} {fence}")
-    } else {
-        format!("{fence}{content}{fence}")
-    }
+    spell_verbatim(&fence, content, needs_pad)
 }
 
 fn code_fence_info(lang: Option<&str>, title: Option<&str>, label: Option<&str>) -> String {
