@@ -19406,6 +19406,7 @@ fn trim_cell_padding_start(s: &str) -> &str {
 fn parse_table(cur: &mut LineCursor, options: &Options<'_>) -> BlockNode {
     let span_start = cur.pos;
     let mut rows: Vec<TableRow> = Vec::new();
+    let mut row_inputs: Vec<Vec<CellInput>> = Vec::new();
     let mut first_is_delim = false;
     let mut saw_separator = false;
     let mut separator_widths: Option<Vec<u64>> = None;
@@ -19453,7 +19454,7 @@ fn parse_table(cur: &mut LineCursor, options: &Options<'_>) -> BlockNode {
             ));
             last_cont_at = Some(cont_at);
         }
-        let mut row = parse_table_row(
+        let (mut row, mut inputs) = parse_table_row(
             line,
             &conts,
             options,
@@ -19477,7 +19478,15 @@ fn parse_table(cur: &mut LineCursor, options: &Options<'_>) -> BlockNode {
             pos.end_column = end.end_column;
             pos.end_offset = end.end_offset;
         }
+        join_continuations_under_rowspans(
+            &mut rows,
+            &mut row_inputs,
+            &mut row,
+            &mut inputs,
+            options,
+        );
         rows.push(row);
+        row_inputs.push(inputs);
     }
     // The caption FIRST, then the span: a caption is one of the table's
     // children and sits after the last row, so a span taken before it is
@@ -19721,6 +19730,61 @@ struct CellFragment {
     anchor: Option<(usize, isize)>,
 }
 
+/// What a cell was parsed from, kept so a later continuation can rejoin it.
+struct CellInput {
+    text: String,
+    anchor: Option<(usize, isize)>,
+    extra: Vec<CellFragment>,
+    alone_pos: Option<Pos>,
+}
+
+fn reparse_table_cell(cell: &mut TableCell, input: &CellInput, options: &Options<'_>) {
+    let fresh = parse_table_cell(&input.text, options, input.anchor, &input.extra);
+    cell.children = fresh.children;
+    cell.blocks = fresh.blocks;
+    cell.pos = if input.extra.is_empty() {
+        input.alone_pos.clone()
+    } else {
+        None
+    };
+}
+
+/// A continuation fragment under a `^` cell joins the cell that owns the
+/// rowspan (PART 5 T6), found by following the carets up the column.
+fn join_continuations_under_rowspans(
+    rows: &mut [TableRow],
+    row_inputs: &mut [Vec<CellInput>],
+    row: &mut TableRow,
+    inputs: &mut [CellInput],
+    options: &Options<'_>,
+) {
+    for idx in 0..row.cells.len() {
+        if row.cells[idx].span != Some(TableCellSpan::Rowspan) || inputs[idx].extra.is_empty() {
+            continue;
+        }
+        let mut above = rows.len();
+        while above > 0
+            && rows[above - 1]
+                .cells
+                .get(idx)
+                .is_some_and(|cell| cell.span == Some(TableCellSpan::Rowspan))
+        {
+            above -= 1;
+        }
+        let Some(origin) = above.checked_sub(1).filter(|&r| idx < rows[r].cells.len()) else {
+            continue;
+        };
+        let moved = std::mem::take(&mut inputs[idx].extra);
+        row_inputs[origin][idx].extra.extend(moved);
+        reparse_table_cell(
+            &mut rows[origin].cells[idx],
+            &row_inputs[origin][idx],
+            options,
+        );
+        reparse_table_cell(&mut row.cells[idx], &inputs[idx], options);
+    }
+}
+
 /// `base` is the row line's (source line, columns already stripped by an
 /// enclosing container). Without it a cell cannot be placed: this function is
 /// handed an already-split line and cannot know where it sits.
@@ -19738,7 +19802,7 @@ fn parse_table_row(
     conts: &[(&str, Option<(usize, isize)>)],
     options: &Options<'_>,
     base: Option<(usize, isize)>,
-) -> TableRow {
+) -> (TableRow, Vec<CellInput>) {
     let mut content = trim_ascii(line);
     let (attrs, body) = split_row_attrs(content);
     content = body;
@@ -19754,11 +19818,12 @@ fn parse_table_row(
     let mut fragments: Vec<Vec<CellFragment>> =
         (0..split.cells.len()).map(|_| Vec::new()).collect();
     collect_continuation_fragments(conts, &split, &mut fragments);
+    let mut inputs = Vec::with_capacity(split.cells.len());
     let cells = split
         .cells
         .into_iter()
-        .enumerate()
-        .map(|(idx, slice)| {
+        .zip(fragments)
+        .map(|(slice, extra)| {
             // The cell's own start column, which is also the anchor its inline
             // content is parsed against: the cell text is a verbatim slice of
             // the row now that the escaped pipe is preserved, so an offset
@@ -19769,14 +19834,9 @@ fn parse_table_row(
                 }
                 _ => None,
             };
-            let extra = &fragments[idx];
-            let mut cell = parse_table_cell(&slice.text, options, cell_anchor, extra);
-            if !extra.is_empty() {
-                // Its value is now reassembled from discontiguous fragments; no
-                // single exact source extent exists for the cell.
-                cell.pos = None;
-            } else if let (Some((line_no, stripped)), Some(off)) = (base, content_off) {
-                cell.pos = Some(Pos {
+            let mut cell = parse_table_cell(&slice.text, options, cell_anchor, &extra);
+            let alone_pos = match (base, content_off) {
+                (Some((line_no, stripped)), Some(off)) => Some(Pos {
                     start_line: line_no,
                     end_line: line_no,
                     start_column: document_column(stripped, off + slice.start),
@@ -19785,16 +19845,33 @@ fn parse_table_row(
                     start_offset: 0,
                     end_offset: 0,
                     file: None,
-                });
-            }
+                }),
+                _ => None,
+            };
+            // A cell reassembled from discontiguous fragments has no single
+            // exact source extent.
+            cell.pos = if extra.is_empty() {
+                alone_pos.clone()
+            } else {
+                None
+            };
+            inputs.push(CellInput {
+                text: slice.text.to_string(),
+                anchor: cell_anchor,
+                extra,
+                alone_pos,
+            });
             cell
         })
         .collect();
-    TableRow {
-        cells,
-        attrs,
-        pos: None,
-    }
+    (
+        TableRow {
+            cells,
+            attrs,
+            pos: None,
+        },
+        inputs,
+    )
 }
 
 /// Where `part` starts inside `whole`, in CHARS.
