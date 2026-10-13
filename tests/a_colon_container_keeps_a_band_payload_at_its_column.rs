@@ -161,10 +161,7 @@ fn a_nested_width_inside_the_extent_still_pairs() {
 }
 
 #[test]
-fn a_description_host_and_the_code_fence_spelling_are_unmoved() {
-    // A description body reaches the same reading through its own collector, and
-    // the code fence is the arm the colon arm mirrors - both were already right,
-    // and this pass rewrites the extent both of them walk.
+fn a_description_host_keeps_its_band_payload_and_a_code_fence_closes() {
     assert_eq!(
         both_paths(":: term\n:  desc\n\n    :::\n   p\n   :::\n   \n   tail\n").trim(),
         concat!(
@@ -184,12 +181,10 @@ fn a_description_host_and_the_code_fence_spelling_are_unmoved() {
         both_paths("- a\n\n    ```\n   p\n   ```\n  \n  tail\n").trim(),
         concat!(
             "<ul>\n",
-            "  <li>a\n",
+            "  <li><p>a</p>\n",
             "    <pre><code>p\n",
-            "```\n",
-            "\n",
-            "tail\n",
             "</code></pre>\n",
+            "    <p>tail</p>\n",
             "  </li>\n",
             "</ul>",
         ),

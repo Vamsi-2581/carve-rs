@@ -60,13 +60,11 @@ fn an_open_authored_fence_stops_before_outer_text_after_a_blank() {
 }
 
 #[test]
-fn a_closer_between_container_and_authored_columns_is_payload() {
+fn a_closer_between_container_and_authored_columns_releases_the_marker() {
     let source = "- head\n\n      ```\n      body\n    ```\n  - payload\n";
     let html = to_html(source);
-    assert!(
-        html.contains("body\n```\n- payload\n</code></pre>"),
-        "{html}"
-    );
+    assert!(html.contains("<pre><code>body\n</code></pre>"), "{html}");
+    assert!(html.contains("<li>payload</li>"), "{html}");
     let source = "- head\n\n      ```\n      body\n  ```\n  - child\n";
     assert!(to_html(source).contains("<li>child</li>"));
 }

@@ -1646,7 +1646,9 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // continuation row now report a degradation.
     // Spec dc8e6905 adds eight documents: six round trip strictly, two report
     // a loss.
-    const STRICT: usize = 1880;
+    // Spec 32c0b881 adds section 592's three documents. All three round trip
+    // strictly.
+    const STRICT: usize = 1883;
     const LOSSY: usize = 609;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);

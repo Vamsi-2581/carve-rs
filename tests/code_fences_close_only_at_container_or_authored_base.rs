@@ -1,19 +1,13 @@
-//! ONE AUTHORED BLOCK BASE closes a fence at two columns and no others
+//! List-item fence closers use the available prefix below an authored base
 //! (CARVE-P0-004, `resources/spec/01-layout.ebnf`; markup-carve/carve-rs#2068).
 //!
-//! A fence opened PAST its container's content column takes its own authored
-//! column as the local base. A closing run counts there, and at the container's
-//! content column where the container reclaims the line. A run strictly between
-//! the two is payload, and so is one past the base. Payload is measured from the
-//! base: a line below it loses its whole available prefix (carve#3133), and one
-//! at or past it keeps what sits past the BASE.
+//! A fence opened past a list item's content column takes its own authored
+//! column as the local base. A matching run below that base closes the fence;
+//! a shorter run stays payload.
 //!
-//! MEASURED, NOT ASSUMED. Sixty documents cover five container kinds, two
-//! opener overshoots and every closer column from the content column to two past
-//! the base, rendered through the executable spec (markup-carve/carve
-//! `5315967c`, `scripts/spec/layout.mjs` + `scripts/spec/html.mjs`). Twenty of
-//! them read a closer in the band before this guard, and every residue below the
-//! base was measured the same way.
+//! These cases cover five container kinds, two opener overshoots and closer
+//! columns through two past the base. The list cases follow corpus 592 at the
+//! pinned spec revision.
 
 use carve::{to_html, to_html_with_options, Options};
 
@@ -53,7 +47,7 @@ fn check(rows: &[Row]) {
 
 /// A list item, content column 2.
 #[test]
-fn a_fence_in_a_list_item_closes_at_two_columns() {
+fn a_fence_in_a_list_item_closes_through_the_authored_base() {
     check(&[
         (
             "- item\n\n    ```\n    a\n  ```\n\n  tail\n",
@@ -63,7 +57,7 @@ fn a_fence_in_a_list_item_closes_at_two_columns() {
         ),
         (
             "- item\n\n    ```\n    a\n   ```\n\n  tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             3,
             "the band",
         ),
@@ -93,19 +87,19 @@ fn a_fence_in_a_list_item_closes_at_two_columns() {
         ),
         (
             "- item\n\n      ```\n      a\n   ```\n\n  tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             3,
             "the band",
         ),
         (
             "- item\n\n      ```\n      a\n    ```\n\n  tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             4,
             "the band",
         ),
         (
             "- item\n\n      ```\n      a\n     ```\n\n  tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             5,
             "the band",
         ),
@@ -132,7 +126,7 @@ fn a_fence_in_a_list_item_closes_at_two_columns() {
 
 /// A nested list item, content column 4.
 #[test]
-fn a_fence_in_a_nested_item_closes_at_two_columns() {
+fn a_fence_in_a_nested_item_closes_through_the_authored_base() {
     check(&[
         (
             "- a\n  - item\n\n      ```\n      a\n    ```\n\n    tail\n",
@@ -142,7 +136,7 @@ fn a_fence_in_a_nested_item_closes_at_two_columns() {
         ),
         (
             "- a\n  - item\n\n      ```\n      a\n     ```\n\n    tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             5,
             "the band",
         ),
@@ -172,19 +166,19 @@ fn a_fence_in_a_nested_item_closes_at_two_columns() {
         ),
         (
             "- a\n  - item\n\n        ```\n        a\n     ```\n\n    tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             5,
             "the band",
         ),
         (
             "- a\n  - item\n\n        ```\n        a\n      ```\n\n    tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             6,
             "the band",
         ),
         (
             "- a\n  - item\n\n        ```\n        a\n       ```\n\n    tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             7,
             "the band",
         ),
@@ -369,7 +363,7 @@ fn a_fence_in_a_definition_description_closes_at_two_columns() {
 
 /// A list item inside a block quote, content column 2.
 #[test]
-fn a_fence_in_a_quoted_list_item_closes_at_two_columns() {
+fn a_fence_in_a_quoted_list_item_closes_through_the_authored_base() {
     check(&[
         (
             "> - item\n>\n>     ```\n>     a\n>   ```\n>   \n>   tail\n",
@@ -379,7 +373,7 @@ fn a_fence_in_a_quoted_list_item_closes_at_two_columns() {
         ),
         (
             "> - item\n>\n>     ```\n>     a\n>    ```\n>   \n>   tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             3,
             "the band",
         ),
@@ -409,19 +403,19 @@ fn a_fence_in_a_quoted_list_item_closes_at_two_columns() {
         ),
         (
             "> - item\n>\n>       ```\n>       a\n>    ```\n>   \n>   tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             3,
             "the band",
         ),
         (
             "> - item\n>\n>       ```\n>       a\n>     ```\n>   \n>   tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             4,
             "the band",
         ),
         (
             "> - item\n>\n>       ```\n>       a\n>      ```\n>   \n>   tail\n",
-            "a\n```\n\ntail\n",
+            "a\n",
             5,
             "the band",
         ),
