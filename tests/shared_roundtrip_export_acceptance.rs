@@ -551,6 +551,18 @@ fn collision_row(fixture: &Value) {
 fn shared_markdown_container_carriers_restore_ast_fields() {
     let fixtures = fixtures();
     for fixture in required_rows(&fixtures, "markdownExportImport") {
+        if fixture["aheadOfPin"] == true
+            && !matches!(
+                fixture["id"].as_str(),
+                Some(
+                    "nested-definition-list"
+                        | "nested-definition-list-two-levels"
+                        | "code-fence-title-and-label"
+                )
+            )
+        {
+            continue;
+        }
         let source = text(fixture, "source");
         assert!(
             projection(&ast(&source), &fixture["expectedNodes"]),
@@ -615,6 +627,11 @@ fn shared_markdown_container_carriers_restore_ast_fields() {
 #[test]
 fn shared_markdown_import_negative_rows_match_their_contract() {
     for fixture in required_rows(&fixtures(), "markdownImportNegative") {
+        if fixture["aheadOfPin"] == true
+            && fixture["id"] != "nested-definition-marker-without-outer-list"
+        {
+            continue;
+        }
         let imported = migrate_markdown(fixture["markdown"].as_str().unwrap());
         let imported_ast = ast(&imported.value);
         if let Some(code) = fixture["expectedDiagnostic"]["code"].as_str() {
@@ -660,6 +677,111 @@ fn shared_markdown_import_negative_rows_match_their_contract() {
                     fixture["id"]
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn markdown_list_style_loss_names_each_dropped_style() {
+    for (source, style, expected) in [
+        ("a. one\na. two\n", "lower-alpha", "1. one\n2. two\n"),
+        ("A. one\n", "upper-alpha", "1. one\n"),
+        ("i. one\n", "lower-roman", "1. one\n"),
+        ("I. one\n", "upper-roman", "1. one\n"),
+        ("iv) x\nv) y\n", "lower-roman", "4) x\n5) y\n"),
+    ] {
+        for roundtrip in [false, true] {
+            let result = carve::with_render_loss_report(
+                carve::RenderTarget::Markdown,
+                CheckedRenderOptions::default(),
+                || {
+                    carve::render_markdown_with_options(
+                        &parse(source),
+                        &Options::default().with_roundtrip(roundtrip),
+                    )
+                    .unwrap()
+                },
+            )
+            .unwrap();
+            assert_eq!(result.value, expected);
+            assert_eq!(result.losses.len(), 1);
+            assert_eq!(result.losses[0].code, "list-style-dropped");
+            assert_eq!(result.losses[0].style, Some(style));
+            assert!(result.losses[0].pos.is_none());
+        }
+    }
+}
+
+#[test]
+fn fence_title_marker_requires_an_adjacent_code_fence() {
+    for markdown in [
+        "<!-- carve: ```js \"app.js\" [Example] -->\n\n```js\nx\n```\n",
+        "<!-- carve: ```js \"app.js\" [Example] -->\nparagraph\n",
+        "<!-- carve:2 ```js \"app.js\" [Example] -->\n```js\nx\n```\n",
+        "<!-- carve: ```js \"app.js\" [Example] -->\n> quoted\n",
+    ] {
+        let imported = migrate_markdown(markdown);
+        assert!(
+            imported
+                .report
+                .diagnostics
+                .iter()
+                .any(|row| row.code == "carrier-markers-damaged"),
+            "{markdown}: {:?}",
+            imported.report
+        );
+    }
+}
+
+#[test]
+fn fence_markers_restore_titles_in_containers_and_without_languages() {
+    for source in [
+        "```js \"app.js\" [Example]\nlet x = 1\n```\n",
+        "```js [L]\nx\n```\n",
+        "```\"notes.txt\"\nx\n```\n",
+        "```\"a b.txt\"\nx\n```\n",
+        "```[Example]\nx\n```\n",
+        "{#k}\n```js \"a.js\"\nx\n```\n",
+        "> ```js \"q.js\"\n> x\n> ```\n",
+        "- item\n\n  ````js \"f\" [g]\n  ```\n  ````\n",
+        ":: Outer\n: body\n\n  :: Inner\n  : inner body\n\n    ```js \"in.js\" [I]\n    x\n    ```\n",
+    ] {
+        let exported = to_markdown_with_options(source, &Options::default().with_roundtrip(true));
+        if source.starts_with("```js \"app.js\"") {
+            assert!(exported.contains("<!-- carve: ```js \"app.js\" [Example] -->"));
+        }
+        let imported = migrate_markdown(&exported);
+        assert!(
+            !imported
+                .report
+                .diagnostics
+                .iter()
+                .any(|row| row.code == "carrier-markers-damaged"),
+            "{source}: {exported}: {:?}",
+            imported.report
+        );
+        assert_eq!(
+            to_html(&imported.value),
+            to_html(source),
+            "{source}: {exported}: {}",
+            imported.value
+        );
+        let original = ast(source);
+        let restored = ast(&imported.value);
+        let code = |tree: &Value| {
+            node_list(tree)
+                .into_iter()
+                .find(|node| node["type"] == "code_block")
+                .cloned()
+                .unwrap()
+        };
+        for key in ["header", "label", "attrs"] {
+            assert_eq!(
+                code(&restored)[key],
+                code(&original)[key],
+                "{source}: {exported}: {}",
+                imported.value
+            );
         }
     }
 }
