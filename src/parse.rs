@@ -10516,8 +10516,10 @@ impl NestedFenceReplay {
             self.replay(lines, at, cur);
         }
         let deepest = self.chain.last()?;
-        if (!deepest.colons.is_empty() || !deepest.hosts.is_empty())
-            && deepest.para
+        if deepest.host_verse.is_some() && deepest.para && deepest.host_comment.is_none() {
+            return Some(true);
+        }
+        if deepest.para
             && deepest.fence.is_none()
             && deepest.host_fence.is_none()
             && !deepest.by_fence
@@ -10555,7 +10557,7 @@ impl NestedFenceReplay {
                         chain[level].host_fence = None;
                     }
                     chain[level].by_fence = true;
-                    chain[level].para = false;
+                    chain[level].para = chain[level].host_verse.is_some() && !is_blank_line(text);
                     chain[level].colon_absorption = false;
                     chain.truncate(level + 1);
                     return;
@@ -10639,7 +10641,7 @@ impl NestedFenceReplay {
                         chain.truncate(level + 1);
                         return;
                     }
-                    chain[level].para = false;
+                    chain[level].para = !is_blank_line(text) && !is_line_comment_any_column(text);
                     chain[level].colon_absorption = false;
                     chain[level].by_colon = true;
                     chain.truncate(level + 1);
@@ -10794,7 +10796,15 @@ impl NestedFenceReplay {
                     here.colon_absorption = false;
                 }
                 let floor = here.hosts.last().map_or(0, |&(_, col, _)| col);
-
+                if floor == 0 && col == 0 {
+                    if let Some(width) = detect_line_block_open(inner) {
+                        here.host_verse = Some((width, 0, col));
+                        here.para = false;
+                        here.colon_absorption = false;
+                        here.by_colon = true;
+                        return;
+                    }
+                }
                 if floor > 0
                     && col >= floor
                     && (col == floor
@@ -11534,6 +11544,7 @@ fn collect_blockquote_body(
     // No replay without a fence to find: every level of a quote ladder would
     // otherwise walk its whole body once.
     let mut may_hold_fence = false;
+    let mut literal_quote_body = None;
     while let Some(line) = cur.peek() {
         if let Some(stripped) = strip_blockquote_prefix(line) {
             if !may_have_term && stripped.contains(":: ") {
@@ -11578,7 +11589,21 @@ fn collect_blockquote_body(
             // The quote marker (and its optional space) is a pure prefix, so the
             // quoted line's columns are knowable in the document.
             let stripped_at = stripped_col(cur.source_col(at), line, stripped);
-            if attrs_block_rest > 0 {
+            if let Some(width) = literal_quote_body {
+                if exact_colon_fence_len(stripped) == Some(width) {
+                    literal_quote_body = None;
+                    para_open = ParaOpen::Closed;
+                } else {
+                    para_open = if comment_run.is_some() { ParaOpen::Closed } else { ParaOpen::from_line("x", false) };
+                }
+                opaque_tail = false;
+                table = TableRun::default();
+            } else if let Some(width) = detect_line_block_open(stripped) {
+                literal_quote_body = Some(width);
+                para_open = ParaOpen::from_line("x", false);
+                opaque_tail = false;
+                table = TableRun::default();
+            } else if attrs_block_rest > 0 {
                 opaque_tail = false;
                 // Inside a wrapped attribute block the opener already closed the
                 // paragraph; its remaining lines close nothing further and open
@@ -15345,16 +15370,7 @@ fn block_ends_with_open_paragraph(
         // about: the fence closes the paragraph inside it, and a dedented line
         // after it ends the item (like code/table). One line of body decides it
         // two ways, which is why `colon_open` is read from the SOURCE.
-        Some(BlockNode::LineBlock(verse)) if colon_open > 0 => {
-            !matches!(
-                verse.children.last(), Some(BlockNode::Paragraph(p))
-                    if p.children.iter().all(|node| matches!(node, InlineNode::Comment(_)))
-            ) && block_ends_with_open_paragraph(
-                last_open_child(&verse.children, skip_comments),
-                colon_open - 1,
-                skip_comments,
-            )
-        }
+        Some(BlockNode::LineBlock(line)) if colon_open > 0 => line.children.last().is_some_and(|child| matches!(child, BlockNode::Paragraph(paragraph) if paragraph.children.iter().rev().find(|inline| !matches!(inline, InlineNode::SoftBreak(_) | InlineNode::HardBreak(_))).is_some_and(|inline| !matches!(inline, InlineNode::Comment(_))))),
         Some(BlockNode::Directive(d)) if colon_open > 0 => block_ends_with_open_paragraph(
             last_open_child(&d.children, skip_comments),
             colon_open - 1,
