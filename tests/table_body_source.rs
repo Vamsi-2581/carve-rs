@@ -101,7 +101,7 @@ fn table_body_source_reports_import_attribute_conflicts() {
 }
 
 #[test]
-fn table_body_source_adjusts_import_counts_after_blank_rows() {
+fn table_body_source_keeps_import_counts_with_blank_rows() {
     for html in [
         "<table><tbody><tr><td>a</td></tr><tr><td></td></tr></tbody><tbody><tr><td>b</td></tr></tbody></table>",
         "<table><thead><tr><th></th></tr></thead><tbody><tr><td>a</td></tr></tbody><tfoot><tr><td>f</td></tr></tfoot></table>",
@@ -110,9 +110,9 @@ fn table_body_source_adjusts_import_counts_after_blank_rows() {
         let parsed = parse(&result.value);
         let BlockNode::Table(table) = &parsed.children[0] else { panic!("not a table: {}", result.value) };
         let groups = table.row_groups.as_ref().unwrap();
-        assert_eq!(groups.head_rows, 0, "{}", result.value);
+        assert_eq!(table.rows.len(), 3, "{}", result.value);
         assert_eq!(groups.head_rows + groups.foot_rows + groups.bodies.iter().map(|b| b.head_rows + b.body_rows).sum::<usize>(), table.rows.len());
-        assert!(result.report.diagnostics.iter().any(|d| d.message.contains("every cell is empty")));
+        assert!(!result.report.diagnostics.iter().any(|d| d.message.starts_with("Dropped a row")));
     }
 }
 

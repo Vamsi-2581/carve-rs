@@ -1615,8 +1615,11 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // row also round trips strictly after the first-block parser change.
     // Reading a fence that leaves a closed nested item as the checker does
     // moves one document from the strict to the lossy set.
-    const STRICT: usize = 1864;
-    const LOSSY: usize = 578;
+    // Spec 46b3d3f7 adds section 589's 36 documents (CARVE-P9-082): 34 round
+    // trip strictly, and 589-18 and 589-19, which hold an escaped pipe, report
+    // existing losses.
+    const STRICT: usize = 1898;
+    const LOSSY: usize = 580;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in

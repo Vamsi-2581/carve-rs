@@ -4,13 +4,27 @@ use carve::{
 };
 
 #[test]
-fn blank_table_rows_are_reported_without_erasing_surrounding_content() {
+fn a_blank_body_row_is_kept_as_a_row() {
     let source = "Before\n\n| A | B |\n|---|---|\n|   |   |\n| 1 | 2 |\n\nAfter\n";
     let result = migrate_markdown(source);
-    assert_eq!(result.value, "Before\n\n|= A |= B |\n| 1 | 2 |\n\nAfter\n");
+    assert_eq!(
+        result.value,
+        "Before\n\n|= A |= B |\n| | |\n| 1 | 2 |\n\nAfter\n"
+    );
     assert_eq!(try_markdown_to_carve(source).unwrap(), result.value);
     assert_eq!(to_carve(&result.value), result.value);
+    assert!(!result
+        .report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "structure-unspellable"));
+}
 
+#[test]
+fn an_empty_header_with_no_alignment_is_dropped_and_its_body_row_kept() {
+    let source = "Before\n\n|   |   |\n|---|---|\n|   |   |\n\nAfter\n";
+    let result = migrate_markdown(source);
+    assert_eq!(result.value, "Before\n\n| | |\n\nAfter\n");
     let losses: Vec<_> = result
         .report
         .diagnostics
@@ -18,48 +32,69 @@ fn blank_table_rows_are_reported_without_erasing_surrounding_content() {
         .filter(|diagnostic| diagnostic.code == "structure-unspellable")
         .collect();
     assert_eq!(losses.len(), 1);
+    assert!(losses[0].message.contains("empty header row of 2 cells"));
+    assert_eq!(losses[0].path.as_deref(), Some("line:3"));
     assert_eq!(losses[0].fidelity, MigrationFidelity::Dropped);
     assert_eq!(losses[0].confidence, MigrationConfidence::Exact);
     assert_eq!(losses[0].severity, HtmlImportSeverity::Warning);
 }
 
 #[test]
-fn wholly_blank_table_is_removed_with_one_warning_per_row() {
-    let source = "Before\n\n|   |   |\n|---|---|\n|   |   |\n\nAfter\n";
+fn an_aligned_blank_row_keeps_its_alignment() {
+    let source = "| A | B |\n|:-:|--:|\n|   |   |\n| 1 | 2 |\n";
     let result = migrate_markdown(source);
-    assert_eq!(result.value, "Before\n\nAfter\n");
-    assert_eq!(
-        result
-            .report
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.code == "structure-unspellable")
-            .count(),
-        2
-    );
-    assert!(result.report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "structure-unspellable"
-            && diagnostic
-                .message
-                .contains("header table row of 2 blank cells")
-    }));
+    assert_eq!(result.value, "|=~ A |=> B |\n|~ |> |\n|~ 1 |> 2 |\n");
+    assert_eq!(to_carve(&result.value), result.value);
+    assert!(carve::to_html(&result.value).contains(
+        "<tr><td style=\"text-align: center;\"></td><td style=\"text-align: right;\"></td></tr>"
+    ));
+
+    let header = migrate_markdown("|   |   |\n|--:|---|\n| x | y |\n");
+    assert_eq!(header.value, "|=> |= |\n|> x | y |\n");
+    assert!(!header
+        .report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "structure-unspellable"));
 }
 
+/// The spec's importer-fidelity row for CARVE-P11-056, replayed as written.
 #[test]
-fn aligned_blank_table_row_is_dropped_without_corrupting_cells() {
-    let source = "| A | B |\n|:--|--:|\n|   |   |\n| 1 | 2 |\n";
-    let result = migrate_markdown(source);
-    assert_eq!(result.value, "|=< A |=> B |\n|< 1 |> 2 |\n");
-    assert_eq!(to_carve(&result.value), result.value);
-    assert_eq!(
-        result
-            .report
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.code == "structure-unspellable")
-            .count(),
-        1
-    );
+fn the_spec_blank_table_row_fixture_imports_as_recorded() {
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/spec/tests/importer-fidelity/manifest.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let case = manifest["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "markdown-blank-table-row")
+        .expect("the pinned spec carries the fixture");
+    let result = migrate_markdown(case["input"].as_str().unwrap());
+    assert_eq!(result.value, case["expected"]["output"].as_str().unwrap());
+    let rows: Vec<(String, Option<String>)> = result
+        .report
+        .diagnostics
+        .iter()
+        .map(|d| (d.code.to_string(), d.path.clone()))
+        .collect();
+    let expected: Vec<(String, Option<String>)> = case["expected"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["code"].as_str().unwrap().to_string(),
+                d["path"].as_str().map(str::to_string),
+            )
+        })
+        .collect();
+    assert_eq!(rows, expected);
 }
 
 #[test]

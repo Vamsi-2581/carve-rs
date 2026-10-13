@@ -374,29 +374,26 @@ fn rowless_tables_do_not_leak_onto_the_following_paragraph() {
 }
 
 #[test]
-fn dropping_all_blank_rows_reports_table_and_body_attributes() {
+fn a_table_of_one_blank_row_keeps_its_table_attributes() {
     let html =
         "<p>x</p><table id=\"t\"><tbody class=\"b\"><tr><td></td></tr></tbody></table><p>y</p>";
     let written = html_to_carve(html, &HtmlImportOptions::default()).unwrap();
-    assert_eq!(written.value, "x\n\ny\n");
-    assert!(written
+    assert_eq!(written.value, "x\n\n{#t header-rows=0}\n| |\n\ny\n");
+    // Only the body's own attributes go: Carve source has no spelling for them.
+    let losses: Vec<_> = written
         .report
         .diagnostics
         .iter()
-        .any(|d| d.code == HtmlImportDiagnosticCode::AttributeDropped
-            && d.message.contains("id on <table>")));
-    assert!(written
-        .report
-        .diagnostics
-        .iter()
-        .any(|d| d.code == HtmlImportDiagnosticCode::StructureUnspellable
-            && d.message.contains("rowGroups.bodies[0].attrs")));
-    assert!(written
-        .report
-        .diagnostics
-        .iter()
-        .any(|d| d.code == HtmlImportDiagnosticCode::StructureUnspellable
-            && d.message.contains("every cell is empty")));
+        .filter(|d| d.severity != carve::HtmlImportSeverity::Info)
+        .map(|d| (d.code, d.message.as_str()))
+        .collect();
+    assert_eq!(
+        losses,
+        vec![(
+            HtmlImportDiagnosticCode::StructureUnspellable,
+            "Dropped rowGroups.bodies[0].attrs because Carve source cannot spell section attributes"
+        )]
+    );
     let imported = html_to_ast(html, &HtmlImportOptions::default()).unwrap();
     assert!(imported.report.diagnostics.is_empty());
 }

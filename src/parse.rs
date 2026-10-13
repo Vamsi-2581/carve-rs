@@ -19535,37 +19535,10 @@ fn is_table_start(line: &str) -> bool {
     if trimmed.len() < 2 || !trimmed.starts_with('|') {
         return false;
     }
-    if trimmed == "||" {
-        return false;
-    }
+    // CARVE-P9-082: a cell slot is counted, not weighed. `||` and `| |` are one
+    // empty cell; only a lone `|` has no slot.
     let (_, body) = split_row_attrs(trimmed);
-    if body.len() < 2 || !body.ends_with('|') {
-        return false;
-    }
-    let interior = &body[1..body.len() - 1];
-    if !interior.contains('|') && trim_ascii(interior).is_empty() {
-        return false;
-    }
-    if standard_row_is_all_blank(trimmed) {
-        return false;
-    }
-    true
-}
-
-fn standard_row_is_all_blank(line: &str) -> bool {
-    let (_, body) = split_row_attrs(line);
-    let interior = &body[1..body.len() - 1];
-    let options = Options::default();
-    let cells = split_table_cells_ranged(interior).cells;
-    !cells.is_empty()
-        && cells.into_iter().all(|slice| {
-            let cell = parse_table_cell(&slice.text, &options, None, &[]);
-            cell.children.is_empty()
-                && cell.span.is_none()
-                && cell.align.is_none()
-                && cell.valign.is_none()
-                && cell.attrs.is_none()
-        })
+    body.len() >= 2 && body.ends_with('|')
 }
 
 /// A `{...}` attribute block GLUED to the row's closing `|` sets the row's

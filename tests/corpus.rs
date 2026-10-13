@@ -843,6 +843,8 @@ const IMPLEMENTED: &[&str] = &[
     "a-footnote-definition-past-a-box-s-column-is-hoisted",
     "a-fence-that-leaves-a-closed-nested-item-opens-in-the-host-it-lands-in",
     "a-link-definition-or-an-attribute-line-past-a-box-s-column-opens-on-its-authored-base",
+    // CARVE-P9-082: an explicitly delimited row of blank cells is a table row.
+    "an-explicitly-delimited-row-of-blank-cells-is-a-table",
 ];
 
 // Spec-main categories tracked by separate implementation work. Keep them
@@ -1625,6 +1627,10 @@ corpus_test!(
 corpus_test!(
     c_a_block_opener_indented_under_a_definition_term_is_term_text_at_every_depth,
     "a-block-opener-indented-under-a-definition-term-is-term-text-at-every-depth"
+);
+corpus_test!(
+    c_an_explicitly_delimited_row_of_blank_cells_is_a_table,
+    "an-explicitly-delimited-row-of-blank-cells-is-a-table"
 );
 
 #[test]

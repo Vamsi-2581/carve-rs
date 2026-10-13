@@ -2282,15 +2282,21 @@ impl Builder {
             })),
             Frame::Table { .. } => {}
             Frame::TableRow { header, cells } => {
-                if !cells.is_empty()
+                // An all-blank header with no alignment is the scaffolding the
+                // Markdown writer adds to a headerless table (CARVE-P11-056).
+                // A blank body row is a row (CARVE-P9-082) and is kept.
+                if header
+                    && !cells.is_empty()
                     && cells.iter().all(|cell| {
-                        cell.children.is_empty() && cell.valign.is_none() && cell.attrs.is_none()
+                        cell.children.is_empty()
+                            && cell.align.is_none()
+                            && cell.valign.is_none()
+                            && cell.attrs.is_none()
                     })
                 {
-                    let kind = if header { "header" } else { "body" };
                     let cell = if cells.len() == 1 { "cell" } else { "cells" };
                     self.losses.push(MarkdownImportLoss { message: format!(
-                        "Dropped a {kind} table row of {} blank {cell}; Carve spells no row whose every cell is blank",
+                        "Dropped an empty header row of {} {cell}; a headerless GFM table has no Carve header",
                         cells.len()
                     ), line: Some(self.current_line), kind: MarkdownLossKind::Unspellable });
                     return;
