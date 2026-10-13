@@ -2044,3 +2044,6 @@ mod wave7_2608;
 
 #[path = "../wave7_2609.rs"]
 mod wave7_2609;
+
+#[path = "../wave7_description_openers.rs"]
+mod wave7_description_openers;

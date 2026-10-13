@@ -3581,8 +3581,10 @@
   {
     "id": "authored-code-hosts-5",
     "source": "- :: term\n  : payload\n      ```\n      code\n    ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload\n<code>\ncode\n</code>\nafter</dd></dl></li></ul>",
-    "codePayloads": []
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
+    "codePayloads": [
+      "code\n"
+    ]
   },
   {
     "id": "authored-code-hosts-7",
@@ -3593,8 +3595,10 @@
   {
     "id": "authored-code-hosts-9",
     "source": "- :: term\n  : payload\n        ```\n        code\n    ```\nafter\n",
-    "html": "<ul><li><dl><dt>term</dt><dd>payload\n<code>\ncode\n</code>\nafter</dd></dl></li></ul>",
-    "codePayloads": []
+    "html": "<ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p>",
+    "codePayloads": [
+      "code\n"
+    ]
   },
   {
     "id": "authored-code-hosts-10",
@@ -3617,8 +3621,10 @@
   {
     "id": "authored-code-hosts-29",
     "source": "> - :: term\n>   : payload\n>       ```\n>       code\n>     ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload\n<code>\ncode\n</code>\nafter</dd></dl></li></ul></blockquote>",
-    "codePayloads": []
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
+    "codePayloads": [
+      "code\n"
+    ]
   },
   {
     "id": "authored-code-hosts-31",
@@ -3629,8 +3635,10 @@
   {
     "id": "authored-code-hosts-33",
     "source": "> - :: term\n>   : payload\n>         ```\n>         code\n>     ```\n> after\n",
-    "html": "<blockquote><ul><li><dl><dt>term</dt><dd>payload\n<code>\ncode\n</code>\nafter</dd></dl></li></ul></blockquote>",
-    "codePayloads": []
+    "html": "<blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote>",
+    "codePayloads": [
+      "code\n"
+    ]
   },
   {
     "id": "authored-code-hosts-34",
@@ -3653,8 +3661,10 @@
   {
     "id": "authored-code-hosts-53",
     "source": "> > - :: term\n> >   : payload\n> >       ```\n> >       code\n> >     ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload\n<code>\ncode\n</code>\nafter</dd></dl></li></ul></blockquote></blockquote>",
-    "codePayloads": []
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
+    "codePayloads": [
+      "code\n"
+    ]
   },
   {
     "id": "authored-code-hosts-55",
@@ -3665,8 +3675,10 @@
   {
     "id": "authored-code-hosts-57",
     "source": "> > - :: term\n> >   : payload\n> >         ```\n> >         code\n> >     ```\n> > after\n",
-    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd>payload\n<code>\ncode\n</code>\nafter</dd></dl></li></ul></blockquote></blockquote>",
-    "codePayloads": []
+    "html": "<blockquote><blockquote><ul><li><dl><dt>term</dt><dd><p>payload</p><pre><code>code\n</code></pre></dd></dl></li></ul><p>after</p></blockquote></blockquote>",
+    "codePayloads": [
+      "code\n"
+    ]
   },
   {
     "id": "authored-code-hosts-58",

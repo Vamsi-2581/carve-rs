@@ -7028,6 +7028,7 @@ fn rebased_colon_group_end(
     let mut stack = vec![width];
     for (j, candidate) in lines.iter().enumerate().skip(start + 1) {
         end = j;
+        let candidate = strip_lazy(candidate);
         let column = indent_columns(candidate);
         if !is_blank_line(candidate) && (column == 0 || column == base) {
             let local = strip_leading_columns(candidate, column);
@@ -7406,6 +7407,8 @@ fn rebase_overindented_blocks(
     }
     // Dedenting keeps every line's `%` run, so this index outlives the edits.
     let entry_closers = std::cell::OnceCell::new();
+    // Each edit ends before the next iteration, so future columns stay indexed.
+    let code_columns = std::cell::OnceCell::new();
     let quote_lines = std::cell::OnceCell::new();
     let mut i = 0usize;
     let mut nested_columns: Vec<usize> = Vec::new();
@@ -7438,6 +7441,17 @@ fn rebase_overindented_blocks(
         }
         let base = indent_columns(&lines[i]);
         let local_at_base = strip_leading_columns(&lines[i], base);
+        if include_sublists && paragraph_open {
+            if let Some(open) = detect_fence_open(&local_at_base) {
+                let columns = code_columns.get_or_init(|| BodyCodeColumns::new(&lines));
+                if !columns.closes_after(i, 0, open) && !columns.closes_after(i, base, open) {
+                    // An unmatched run is inline text and establishes no block base.
+                    after_blank = false;
+                    i += 1;
+                    continue;
+                }
+            }
+        }
         let mut closed_descendant_code = false;
         if let Some((open, column)) = descendant_code {
             if base < column {
@@ -8044,6 +8058,10 @@ fn rebase_overindented_blocks(
                         *col += consumed as isize - synthetic as isize;
                     }
                 }
+                continue;
+            }
+            if j == end && code.is_some_and(|open| is_fence_close(strip_lazy(line), open)) {
+                *line = Cow::Owned(strip_lazy(line).to_string());
                 continue;
             }
             // Payload below a code or colon fence's base keeps its residual
@@ -17701,6 +17719,7 @@ fn list_code_fence_closer_ahead_from(
             if detect_list_marker_full_at(line, column).is_some() {
                 lookup.markers.push(index, usize::MAX - column);
             }
+            let line = strip_lazy(line);
             let bytes = trim_ascii_start(line).as_bytes();
             let Some(&character @ (b'`' | b'~')) = bytes.first() else {
                 continue;
@@ -31459,4 +31478,45 @@ mod named_colon_rebase_work {
 
 pub(crate) fn carrier_next_is_list_marker(line: &str) -> bool {
     detect_list_marker_full(trim_ascii_start(line)).is_some()
+}
+
+struct BodyCodeColumns {
+    runs: HashMap<(usize, u8), Vec<(usize, usize)>>,
+}
+
+impl BodyCodeColumns {
+    fn new(lines: &[Cow<'_, str>]) -> Self {
+        let mut runs: HashMap<(usize, u8), Vec<(usize, usize)>> = HashMap::new();
+        for (index, line) in lines.iter().enumerate() {
+            let line = strip_lazy(line);
+            let bytes = trim_ascii_start(line).as_bytes();
+            let Some(&character @ (b'`' | b'~')) = bytes.first() else {
+                continue;
+            };
+            let width = bytes.iter().take_while(|&&byte| byte == character).count();
+            if bytes[width..]
+                .iter()
+                .all(|byte| matches!(byte, b' ' | b'\t'))
+            {
+                runs.entry((indent_columns(line), character))
+                    .or_default()
+                    .push((index, width));
+            }
+        }
+        for column in runs.values_mut() {
+            for index in (0..column.len().saturating_sub(1)).rev() {
+                column[index].1 = column[index].1.max(column[index + 1].1);
+            }
+        }
+        Self { runs }
+    }
+
+    fn closes_after(&self, at: usize, column: usize, open: FenceOpen) -> bool {
+        let Some(runs) = self.runs.get(&(column, open.fence_char)) else {
+            return false;
+        };
+        let after = runs.partition_point(|&(index, _)| index <= at);
+        runs.get(after)
+            .is_some_and(|&(_, width)| width >= open.fence_len)
+    }
 }
