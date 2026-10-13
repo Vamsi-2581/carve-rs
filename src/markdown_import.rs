@@ -759,7 +759,11 @@ fn markdown_to_ast_with_code_lines(
         if strikes.synthetic_comment(&event, &range) {
             continue;
         }
-        let range = strikes.original_range(range);
+        let mut range = strikes.original_range(range);
+        if let Some(literal) = crate::markdown_strike::literal_underscore(&source, &event, &range) {
+            event = Event::Text(source[literal.clone()].into());
+            range = literal;
+        }
         builder.current_line =
             claimed_lines + line_starts.partition_point(|start| *start <= range.start);
         if let Some((kept, rest)) = text_end.take().and_then(|end| {
