@@ -11505,6 +11505,7 @@ fn collect_blockquote_body(
     // (`quote_prefix_calls`). Only a `:`-shaped lazy line asks, and the scan
     // resumes where it stopped, so the whole walk is one pass over the lines.
     let mut open_entry = QuotedEntryScan::default();
+    let mut may_have_term = false;
     // THE QUOTE'S OWN LAST BLOCK IS WHAT S4 ASKS ABOUT, and a continuation row
     // belongs to the table above it (§5 T6, markup-carve/carve#1348). `ParaOpen`
     // is handed ONE line and a `+ b |` line reads as prose on its own, so a
@@ -11535,6 +11536,13 @@ fn collect_blockquote_body(
     let mut may_hold_fence = false;
     while let Some(line) = cur.peek() {
         if let Some(stripped) = strip_blockquote_prefix(line) {
+            if !may_have_term && stripped.contains(":: ") {
+                let trimmed = trim_ascii_start(stripped);
+                may_have_term = (inner.lines.is_empty()
+                    || detect_list_marker_full(trimmed).is_some())
+                    && (trimmed.starts_with('>')
+                        || innermost_marker_content(trimmed).starts_with(":: "));
+            }
             if stripped.contains("%%%") {
                 let (comment_depth, _, comment_text) = prepass_quote_scope(stripped);
                 if let Some((run, depth, _)) = comment_run {
@@ -11771,7 +11779,18 @@ fn collect_blockquote_body(
         } else {
             None
         };
-        if !fenced_below.unwrap_or_else(|| para_open.get())
+        let term_open = if may_have_term
+            && !is_blank_line(line)
+            && !is_definition_list_start(trim_ascii_start(line))
+            && strip_description_prefix(trim_ascii_start(line)).is_none()
+            && !item_block_opener(trim_ascii_start(line))
+        {
+            open_entry.advance(&inner.lines);
+            open_entry.half == Some(DefHalf::Term)
+        } else {
+            false
+        };
+        if !(term_open || fenced_below.unwrap_or_else(|| para_open.get()))
             || is_blank_line(line)
             || caption_content(line).is_some()
             || {

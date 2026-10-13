@@ -62,6 +62,12 @@ fn a_hosted_colon_body_opens_blocks_past_its_column() {
 }
 
 #[test]
+fn a_quoted_term_takes_a_plain_lazy_line() {
+    corpus_category("569-");
+    corpus_category("82-blockquote-lazy-continuation-5");
+}
+
+#[test]
 fn below_column_comments_keep_definition_bands_and_fences() {
     let rows: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/comment_fence_review_wave.json")).unwrap();
