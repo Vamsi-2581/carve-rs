@@ -271,18 +271,24 @@ fn convert_djot_document(stripped_definitions: &DjotFootnoteAttributeStrip) -> S
         converted
     } else {
         let fence_pattern = regex::Regex::new(&format!(
-            r"(?m)^[ \t>]*{}([0-9]+)\x00\n(?:[ \t>]*\n)*([ \t>]*)([-*+]|[^ \t\n]+)([ \t]+)",
+            r"(?m)^[ \t>]*{}(B?)([0-9]+)\x00\n(?:[ \t>]*\n)*([ \t>]*)([-*+]|[^ \t\n]+)([ \t]+)",
             regex::escape(&item_attribute_prefix)
         ))
         .unwrap();
         let converted = fence_pattern.replace_all(&converted, |caps: &regex::Captures<'_>| {
-            caps[1]
+            caps[2]
                 .parse::<usize>()
                 .ok()
                 .and_then(|index| item_attributes.get(index))
                 .map_or_else(
                     || caps[0].to_string(),
-                    |attrs| format!("{}{}{attrs}{}", &caps[2], &caps[3], &caps[4]),
+                    |attrs| {
+                        if &caps[1] == "B" {
+                            format!("{}{attrs}\n{}{}{}", &caps[3], &caps[3], &caps[4], &caps[5])
+                        } else {
+                            format!("{}{}{attrs}{}", &caps[3], &caps[4], &caps[5])
+                        }
+                    },
                 )
         });
         let pattern = regex::Regex::new(&format!(
@@ -5966,12 +5972,33 @@ fn carry_djot_attributes_across_quote_exits(source: &str) -> String {
                     }
                     end += target_line[end..].len()
                         - target_line[end..].trim_start_matches([' ', '\t']).len();
-                    moved.entry(target).or_default().push(format!(
-                        "{}{}",
-                        &target_line[..end],
-                        &lines[n][prefix + indent..]
-                    ));
+                    let mut owner_end = 0;
+                    for _ in 0..destination {
+                        let rest = &lines[n][owner_end..prefix];
+                        owner_end += rest.len() - rest.trim_start_matches([' ', '\t']).len() + 1;
+                        if lines[n]
+                            .as_bytes()
+                            .get(owner_end)
+                            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+                        {
+                            owner_end += 1;
+                        }
+                    }
+                    let owner_rest = &lines[n][owner_end..prefix];
+                    let owner_indent =
+                        owner_rest.len() - owner_rest.trim_start_matches([' ', '\t']).len();
+                    let target_prefix = if owner_indent > 0 {
+                        format!("{}{}", &lines[n][..owner_end], " ".repeat(owner_indent))
+                    } else {
+                        target_line[..end].to_owned()
+                    };
+                    moved
+                        .entry(target)
+                        .or_default()
+                        .push(format!("{target_prefix}{}", &lines[n][prefix + indent..]));
                     lines[n] = lines[n][..prefix].trim_end().to_owned();
+                } else if depth <= destination {
+                    following = Some(n);
                 }
             }
         } else if empty {

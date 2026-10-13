@@ -61,8 +61,8 @@ fn root_attribute_boundaries_match_native_djot() {
     let cases: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/djot_root_attribute_boundaries.json")).unwrap();
     let between_tags = regex::Regex::new(r">\s+<").unwrap();
-    let li_open = regex::Regex::new(r"(<li[^>]*>)[\r\n]+").unwrap();
-    let li_close = regex::Regex::new(r"[\r\n]+</li>").unwrap();
+    let li_open = regex::Regex::new(r"(<(?:li|p)(?: [^>]*)?>)[ \t\r\n]+").unwrap();
+    let li_close = regex::Regex::new(r"[ \t\r\n]+(</(?:li|p)>)").unwrap();
     let table_groups = regex::Regex::new(r"</?(?:thead|tbody)>").unwrap();
     let nested_list_indent = regex::Regex::new(r"\n[ \t]+(<(?:ul|ol)(?:\s|>))").unwrap();
     let incidental_attributes =
@@ -73,6 +73,8 @@ fn root_attribute_boundaries_match_native_djot() {
         regex::Regex::new(r"\n[ \t]+(<(?:blockquote|table)(?:\s|>))").unwrap();
     let html_tags = regex::Regex::new(r"<[^>]+>").unwrap();
     let text_spaces = regex::Regex::new(r"[ \t\r\n]+").unwrap();
+    let opening_tag = regex::Regex::new(r"^<([A-Za-z][A-Za-z0-9-]*)([^>]*)>$").unwrap();
+    let tag_attribute = regex::Regex::new(r#"[^\s=/>]+(?:=(?:"[^"]*"|'[^']*'|[^\s>]+))?"#).unwrap();
     let normalize = |html: &str| {
         let mut spaced = String::new();
         let mut end = 0;
@@ -84,7 +86,22 @@ fn root_attribute_boundaries_match_native_djot() {
             } else {
                 spaced.push_str(&text_spaces.replace_all(text, " "));
             }
-            spaced.push_str(tag.as_str());
+            if let Some(parts) = opening_tag.captures(tag.as_str()) {
+                let mut attributes: Vec<_> = tag_attribute
+                    .find_iter(&parts[2])
+                    .map(|attribute| attribute.as_str())
+                    .collect();
+                attributes.sort_unstable();
+                spaced.push('<');
+                spaced.push_str(&parts[1]);
+                for attribute in attributes {
+                    spaced.push(' ');
+                    spaced.push_str(attribute);
+                }
+                spaced.push('>');
+            } else {
+                spaced.push_str(tag.as_str());
+            }
             if tag.as_str().starts_with("<code") {
                 in_code = true;
             } else if tag.as_str() == "</code>" {
@@ -105,7 +122,7 @@ fn root_attribute_boundaries_match_native_djot() {
         let html = table_groups.replace_all(&html, "");
         let html = html.replace(" scope=\"col\"", "");
         let html = li_open.replace_all(&html, "$1");
-        let html = li_close.replace_all(&html, "</li>");
+        let html = li_close.replace_all(&html, "$1");
         nested_list_indent.replace_all(&html, "\n$1").into_owned()
     };
     let mut failures = Vec::new();

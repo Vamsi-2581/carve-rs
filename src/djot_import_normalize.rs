@@ -53,13 +53,213 @@ pub(super) fn blocks_with_list_attributes(
     attribute_prefix: &str,
     item_attributes: &mut Vec<String>,
 ) -> String {
-    let normalized_quotes = quoted_list_attribute_layout(source, attribute_prefix, item_attributes);
+    let deep_quotes = deep_quoted_item_attributes(source, attribute_prefix, item_attributes);
+    let normalized_quotes =
+        quoted_list_attribute_layout(&deep_quotes, attribute_prefix, item_attributes);
     block_layout_inner(
         &normalized_quotes,
         attribute_prefix,
         item_attributes,
         source.contains("\\|"),
     )
+}
+
+fn djot_list_kind(marker: &str) -> String {
+    let label = cached_regex!(r"[0-9A-Za-z]+").unwrap();
+    let Some(found) = label.find(marker) else {
+        return marker.to_owned();
+    };
+    let word = found.as_str();
+    let lower = word == word.to_ascii_lowercase();
+    let mut mask = if word.bytes().all(|byte| byte.is_ascii_digit()) {
+        1
+    } else if lower {
+        2
+    } else {
+        8
+    };
+    if cached_regex!(r"^[ivxlcdm]+$")
+        .unwrap()
+        .is_match(&word.to_ascii_lowercase())
+    {
+        mask = (if word.len() == 1 { mask } else { 0 }) | if lower { 4 } else { 16 };
+    }
+    format!("{mask}:{}", label.replace(marker, ""))
+}
+
+fn shared_djot_list_kind(prior: &str, current: &str) -> Option<String> {
+    if prior == current {
+        return Some(current.to_owned());
+    }
+    let (first, first_delimiter) = prior.split_once(':')?;
+    let (second, second_delimiter) = current.split_once(':')?;
+    if first_delimiter != second_delimiter {
+        return None;
+    }
+    let common = first.parse::<u8>().ok()? & second.parse::<u8>().ok()?;
+    (common != 0).then(|| format!("{common}:{first_delimiter}"))
+}
+
+fn deep_quoted_item_attributes(
+    source: &str,
+    attribute_prefix: &str,
+    item_attributes: &mut Vec<String>,
+) -> String {
+    if !source.contains('{') || !source.contains('>') || attribute_prefix.is_empty() {
+        return source.to_owned();
+    }
+    struct Frame {
+        column: usize,
+        start: usize,
+        kind: String,
+        attributes: Vec<(usize, String)>,
+    }
+    let lines: Vec<_> = source.split('\n').collect();
+    let mask = mask_code_and_destinations(source);
+    let masks: Vec<_> = mask.split('\n').collect();
+    let marker = cached_regex!(r"^([-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+").unwrap();
+    let block = cached_regex!(
+        r"^(?:[-*+][ \t]|[0-9A-Za-z]+[.)][ \t]|#{1,6}(?:[ \t]|$)|:{3,}|[`~]{3,}|\[|\{)"
+    )
+    .unwrap();
+    let task = cached_regex!(r"^\[[ xX]\](?:[ \t]+|$)").unwrap();
+    let prefix_part = cached_regex!(r"^[ \t]*>(?:[ \t]|$)").unwrap();
+    let mut frames: HashMap<usize, Frame> = HashMap::new();
+    let mut before: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut removed = vec![false; lines.len()];
+    let mut offset = 0;
+    let mut previous_depth = 0;
+    let mut previous_paragraph = false;
+    let mut literal_depth = None;
+    for (row, line) in lines.iter().enumerate() {
+        let mut prefix_ends = vec![0];
+        while let Some(part) = prefix_part.find(&line[*prefix_ends.last().unwrap()..]) {
+            prefix_ends.push(prefix_ends.last().unwrap() + part.end());
+        }
+        let depth = prefix_ends.len() - 1;
+        let prefix_end = *prefix_ends.last().unwrap();
+        let prefix = &line[..prefix_end];
+        let body = &line[prefix_end..];
+        let indent = body.len() - body.trim_start_matches([' ', '\t']).len();
+        let text = &body[indent..];
+        let visible = &masks[row][prefix_end + indent..];
+        let at = offset + prefix_end + indent;
+        offset += line.len() + 1;
+        if literal_depth.is_some_and(|held| depth <= held) {
+            literal_depth = None;
+        }
+        if depth > previous_depth && previous_paragraph {
+            literal_depth = Some(previous_depth);
+        }
+        frames.retain(|level, _| *level <= depth);
+        previous_depth = depth;
+        previous_paragraph = !text.is_empty() && !block.is_match(visible);
+        if literal_depth.is_some_and(|held| depth > held) || depth == 0 || text.is_empty() {
+            continue;
+        }
+        if let Some(item) = marker.captures(visible) {
+            let mut kind = djot_list_kind(&item[1]);
+            if ["-", "*", "+"].contains(&&item[1]) && task.is_match(&text[item[0].len()..]) {
+                kind.push_str(":task");
+            }
+            let frame = frames.get(&depth);
+            let same = frame
+                .filter(|frame| indent == frame.column)
+                .and_then(|frame| shared_djot_list_kind(&frame.kind, &kind));
+            let start = if same.is_some() {
+                frame.unwrap().start
+            } else {
+                row
+            };
+            if let Some(frame) =
+                frame.filter(|frame| depth >= 2 && same.is_some() && !frame.attributes.is_empty())
+            {
+                let wire = format!(
+                    "{{{}}}",
+                    frame
+                        .attributes
+                        .iter()
+                        .map(|(_, wire)| &wire[1..wire.len() - 1])
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                );
+                for (row, _) in &frame.attributes {
+                    removed[*row] = true;
+                }
+                let token = format!("{attribute_prefix}{}\0", item_attributes.len());
+                item_attributes.push(wire);
+                before.insert(
+                    row,
+                    vec![
+                        format!("{prefix}{}{token}", " ".repeat(indent)),
+                        prefix.trim_end_matches([' ', '\t']).to_owned(),
+                    ],
+                );
+                for (owner_depth, owner) in &frames {
+                    if *owner_depth > depth {
+                        continue;
+                    }
+                    let rest = &prefix[prefix_ends[*owner_depth]..];
+                    let owner_indent = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+                    if *owner_depth < depth && owner_indent <= owner.column {
+                        continue;
+                    }
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        before.entry(owner.start)
+                    {
+                        let start_line = lines[owner.start];
+                        let mut end = 0;
+                        while let Some(part) = prefix_part.find(&start_line[end..]) {
+                            end += part.end();
+                        }
+                        let start_prefix = &start_line[..end];
+                        let token = format!("{attribute_prefix}B{}\0", item_attributes.len());
+                        item_attributes.push("{loose}".to_owned());
+                        entry.insert(vec![
+                            format!("{start_prefix}{}{token}", " ".repeat(owner.column)),
+                            start_prefix.trim_end_matches([' ', '\t']).to_owned(),
+                        ]);
+                    }
+                }
+            }
+            frames.insert(
+                depth,
+                Frame {
+                    column: indent,
+                    start,
+                    kind: same.unwrap_or(kind),
+                    attributes: Vec::new(),
+                },
+            );
+        } else if visible.starts_with('{') {
+            if let Some(frame) = frames
+                .get_mut(&depth)
+                .filter(|frame| depth >= 2 && indent > frame.column)
+            {
+                if let Some((end, wire)) = read_djot_word_attributes(body, indent) {
+                    if end == body.trim_end_matches([' ', '\t', '\r']).len()
+                        && !comment_continues_paragraph(source, at)
+                    {
+                        frame.attributes.push((row, wire));
+                    }
+                }
+            }
+        } else if frames
+            .get(&depth)
+            .is_some_and(|frame| indent <= frame.column)
+        {
+            frames.remove(&depth);
+        }
+    }
+    let mut output = Vec::new();
+    for (row, line) in lines.iter().enumerate() {
+        if removed[row] {
+            continue;
+        }
+        output.extend(before.remove(&row).unwrap_or_default());
+        output.push((*line).to_owned());
+    }
+    output.join("\n")
 }
 
 fn quoted_list_attribute_layout(
@@ -84,20 +284,61 @@ fn quoted_list_attribute_layout(
     let pipe_pass = source.contains("\\|");
     let mask = mask_code_and_destinations(source);
     let masks: Vec<_> = mask.split('\n').collect();
+    let depths: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            if line.starts_with('>') {
+                quoted(line).0
+            } else {
+                0
+            }
+        })
+        .collect();
+    let mut ends = vec![lines.len(); lines.len()];
+    let mut open = Vec::new();
+    let mut next_attributes = HashMap::new();
+    let mut next_lists = HashMap::new();
+    let mut has_attributes = vec![None; lines.len()];
+    let mut has_lists = vec![None; lines.len()];
+    for n in (0..lines.len()).rev() {
+        while open.last().is_some_and(|&at| depths[at] >= depths[n]) {
+            open.pop();
+        }
+        ends[n] = open.last().copied().unwrap_or(lines.len());
+        open.push(n);
+        let body = quoted(lines[n]).1;
+        let text = body.trim_start();
+        if body.len() > text.len()
+            && text.starts_with('{')
+            && read_djot_word_attributes(text, 0)
+                .is_some_and(|(end, _)| end == text.trim_end().len())
+        {
+            next_attributes.insert(depths[n], n);
+        }
+        if list_marker.is_match(text) {
+            next_lists.insert(depths[n], n);
+        }
+        has_attributes[n] = next_attributes.get(&depths[n]).copied();
+        has_lists[n] = next_lists.get(&depths[n]).copied();
+    }
     let mut result = Vec::new();
     let mut n = 0;
     while n < lines.len() {
-        let depth = quoted(lines[n]).0;
+        let depth = depths[n];
+        let previous_body = n
+            .checked_sub(1)
+            .map_or("", |row| quoted(lines[row]).1.trim_start());
         let lazy_quote = depth > 0
             && n > 0
-            && !lines[n - 1].trim().is_empty()
-            && quoted(lines[n - 1]).0 == 0
-            && !prior_block.is_match(lines[n - 1].trim_start())
-            && !thematic(lines[n - 1])
-            && !read_djot_word_attributes(lines[n - 1], 0)
-                .is_some_and(|(end, _)| end == lines[n - 1].trim_end().len());
+            && !previous_body.is_empty()
+            && depths[n - 1] < depth
+            && !prior_block.is_match(previous_body)
+            && !list_marker.is_match(previous_body)
+            && !thematic(previous_body)
+            && !read_djot_word_attributes(previous_body, 0)
+                .is_some_and(|(end, _)| end == previous_body.trim_end().len());
         if lazy_quote {
-            while n < lines.len() && lines[n].starts_with('>') {
+            while n < lines.len() && depths[n] >= depth {
                 result.push(lines[n].to_owned());
                 n += 1;
             }
@@ -119,9 +360,14 @@ fn quoted_list_attribute_layout(
             continue;
         }
         let start = n;
-        while n < lines.len() && lines[n].starts_with('>') && quoted(lines[n]).0 >= depth {
+        let end = ends[n];
+        if !has_attributes[n].is_some_and(|at| at < end) || !has_lists[n].is_some_and(|at| at < end)
+        {
+            result.push(lines[n].to_owned());
             n += 1;
+            continue;
         }
+        n = end;
         let bodies: Vec<_> = lines[start..n]
             .iter()
             .map(|line| {
@@ -159,7 +405,8 @@ fn quoted_list_attribute_layout(
                     .map(|body| format!("{}{}", "> ".repeat(depth), body)),
             );
         } else {
-            result.extend(lines[start..n].iter().map(|line| (*line).to_owned()));
+            result.push(lines[start].to_owned());
+            n = start + 1;
         }
     }
     result.join("\n")
@@ -223,7 +470,6 @@ fn block_layout_inner(
             .unwrap();
     let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
     let reference = cached_regex!(r"^\[[^\]\n]+\]:").unwrap();
-    let ordered_label = cached_regex!(r"[0-9A-Za-z]+").unwrap();
     let continuation_lines = table_continuation_lines(source);
     let mut result: Vec<String> = Vec::new();
     let mut lists: Vec<List> = Vec::new();
@@ -645,7 +891,7 @@ fn block_layout_inner(
             let mut kind = if is_bullet {
                 item[1].to_owned()
             } else {
-                ordered_label.replace(&item[1], "1").into_owned()
+                djot_list_kind(&item[1])
             };
             if is_bullet
                 && cached_regex!(r"^\[[ xX]\][ \t]+")
@@ -653,6 +899,15 @@ fn block_layout_inner(
                     .is_match(&text[item.get(2).unwrap().end()..])
             {
                 kind.push_str(":task");
+            }
+            let shared_kind = top
+                .as_ref()
+                .and_then(|list| shared_djot_list_kind(&list.kind, &kind));
+            let same_kind = shared_kind.is_some();
+            if !nested {
+                if let Some(shared) = shared_kind {
+                    kind = shared;
+                }
             }
             let mut target = if definition_columns
                 .last()
@@ -678,7 +933,7 @@ fn block_layout_inner(
                 } else {
                     target = parent.target;
                     written = parent.written;
-                    if kind != parent.kind {
+                    if !same_kind {
                         written = if parent.written == b'-' { b'*' } else { b'-' };
                         separate = true;
                     }
@@ -696,9 +951,7 @@ fn block_layout_inner(
             let payload_start = item.get(0).unwrap().end();
             let mut payload = text.to_owned();
             let carried = if !attribute_prefix.is_empty()
-                && top
-                    .as_ref()
-                    .is_some_and(|list| !nested && kind == list.kind)
+                && top.as_ref().is_some_and(|_| !nested && same_kind)
             {
                 let mut parts = Vec::new();
                 for (owner, _, attrs) in pending_for_item {
@@ -777,7 +1030,9 @@ fn block_layout_inner(
             continue;
         }
         if previous_blank {
-            while lists.last().is_some_and(|list| indent < list.column) {
+            while lists.last().is_some_and(|list| {
+                indent < list.column && !(attribute_only && indent > list.source)
+            }) {
                 lists.pop();
             }
         }
@@ -882,7 +1137,19 @@ fn block_layout_inner(
                 if let Some(list) = lists.last_mut().filter(|list| indent > list.source) {
                     if let Some((_, wire)) = read_djot_word_attributes(text, 0) {
                         if wire != "{}" {
-                            if previous_blank && !result[list.start].contains("{loose}\n") {
+                            let held_loose =
+                                cached_regex!(r"\x00DJOTITEMATTR\x00(?:[0-9]+\x00)?B[0-9]+\x00$")
+                                    .unwrap()
+                                    .is_match(
+                                        list.start
+                                            .checked_sub(2)
+                                            .and_then(|row| result.get(row))
+                                            .map_or("", String::as_str),
+                                    );
+                            if previous_blank
+                                && !held_loose
+                                && !result[list.start].contains("{loose}\n")
+                            {
                                 result[list.start] = format!(
                                     "{}{{loose}}\n{}",
                                     " ".repeat(list.target),
