@@ -30,6 +30,56 @@ fn a_note_reference_inside_link_text_keeps_its_sup_id() {
 }
 
 #[test]
+fn a_span_never_covers_another_cell() {
+    corpus_category("579-");
+}
+
+#[test]
+fn a_quote_or_term_at_a_marker_note_body_column_opens_in_the_note() {
+    corpus_category("580-");
+}
+
+#[test]
+fn marker_note_580_moved_fixture_rows_match_the_checker() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/marker_note_580_moved.json")).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 205);
+    for row in rows.as_array().unwrap() {
+        assert_eq!(
+            carve::to_html(row["source"].as_str().unwrap()),
+            row["html"].as_str().unwrap(),
+            "{}",
+            row["id"]
+        );
+    }
+}
+
+#[test]
+fn marker_note_opacity_keeps_link_syntax_literal() {
+    let cases = [
+        (
+            "- [^n]: text\n    ```\n    [r]: /url\n    ```\nafter [^n] [r]\n",
+            "<ul>\n  <li></li>\n</ul>\n<p>after <a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a> [r]</p>\n<section role=\"doc-endnotes\" aria-label=\"Footnotes\">\n  <hr>\n  <ol>\n    <li id=\"fn1\">\n      <p>text</p>\n      <pre><code>[r]: /url\n</code></pre>\n      <p><a href=\"#fnref1\" role=\"doc-backlink\" aria-label=\"Back to reference\">↩</a></p>\n    </li>\n  </ol>\n</section>",
+        ),
+        (
+            "- [^n]: text\n    %%%\n    [r]: /url\n    %%%\nafter [^n] [r]\n",
+            "<ul>\n  <li></li>\n</ul>\n<p>after <a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a> [r]</p>\n<section role=\"doc-endnotes\" aria-label=\"Footnotes\">\n  <hr>\n  <ol>\n    <li id=\"fn1\">\n      <p>text<a href=\"#fnref1\" role=\"doc-backlink\" aria-label=\"Back to reference\">↩</a></p>\n    </li>\n  </ol>\n</section>",
+        ),
+    ];
+    for (source, html) in cases {
+        assert_eq!(carve::to_html(source), html);
+    }
+}
+
+#[test]
+fn an_item_quote_below_the_note_column_stops_at_a_blank() {
+    let source = "- [^n]: text\n   > q\n\nafter [^n]\n";
+    let html = carve::to_html(source);
+    assert!(html.contains("<blockquote><p>q</p></blockquote>"));
+    assert!(html.contains("</ul>\n<p>after "), "{html}");
+}
+
+#[test]
 fn typography_uses_one_flank_class() {
     for flank in ['\u{000b}', '\u{000c}', '\u{0085}', '\u{2003}'] {
         assert_eq!(

@@ -1807,6 +1807,8 @@ mod ordered_dialect_boundaries;
 
 #[path = "../quoted_attribute_pair_escapes.rs"]
 mod quoted_attribute_pair_escapes;
+#[path = "../quoted_description_flush_left.rs"]
+mod quoted_description_flush_left;
 
 #[path = "../djot_failed_braced_openers.rs"]
 mod djot_failed_braced_openers;
