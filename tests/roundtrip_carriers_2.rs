@@ -128,39 +128,31 @@ fn shared_code_label_is_consumed_in_every_html_mode_and_spelling() {
 }
 
 #[test]
-fn damaged_new_marker_sets_fall_back_once_without_partial_restoration() {
-    for markdown in [
-        "<!-- carve: {#id} -->\n\n# heading\n",
-        "<!-- carve: {.c} -->\n<!-- carve: {.d} -->\nbody\n",
-        "<!-- carve: {#id} -->\n",
-        "<!-- carve: :: Term -->\n**Term**\n\n<!-- carve: -->\n",
-        "<!-- carve: : -->\nbody\n<!-- carve: -->\n",
-        "<!-- carve: :: Term -->\n**Term**\n\n<!-- carve: : -->\nbody\n",
-        "<!-- carve: ^ Caption -->\nCaption\n",
-        "<!-- carve: -->\n",
-        "```\nx\n```\n<!-- carve: ^ -->\nrendered\n",
-        "```\nx\n```\n<!-- carve: ^ First -->\n![image](x.png)\n\n<!-- carve: ^ Second -->\nSecond\n",
-        "plain paragraph\n\n<!-- carve: ^ Caption -->\nCaption\n",
-        "text ![image](x.png)\n\n<!-- carve: ^ Caption -->\nCaption\n",
-        "<!-- carve: ::: note -->\nbody\n<!-- carve: ::: -->\n<!-- carve: ^ Caption -->\nCaption\n",
-        "<!-- carve: :: Term -->\n**Term**\n\n<!-- carve: : -->\nbody\n\n<!-- carve: : -->\n<!-- carve: -->\n",
-
-        "```\nx\n```\n\n<!-- carve: ^ Caption -->\nCaption\n\n<!-- carve: ^ Again -->\nAgain\n",
-        "<!-- carve: ::: | -->\nline\n",
-    ] {
-        let result = carve::migrate_markdown(markdown);
+fn new_marker_sets_match_the_reference_recovery() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/previous_marker_recovery_wave.json")).unwrap();
+    for row in rows.as_array().unwrap() {
+        let source = row["source"].as_str().unwrap();
+        let result = carve::migrate_markdown(source);
+        let codes: Vec<_> = result
+            .report
+            .diagnostics
+            .iter()
+            .map(|row| row.code.as_str())
+            .filter(|code| code.starts_with("carrier-"))
+            .collect();
+        let expected: Vec<_> = row["codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|code| code.as_str().unwrap())
+            .collect();
+        assert_eq!(codes, expected, "{source}: {:?}", result.report);
         assert_eq!(
-            result
-                .report
-                .diagnostics
-                .iter()
-                .filter(|row| row.code == "carrier-markers-damaged")
-                .count(),
-            1,
-            "{markdown}: {:?}",
-            result.report
+            carve::to_html(&result.value),
+            carve::to_html(row["imported"].as_str().unwrap()),
+            "{source}"
         );
-        assert!(result.value.contains("<!-- carve:"), "{}", result.value);
         assert!(!result.value.contains("CARVECARRIER"));
     }
 }
@@ -382,6 +374,7 @@ fn marker_placeholders_preserve_breaks_and_list_equation_figures() {
         ("{.x}\n---\n", "{.x}\n---\n"),
         ("{.x}\n***\n", "{.x}\n---\n"),
         ("- {.x}\n  $$`x`\n  ^ Cap\n", "- {.x}\n  $$`x`\n  ^ Cap\n"),
+        ("- $$`x`\n  ^ Cap\n", "- $$`x`\n  ^ Cap\n"),
     ] {
         let exported =
             carve::to_markdown_with_options(source, &Options::default().with_roundtrip(true));

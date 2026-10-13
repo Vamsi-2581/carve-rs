@@ -28,6 +28,8 @@ thread_local! {
     /// nested render of another target leave its mode behind in this one.
     static SMART_TYPOGRAPHY: std::cell::Cell<crate::extension::SmartTypographyMode> =
         const { std::cell::Cell::new(crate::extension::SmartTypographyMode::Glyph) };
+    static REFERENCED_LINKS: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
     static LIST_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The `(term, expansion)` pairs this render emits an expansion for, so the
     /// definitions that supplied them can drop their line (PART 11 §10f).
@@ -125,6 +127,8 @@ fn render_plain_text_inner(
         *set.borrow_mut() = crate::render_text::consumed_abbreviation_definitions(doc);
     });
     SUPPRESS_AUTOMATIC_ABBREVIATION.with(|flag| flag.set(false));
+    REFERENCED_LINKS
+        .with(|set| *set.borrow_mut() = crate::render_markdown::referenced_link_labels(doc));
     let out = render_blocks(&doc.children, 0);
     let footnotes = render_footnote_defs(doc);
     normalize(&format!("{out}{footnotes}"))
@@ -372,8 +376,21 @@ fn render_block(node: &BlockNode, depth: usize) -> String {
         return String::new();
     }
     match node {
-        // Renders nothing: a definition line is not prose.
-        BlockNode::LinkReferenceDefinition(_) | BlockNode::CitationDefinition(_) => String::new(),
+        BlockNode::LinkReferenceDefinition(definition) => {
+            if REFERENCED_LINKS.with(|set| {
+                set.borrow()
+                    .contains(&crate::parse::label_key(&definition.label))
+            }) {
+                return String::new();
+            }
+            format!(
+                "{}\n\n",
+                strip_controls(&crate::render_carve::render_link_reference_definition(
+                    definition
+                ))
+            )
+        }
+        BlockNode::CitationDefinition(_) => String::new(),
         BlockNode::Heading(heading) => format!("{}\n\n", render_inlines(&heading.children)),
         BlockNode::Paragraph(paragraph) => {
             format!("{}\n\n", render_inlines(&paragraph.children))

@@ -16,12 +16,12 @@ fn label_of(html: &str) -> String {
     rest[..rest.find("</p>").expect("unclosed div label")].to_string()
 }
 
-/// Corpus 518-9: a tab separates the marker as a space does.
+/// A tab remains label content before a trailing comment marker.
 #[test]
-fn a_tab_separates_a_labels_trailing_comment() {
+fn a_tab_remains_in_the_label() {
     assert_eq!(
         label_of(&to_html("::: note [a\t%% hidden]\nbody\n:::\n")),
-        "a"
+        "a\t%% hidden"
     );
 }
 
@@ -36,7 +36,10 @@ fn a_marker_starting_a_labels_run_needs_no_separator() {
 #[test]
 fn a_labels_whole_separating_run_goes_with_the_comment() {
     assert_eq!(label_of(&to_html(":::[a  %% hidden]\nbody\n:::\n")), "a");
-    assert_eq!(label_of(&to_html(":::[a \t %% hidden]\nbody\n:::\n")), "a");
+    assert_eq!(
+        label_of(&to_html(":::[a \t %% hidden]\nbody\n:::\n")),
+        "a \t"
+    );
 }
 
 /// No separator, no comment. This is the guard that keeps a percent literal and
@@ -77,7 +80,11 @@ fn every_label_host_reads_the_same_rule() {
         "::: list-table \"T\" [a\t%% hidden]\n- - x\n  - y\n:::\n",
         "::: footnotes [a\t%% hidden]\n:::\n\nx[^1]\n\n[^1]: n\n",
     ] {
-        assert_eq!(label_of(&to_html(source)), "a", "source: {source:?}");
+        assert_eq!(
+            label_of(&to_html(source)),
+            "a\t%% hidden",
+            "source: {source:?}"
+        );
     }
 }
 
@@ -91,7 +98,7 @@ fn every_label_host_reads_the_same_rule() {
 #[test]
 fn a_label_and_an_inline_run_read_the_same_comment() {
     for (text, kept) in [
-        ("a\t%% hidden", "a"),
+        ("a\t%% hidden", "a\t%% hidden"),
         ("a %% hidden", "a"),
         ("a  %% hidden", "a"),
         ("%% hidden", ""),
@@ -225,7 +232,7 @@ fn a_label_cuts_where_the_inline_rule_says_it_cuts() {
         "x{.cls} %% c",
     ] {
         let cut = match comment_offset(text) {
-            Some(at) => text[..at].trim_end_matches([' ', '\t']),
+            Some(at) => text[..at].trim_end_matches(' '),
             None => text,
         };
         // WHAT A PARAGRAPH PUBLISHES FOR THE CUT TEXT. The label holds an inline
@@ -237,6 +244,11 @@ fn a_label_cuts_where_the_inline_rule_says_it_cuts() {
             .strip_prefix("<p>")
             .and_then(|rest| rest.strip_suffix("</p>"))
             .unwrap_or("");
+        let expected = format!(
+            "{expected}{}",
+            cut.strip_prefix(cut.trim_end_matches([' ', '\t']))
+                .unwrap_or("")
+        );
         assert_eq!(
             carve::to_html(&format!(":::[{text}]\nbody\n:::\n")),
             format!("<div>\n  <p class=\"div-label\">{expected}</p>\n  <p>body</p>\n</div>"),

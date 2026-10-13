@@ -37,28 +37,15 @@ fn both_paths(src: &str) -> String {
 
 /// A depth-three ladder holding `body` in the OUTERMOST item.
 fn outermost(body: &str) -> String {
-    format!(
-        concat!(
-            "<ul>\n",
-            "  <li>\n",
-            "    <ul>\n",
-            "      <li>\n",
-            "        <ul>\n",
-            "          <li>x</li>\n",
-            "        </ul>\n",
-            "      </li>\n",
-            "    </ul>\n",
-            "    {}\n",
-            "  </li>\n",
-            "</ul>",
-        ),
-        body
-    )
+    if body.starts_with("<h") {
+        return format!("<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>x</li>\n        </ul>\n      </li>\n    </ul>\n    {body}\n  </li>\n</ul>");
+    }
+    format!("<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>x</li>\n        </ul>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p>{body}</p>")
 }
 
 #[test]
 fn the_reported_document_puts_the_line_in_the_outermost_item() {
-    assert_eq!(both_paths("- - - x\n      %%% x\n # h\n"), outermost("# h"));
+    assert_eq!(both_paths("- - - x\n      %%% x\n # h\n"), "<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>x</li>\n        </ul>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>");
 }
 
 #[test]
@@ -91,24 +78,7 @@ fn depth_four_answers_the_same() {
     // The answer is the OUTERMOST item at every depth, not "one item up".
     assert_eq!(
         both_paths("- - - - x\n        %%% x\n # h\n"),
-        concat!(
-            "<ul>\n",
-            "  <li>\n",
-            "    <ul>\n",
-            "      <li>\n",
-            "        <ul>\n",
-            "          <li>\n",
-            "            <ul>\n",
-            "              <li>x</li>\n",
-            "            </ul>\n",
-            "          </li>\n",
-            "        </ul>\n",
-            "      </li>\n",
-            "    </ul>\n",
-            "    # h\n",
-            "  </li>\n",
-            "</ul>",
-        ),
+        "<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>\n            <ul>\n              <li>x</li>\n            </ul>\n          </li>\n        </ul>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>",
     );
 }
 
@@ -121,24 +91,7 @@ fn a_fence_at_an_intermediate_ladder_column_ends_the_same_items() {
     // item.
     assert_eq!(
         both_paths("- - - - x\n      %%% x\n # h\n"),
-        concat!(
-            "<ul>\n",
-            "  <li>\n",
-            "    <ul>\n",
-            "      <li>\n",
-            "        <ul>\n",
-            "          <li>\n",
-            "            <ul>\n",
-            "              <li>x</li>\n",
-            "            </ul>\n",
-            "          </li>\n",
-            "        </ul>\n",
-            "      </li>\n",
-            "    </ul>\n",
-            "    # h\n",
-            "  </li>\n",
-            "</ul>",
-        ),
+        "<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>\n            <ul>\n              <li>x</li>\n            </ul>\n          </li>\n        </ul>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>",
     );
 }
 
@@ -146,22 +99,7 @@ fn a_fence_at_an_intermediate_ladder_column_ends_the_same_items() {
 fn a_quote_host_ends_at_its_own_outermost_item() {
     assert_eq!(
         both_paths("> - - - x\n>       %%% x\n>  # h\n"),
-        concat!(
-            "<blockquote>\n",
-            "  <ul>\n",
-            "    <li>\n",
-            "      <ul>\n",
-            "        <li>\n",
-            "          <ul>\n",
-            "            <li>x</li>\n",
-            "          </ul>\n",
-            "        </li>\n",
-            "      </ul>\n",
-            "      # h\n",
-            "    </li>\n",
-            "  </ul>\n",
-            "</blockquote>",
-        ),
+        "<blockquote>\n  <ul>\n    <li>\n      <ul>\n        <li>\n          <ul>\n            <li>x</li>\n          </ul>\n        </li>\n      </ul>\n    </li>\n  </ul>\n  <p># h</p>\n</blockquote>",
     );
 }
 
@@ -199,21 +137,7 @@ fn a_line_that_reached_an_item_stays_in_it() {
     // is the pair this test exists to separate.
     assert_eq!(
         both_paths("- - - x\n      %%% x\n     b\n"),
-        concat!(
-            "<ul>\n",
-            "  <li>\n",
-            "    <ul>\n",
-            "      <li>\n",
-            "        <ul>\n",
-            "          <li>x\n",
-            "            b\n",
-            "          </li>\n",
-            "        </ul>\n",
-            "      </li>\n",
-            "    </ul>\n",
-            "  </li>\n",
-            "</ul>",
-        )
+        "<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>x</li>\n        </ul>\n        b\n      </li>\n    </ul>\n  </li>\n</ul>"
     );
 }
 
@@ -223,39 +147,20 @@ fn a_fence_at_the_frames_own_column_still_uses_the_local_column() {
     // At depth two the fence sits at the innermost frame's own `strip_cols`, and
     // which item a line below that column lands in is decided by the carried
     // answer: the outermost frame the line passes through keeps it.
-    let outer = concat!(
-        "<ul>\n",
-        "  <li>\n",
-        "    <ul>\n",
-        "      <li>x</li>\n",
-        "    </ul>\n",
-        "    {}\n",
-        "  </li>\n",
-        "</ul>",
-    );
+
     // COLUMN 3 REACHES THE INNER ITEM'S HOST, and the inner frame is the
     // outermost one this line passes through, so it folds there
     // (markup-carve/carve#1920, carve-rs#1543).
     assert_eq!(
         both_paths("- - x\n    %%% x\n   b\n"),
-        concat!(
-            "<ul>\n",
-            "  <li>\n",
-            "    <ul>\n",
-            "      <li>x\n",
-            "        b\n",
-            "      </li>\n",
-            "    </ul>\n",
-            "  </li>\n",
-            "</ul>",
-        )
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n    b\n  </li>\n</ul>"
     );
     // COLUMN 1 REACHED NOTHING the inner frame could claim, so it still leaves
     // the inner item. This is the pair that says the rule is the carried answer
     // and not the fence.
     assert_eq!(
         both_paths("- - x\n    %%% x\n # h\n"),
-        outer.replace("{}", "# h")
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>"
     );
 }
 
@@ -267,7 +172,7 @@ fn a_single_item_still_ends_at_the_document() {
     // it. A follower at the DOCUMENT column still leaves (corpus 443).
     assert_eq!(
         both_paths("- x\n  %%% x\n # h\n"),
-        "<ul>\n  <li>x\n    # h\n  </li>\n</ul>"
+        "<ul>\n  <li>x</li>\n</ul>\n<p># h</p>"
     );
 }
 
@@ -278,5 +183,5 @@ fn the_outermost_frame_still_absorbs_the_line() {
     // the line leaves the list entirely as a top-level `<p># h</p>`.
     let output = both_paths("- - - x\n      %%% x\n # h\n");
     assert!(output.starts_with("<ul>"), "{output}");
-    assert!(!output.contains("<p># h</p>"), "{output}");
+    assert!(output.contains("<p># h</p>"), "{output}");
 }

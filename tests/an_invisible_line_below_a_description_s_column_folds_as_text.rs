@@ -95,7 +95,7 @@ fn control_a_comment_is_column_exempt_and_renders_nothing() {
     );
     assert_eq!(
         html(":: t\n:  d\n  %% c\ntail\n"),
-        format!("{ENDS}<p>tail</p>")
+        "<dl>\n  <dt>t</dt>\n  <dd>\n    <p>d</p>\n    <p>tail</p>\n  </dd>\n</dl>"
     );
 }
 

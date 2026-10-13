@@ -53,7 +53,7 @@ fn the_ticket_case_keeps_the_label_and_leaves_the_definition_unused() {
     // the marker's own characters survive and the definition line does not
     // reappear as a link.
     let (carve, html) = imported("1. [x] done\n\n[x]: /u\n");
-    assert_eq!(carve, "1. [x] done\n");
+    assert_eq!(carve, "1. [x] done\n\n[x]: /u\n");
     assert!(html.contains("<li>[x] done</li>"), "{html}");
 }
 

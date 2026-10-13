@@ -13,11 +13,12 @@ fn normalized(html: &str) -> String {
 }
 
 #[test]
-fn rejected_inline_fence_keeps_its_item_paragraph_after_later_code() {
+fn closed_code_does_not_resume_a_rejected_inline_fence_paragraph() {
     for row in fixtures()["ownership"].as_array().unwrap() {
         let html = to_html(row["source"].as_str().unwrap());
-        assert!(
-            html.rfind("after").unwrap() < html.rfind("</li>").unwrap(),
+        assert_eq!(
+            normalized(&html),
+            normalized(row["html"].as_str().unwrap()),
             "{}: {html}",
             row["id"]
         );

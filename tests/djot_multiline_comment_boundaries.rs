@@ -152,3 +152,15 @@ fn indented_rejected_comment_quotes_keep_ownership() {
         assert_eq!(djot_to_carve(&indented), expected);
     }
 }
+
+#[test]
+fn block_attributes_keep_a_thematic_break_boundary() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/djot_attributed_break.json")).unwrap();
+    for row in rows.as_array().unwrap() {
+        assert_eq!(
+            to_html(&djot_to_carve(row["source"].as_str().unwrap())),
+            row["html"].as_str().unwrap()
+        );
+    }
+}

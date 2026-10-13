@@ -116,12 +116,10 @@ fn control_the_space_spelling_of_every_position_still_works() {
 }
 
 #[test]
-fn control_the_block_attribute_line_keeps_whitespace() {
-    // Both of these stay valid, and they are the ruling rather than an
-    // omission.
+fn block_attributes_reject_interior_tabs_but_allow_edge_whitespace() {
     assert_eq!(
         to_html("{\t.a\t.b\t}\n\nparagraph\n").trim(),
-        "<p class=\"a b\">paragraph</p>"
+        "<p>{\t.a\t.b\t}</p>\n<p>paragraph</p>"
     );
     assert_eq!(
         to_html("{.a\n\t.b}\n\nparagraph\n").trim(),

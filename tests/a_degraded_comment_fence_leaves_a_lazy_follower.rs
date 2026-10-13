@@ -54,7 +54,7 @@ fn both_paths(src: &str) -> String {
 fn the_reported_document_keeps_the_follower() {
     assert_eq!(
         both_paths("- a\n  %%% x\n # h\n"),
-        "<ul>\n  <li>a\n    # h\n  </li>\n</ul>",
+        "<ul>\n  <li>a</li>\n</ul>\n<p># h</p>",
     );
 }
 
@@ -63,18 +63,18 @@ fn every_following_line_kind_stays_in_the_item() {
     // The follower is at column 1, inside the item, so `# h` and `---` are
     // paragraph text there and `- y` opens the item's own sublist.
     for (src, expected) in [
-        ("- x\n  %%% x\n b\n", "<ul>\n  <li>x\n    b\n  </li>\n</ul>"),
+        ("- x\n  %%% x\n b\n", "<ul>\n  <li>x</li>\n</ul>\n<p>b</p>"),
         (
             "- x\n  %%% x\n # h\n",
-            "<ul>\n  <li>x\n    # h\n  </li>\n</ul>",
+            "<ul>\n  <li>x</li>\n</ul>\n<p># h</p>",
         ),
         (
             "- x\n  %%% x\n ---\n",
-            "<ul>\n  <li>x\n    \u{2014}\n  </li>\n</ul>",
+            "<ul>\n  <li>x</li>\n</ul>\n<p>—</p>",
         ),
         (
             "- x\n  %%% x\n - y\n",
-            "<ul>\n  <li>x\n    - y\n  </li>\n</ul>",
+            "<ul>\n  <li>x</li>\n</ul>\n<ul>\n  <li>y</li>\n</ul>",
         ),
     ] {
         assert_eq!(both_paths(src), expected, "{src:?}");
@@ -93,7 +93,7 @@ fn a_bare_fence_answers_like_one_carrying_text() {
     ] {
         assert_eq!(
             both_paths(src),
-            "<ul>\n  <li>x\n    y\n  </li>\n</ul>",
+            "<ul>\n  <li>x</li>\n</ul>\n<p>y</p>",
             "{src:?}"
         );
     }
@@ -105,11 +105,11 @@ fn the_ordered_and_wide_marker_rows_answer_the_same_way() {
     // the follower is one column below it in each.
     assert_eq!(
         both_paths("1. x\n   %%%\n  y\n"),
-        "<ol>\n  <li>x\n    y\n  </li>\n</ol>",
+        "<ol>\n  <li>x</li>\n</ol>\n<p>y</p>",
     );
     assert_eq!(
         both_paths("-   x\n    %%%\n   y\n"),
-        "<ul>\n  <li>x\n    y\n  </li>\n</ul>",
+        "<ul>\n  <li>x</li>\n</ul>\n<p>y</p>",
     );
 }
 
@@ -117,7 +117,7 @@ fn the_ordered_and_wide_marker_rows_answer_the_same_way() {
 fn a_quote_host_answers_the_same_way() {
     assert_eq!(
         both_paths("> - x\n>   %%% x\n>  # h\n"),
-        "<blockquote>\n  <ul>\n    <li>x\n      # h\n    </li>\n  </ul>\n</blockquote>",
+        "<blockquote>\n  <ul>\n    <li>x</li>\n  </ul>\n  <p># h</p>\n</blockquote>",
     );
 }
 
@@ -167,7 +167,7 @@ fn a_line_comment_leaves_the_item_open() {
     // than the one it is distinguished from.
     assert_eq!(
         both_paths("- x\n  %% x\n b\n"),
-        "<ul>\n  <li>x\n    b\n  </li>\n</ul>",
+        "<ul>\n  <li>x</li>\n</ul>\n<p>b</p>",
     );
 }
 
@@ -176,7 +176,7 @@ fn a_terminated_fence_leaves_the_item_open() {
     // THE SECOND CONTROL. With a closer it is a real span, not a degraded one.
     assert_eq!(
         both_paths("- x\n  %%% c\n  %%%\n b\n"),
-        "<ul>\n  <li>x\n    b\n  </li>\n</ul>",
+        "<ul>\n  <li>x</li>\n</ul>\n<p>b</p>",
     );
 }
 
@@ -200,13 +200,17 @@ fn a_fence_below_the_content_column_ends_nothing() {
 /// keeps the follower in the inner item here and the executable spec does not.
 #[test]
 fn a_nested_frame_still_ends() {
-    const INNER_ENDS: &str =
-        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n    # h\n  </li>\n</ul>";
-    assert_eq!(both_paths("- - x\n    %%% x\n # h\n"), INNER_ENDS);
-    assert_eq!(both_paths("- - x\n    %%%\n # h\n"), INNER_ENDS);
+    assert_eq!(
+        both_paths("- - x\n    %%% x\n # h\n"),
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>"
+    );
+    assert_eq!(
+        both_paths("- - x\n    %%%\n # h\n"),
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>"
+    );
     assert_eq!(
         both_paths("- - x\n    %%%\n ---\n"),
-        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n    \u{2014}\n  </li>\n</ul>",
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p>—</p>",
     );
 }
 

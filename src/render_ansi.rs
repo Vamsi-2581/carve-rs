@@ -97,6 +97,7 @@ fn render_ansi_inner(
     SMART_TYPOGRAPHY.with(|cell| cell.set(smart_typography));
     let _abbr_guard = crate::abbr_budget::AbbrBudgetGuard::for_document(doc);
     let mut ctx = AnsiContext {
+        referenced_links: crate::render_markdown::referenced_link_labels(doc),
         consumed_abbreviations: crate::render_text::consumed_abbreviation_definitions(doc),
         suppress_automatic_abbreviation: false,
         list_depth: 0,
@@ -112,6 +113,7 @@ fn render_ansi_inner(
 }
 
 struct AnsiContext {
+    referenced_links: std::collections::HashSet<String>,
     /// The `(term, expansion)` pairs this render emits an expansion for, so the
     /// definitions that supplied them can drop their line (PART 11 §10f).
     consumed_abbreviations: crate::render_text::ConsumedAbbreviations,
@@ -167,8 +169,24 @@ fn render_block(node: &BlockNode, ctx: &mut AnsiContext, depth: usize) -> String
         return String::new();
     }
     match node {
-        // Renders nothing: a definition line is not prose.
-        BlockNode::LinkReferenceDefinition(_) | BlockNode::CitationDefinition(_) => String::new(),
+        BlockNode::LinkReferenceDefinition(definition) => {
+            if ctx
+                .referenced_links
+                .contains(&crate::parse::label_key(&definition.label))
+            {
+                return String::new();
+            }
+            format!(
+                "{}\n\n",
+                style(
+                    &strip_terminal_controls(
+                        &crate::render_carve::render_link_reference_definition(definition)
+                    ),
+                    DIM
+                )
+            )
+        }
+        BlockNode::CitationDefinition(_) => String::new(),
         BlockNode::Heading(heading) => {
             render_heading(heading.level, &render_block_inlines(&heading.children, ctx))
         }

@@ -1,0 +1,10 @@
+[
+  {
+    "source": "{.blue}\n***\n",
+    "html": "<hr class=\"blue\">"
+  },
+  {
+    "source": "{.blue}\n\\***\n",
+    "html": "<p class=\"blue\">***</p>"
+  }
+]

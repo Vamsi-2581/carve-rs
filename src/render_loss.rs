@@ -290,6 +290,28 @@ pub(crate) fn record_editorial_comment_flattened(pos: Option<&Pos>) {
     });
 }
 
+pub(crate) fn record_definition_list_flattened(pos: Option<&Pos>) {
+    COLLECTOR.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(c) = slot.as_mut() else { return };
+        c.total += 1;
+        *c.totals_by_code
+            .entry("definition-list-flattened")
+            .or_default() += 1;
+        if c.losses.len() < c.max {
+            c.losses.push(RenderLoss {
+                code: "definition-list-flattened",
+                attribute: None,
+                format: None,
+                target: c.target,
+                node_type: RawNodeType::Block,
+                pos: pos.cloned(),
+                message: "Flattened a nested definition list without carrier markers".to_string(),
+            });
+        }
+    });
+}
+
 pub(crate) fn record_ruby_in_document(doc: &Document) {
     if !COLLECTOR.with(|slot| {
         slot.borrow()

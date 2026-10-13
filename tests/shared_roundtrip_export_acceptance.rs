@@ -97,23 +97,29 @@ fn import_projection(tree: &Value, fixture: &Value) -> bool {
     }
 }
 fn reserved(name: &str) -> bool {
-    matches!(name, "data-marker" | "data-char")
-        || [
-            "explicit-id",
-            "ref",
-            "autolink",
-            "footnote-label",
-            "inline-footnote",
-            "raw",
-            "escaped",
-            "abbreviations",
-            "col-widths",
-            "label",
-        ]
-        .iter()
-        .any(|suffix| {
-            name == format!("data-carve-{suffix}") || name == format!("data-djot-{suffix}")
-        })
+    // `data-carve-src` is reserved with no inventory row and no deprecated alias.
+    matches!(
+        name,
+        "data-marker" | "data-char" | "data-carve-src" | "data-djot-src"
+    ) || [
+        "explicit-id",
+        "ref",
+        "autolink",
+        "footnote-label",
+        "inline-footnote",
+        "raw",
+        "escaped",
+        "abbreviations",
+        "col-widths",
+        "label",
+        "generated-id",
+        "id-slot",
+        "tight",
+        "xref",
+        "caption-number",
+    ]
+    .iter()
+    .any(|suffix| name == format!("data-carve-{suffix}") || name == format!("data-djot-{suffix}"))
 }
 fn no_reserved(tree: &Value) {
     for node in node_list(tree) {
@@ -222,7 +228,7 @@ fn deprecated_html(html: &str) -> String {
         if let NodeData::Element { attrs, .. } = &handle.data {
             for attr in attrs.borrow_mut().iter_mut() {
                 let name = attr.name.local.to_string();
-                if name.starts_with("data-carve-") && reserved(&name) {
+                if name.starts_with("data-carve-") && name != "data-carve-src" && reserved(&name) {
                     attr.name.local = name.replacen("data-carve-", "data-djot-", 1).into();
                 }
             }
@@ -319,6 +325,22 @@ fn shared_export_inventory_restores_approved_ast_fields() {
                         }
                     }
                 }
+                for roundtrip in [false, true] {
+                    let losses = to_html_with_options_and_report(
+                        &source,
+                        &Options::default().with_roundtrip(roundtrip),
+                        CheckedRenderOptions::default(),
+                    )
+                    .unwrap()
+                    .losses;
+                    for code in rows(fixture, "lossCodes") {
+                        assert!(
+                            losses.iter().any(|row| Some(row.code) == code.as_str()),
+                            "{}: {code} with roundtrip {roundtrip}",
+                            fixture["id"]
+                        );
+                    }
+                }
                 if let Some(expected) = fixture["carrierText"].as_object() {
                     for (name, value) in expected {
                         let (_tree, elements) = elements(&exported);
@@ -387,96 +409,142 @@ fn shared_export_inventory_restores_approved_ast_fields() {
 #[test]
 fn shared_invalid_carriers_report_loss_and_do_not_apply_metadata() {
     let fixtures = fixtures();
+    let mut failures = Vec::new();
     for fixture in required_rows(&fixtures, "importNegative") {
         for name in required_rows(fixture, "importModes") {
-            let options = mode(name.as_str().unwrap());
-            let html = text(fixture, "html");
-            let result = html_to_ast(&html, &options).unwrap();
-            let tree: Value = serde_json::from_str(&to_json(&result.value)).unwrap();
-            assert!(
-                projection(&tree, &fixture["expectedNodes"]),
-                "{} {name}: {tree}",
-                fixture["id"]
-            );
-            no_reserved(&tree);
-            if fixture["requiresDiagnostic"].as_bool().unwrap_or(false) {
-                let control = fixture["diagnosticControlHtml"]
-                    .as_str()
-                    .map(|html| {
-                        html_to_ast(html, &options)
-                            .unwrap()
-                            .report
-                            .diagnostics
-                            .len()
-                    })
-                    .unwrap_or(0);
-                assert!(
-                    result.report.diagnostics.len() > control,
-                    "{} {name}",
-                    fixture["id"]
-                );
-            }
-            let source = html_to_carve(&html, &options).unwrap().value;
-            for (key, value) in [
-                ("forbiddenSourceSubstrings", source.clone()),
-                ("forbiddenAstSubstrings", tree.to_string()),
-                ("forbiddenRenderedSubstrings", to_html(&source)),
-            ] {
-                for fragment in rows(fixture, key) {
-                    assert!(
-                        !value.contains(fragment.as_str().unwrap()),
-                        "{} {name}: {key}",
-                        fixture["id"]
-                    );
-                }
-            }
-            for forbidden in required_rows(fixture, "forbiddenTypes") {
-                assert!(!node_list(&tree)
-                    .iter()
-                    .any(|node| node["type"] == *forbidden));
-            }
-            for absent in rows(fixture, "expectedAbsentFields") {
-                assert!(node_list(&tree)
-                    .iter()
-                    .filter(|node| node["type"] == absent["type"])
-                    .all(|node| field(node, absent["field"].as_str().unwrap()).is_none()));
-            }
-            for forbidden in rows(fixture, "forbiddenFieldValues") {
-                assert!(node_list(&tree)
-                    .iter()
-                    .filter(|node| node["type"] == forbidden["type"])
-                    .all(|node| field(node, forbidden["field"].as_str().unwrap())
-                        != Some(&forbidden["value"])));
+            let result = std::panic::catch_unwind(|| negative_row(fixture, name));
+            if result.is_err() {
+                failures.push(format!(
+                    "{}/{}",
+                    text(fixture, "id"),
+                    name.as_str().unwrap()
+                ));
             }
         }
+    }
+    assert!(
+        failures.is_empty(),
+        "failed negative fixtures: {failures:?}"
+    );
+}
+fn negative_row(fixture: &Value, name: &Value) {
+    let options = mode(name.as_str().unwrap());
+    let html = text(fixture, "html");
+    let result = html_to_ast(&html, &options).unwrap();
+    let tree: Value = serde_json::from_str(&to_json(&result.value)).unwrap();
+    assert!(
+        projection(&tree, &fixture["expectedNodes"]),
+        "{} {name}: {tree}",
+        fixture["id"]
+    );
+    no_reserved(&tree);
+    if fixture["requiresDiagnostic"].as_bool().unwrap_or(false) {
+        let control = fixture["diagnosticControlHtml"]
+            .as_str()
+            .map(|html| {
+                html_to_ast(html, &options)
+                    .unwrap()
+                    .report
+                    .diagnostics
+                    .len()
+            })
+            .unwrap_or(0);
+        assert!(
+            result.report.diagnostics.len() > control,
+            "{} {name}",
+            fixture["id"]
+        );
+    }
+    let source = html_to_carve(&html, &options).unwrap().value;
+    for (key, value) in [
+        ("forbiddenSourceSubstrings", source.clone()),
+        ("forbiddenAstSubstrings", tree.to_string()),
+        ("forbiddenRenderedSubstrings", to_html(&source)),
+    ] {
+        for fragment in rows(fixture, key) {
+            assert!(
+                !value.contains(fragment.as_str().unwrap()),
+                "{} {name}: {key}",
+                fixture["id"]
+            );
+        }
+    }
+    for forbidden in required_rows(fixture, "forbiddenTypes") {
+        assert!(!node_list(&tree)
+            .iter()
+            .any(|node| node["type"] == *forbidden));
+    }
+    for absent in rows(fixture, "expectedAbsentFields") {
+        assert!(node_list(&tree)
+            .iter()
+            .filter(|node| node["type"] == absent["type"])
+            .all(|node| field(node, absent["field"].as_str().unwrap()).is_none()));
+    }
+    for forbidden in rows(fixture, "forbiddenFieldValues") {
+        assert!(node_list(&tree)
+            .iter()
+            .filter(|node| node["type"] == forbidden["type"])
+            .all(|node| field(node, forbidden["field"].as_str().unwrap())
+                != Some(&forbidden["value"])));
     }
 }
 
 #[test]
 fn shared_export_collisions_report_the_dropped_authored_attribute() {
     let fixtures = fixtures();
+    let mut failures = Vec::new();
     for fixture in required_rows(&fixtures, "collisionExport") {
-        let result = to_html_with_options_and_report(
-            &text(fixture, "source"),
-            &Options::default().with_roundtrip(true),
-            CheckedRenderOptions::default(),
-        )
-        .unwrap();
-        let name = text(fixture, "attribute");
-        let values: Vec<_> = attrs(&result.value)
+        if std::panic::catch_unwind(|| collision_row(fixture)).is_err() {
+            failures.push(text(fixture, "id"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "failed collision fixtures: {failures:?}"
+    );
+}
+fn collision_row(fixture: &Value) {
+    let source = text(fixture, "source");
+    let name = text(fixture, "attribute");
+    let named = |html: &str| -> Vec<String> {
+        attrs(html)
             .into_iter()
             .filter(|(_, key, _)| key == &name)
             .map(|(_, _, value)| value)
-            .collect();
-        assert_eq!(values, vec![text(fixture, "value")]);
-        assert!(result
-            .losses
-            .iter()
-            .any(|row| row.code == "carrier-attribute-dropped"
-                && row.attribute.as_deref() == Some(name.as_str())
-                && row.format.is_none()
-                && row.target.as_str() == "html"));
-    }
+            .collect()
+    };
+    let report = |roundtrip: bool| {
+        to_html_with_options_and_report(
+            &source,
+            &Options::default().with_roundtrip(roundtrip),
+            CheckedRenderOptions::default(),
+        )
+        .unwrap()
+    };
+    let dropped = |row: &carve::RenderLoss| row.code == "carrier-attribute-dropped";
+    let result = report(true);
+    // A null `value` names a reserved name with no carrier: nothing is written.
+    let expected: Vec<String> = fixture["value"]
+        .as_str()
+        .map(str::to_owned)
+        .into_iter()
+        .collect();
+    assert_eq!(named(&result.value), expected, "{}", fixture["id"]);
+    assert!(
+        result.losses.iter().any(|row| dropped(row)
+            && row.attribute.as_deref() == Some(name.as_str())
+            && row.format.is_none()
+            && row.target.as_str() == "html")
+            == !fixture["kept"].as_bool().unwrap_or(false),
+        "{}",
+        fixture["id"]
+    );
+    let Some(default_value) = fixture["defaultValue"].as_str() else {
+        return;
+    };
+    let ordinary = report(false);
+    assert_eq!(named(&ordinary.value), vec![default_value.to_owned()]);
+    assert!(!ordinary.losses.iter().any(dropped));
 }
 
 #[test]
@@ -495,17 +563,52 @@ fn shared_markdown_container_carriers_restore_ast_fields() {
             ordinary
         );
         assert!(!ordinary.contains("<!-- carve:"));
-        let exported = to_markdown_with_options(&source, &Options::default().with_roundtrip(true));
+        let report = carve::with_render_loss_report(
+            carve::RenderTarget::Markdown,
+            CheckedRenderOptions::default(),
+            || {
+                carve::render_markdown_with_options(
+                    &parse(&source),
+                    &Options::default().with_roundtrip(true),
+                )
+                .unwrap()
+            },
+        )
+        .unwrap();
+        for code in rows(fixture, "lossCodes") {
+            assert!(
+                report
+                    .losses
+                    .iter()
+                    .any(|loss| loss.code == code.as_str().unwrap()),
+                "{}: {:?}",
+                fixture["id"],
+                report.losses
+            );
+        }
+        let exported = report.value;
         for fragment in required_rows(fixture, "carrierFragments") {
-            assert!(exported.contains(fragment.as_str().unwrap()));
+            assert!(
+                exported.contains(fragment.as_str().unwrap()),
+                "{}: {exported:?}",
+                fixture["id"]
+            );
         }
         let imported = migrate_markdown(&exported);
         assert!(
             projection(&ast(&imported.value), &fixture["expectedNodes"]),
-            "{}",
-            fixture["id"]
+            "{}: exported={exported:?}, imported={:?}",
+            fixture["id"],
+            imported.value
         );
-        assert_eq!(to_html(&imported.value).trim(), to_html(&source).trim());
+        if fixture["lossCodes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "definition-list-flattened"))
+        {
+            assert_ne!(to_html(&imported.value).trim(), to_html(&source).trim());
+        } else {
+            assert_eq!(to_html(&imported.value).trim(), to_html(&source).trim());
+        }
     }
 }
 
@@ -568,9 +671,9 @@ fn shared_acceptance_cases_have_distinct_ids_and_assertions() {
     let fixtures = fixtures();
     let mut ids = std::collections::HashSet::new();
     for (key, minimum) in [
-        ("exportImport", 24),
-        ("importNegative", 8),
-        ("collisionExport", 3),
+        ("exportImport", 27),
+        ("importNegative", 15),
+        ("collisionExport", 4),
         ("markdownExportImport", 8),
     ] {
         assert!(required_rows(&fixtures, key).len() >= minimum, "{key}");
@@ -583,6 +686,53 @@ fn shared_acceptance_cases_have_distinct_ids_and_assertions() {
                     .is_some_and(|rows| !rows.is_empty())
                     || row["attribute"].is_string()
             );
+        }
+    }
+}
+
+#[test]
+fn xref_contradictions_keep_an_ordinary_link_in_every_mode() {
+    for prefix in ["data-carve", "data-djot"] {
+        for other in ["ref=\"r\"", "autolink", "footnote-label=\"n\""] {
+            let source =
+                format!("<p><a href=\"#target\" {prefix}-xref {prefix}-{other}>target</a></p>");
+            for import_mode in [
+                HtmlImportMode::Safe,
+                HtmlImportMode::Semantic,
+                HtmlImportMode::Roundtrip,
+            ] {
+                let imported = html_to_ast(
+                    &source,
+                    &HtmlImportOptions {
+                        mode: import_mode,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let tree: Value = serde_json::from_str(&to_json(&imported.value)).unwrap();
+                assert!(
+                    !node_list(&tree)
+                        .iter()
+                        .any(|node| node["type"] == "heading_ref"),
+                    "{source}: {tree}"
+                );
+                assert!(
+                    node_list(&tree)
+                        .iter()
+                        .any(|node| node["type"] == "link" && node["href"] == "#target"),
+                    "{source}: {tree}"
+                );
+                assert!(
+                    imported
+                        .report
+                        .diagnostics
+                        .iter()
+                        .any(|row| row.code.as_str() == "attribute-dropped"),
+                    "{source}: {:?}",
+                    imported.report
+                );
+                no_reserved(&tree);
+            }
         }
     }
 }

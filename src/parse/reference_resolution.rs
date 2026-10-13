@@ -23,7 +23,7 @@ pub(crate) fn label_key(label: &str) -> String {
     let mut out = String::with_capacity(label.len());
     let mut pending_space = false;
     for ch in label.chars() {
-        if matches!(ch, ' ' | '\t' | '\n' | '\u{000c}' | '\r') {
+        if ch == ' ' {
             pending_space = !out.is_empty();
         } else {
             if pending_space {
@@ -40,7 +40,7 @@ pub(crate) fn label_key(label: &str) -> String {
 fn borrowed_label_key(label: &str) -> std::borrow::Cow<'_, str> {
     let mut previous_space = true;
     for ch in label.chars() {
-        if matches!(ch, '\t' | '\n' | '\u{000c}' | '\r') || (ch == ' ' && previous_space) {
+        if ch == ' ' && previous_space {
             return std::borrow::Cow::Owned(label_key(label));
         }
         previous_space = ch == ' ';

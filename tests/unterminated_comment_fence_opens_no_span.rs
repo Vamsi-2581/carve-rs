@@ -31,7 +31,7 @@ fn an_unterminated_fence_does_not_lift_the_line() {
     // that is still guarded by the `<h1>` assertion below, and it is what this
     // test is really for.
     let html = to_html("- a\n  %%% x\n # h");
-    assert_eq!(html, "<ul>\n  <li>a\n    # h\n  </li>\n</ul>", "{html}");
+    assert_eq!(html, "<ul>\n  <li>a</li>\n</ul>\n<p># h</p>", "{html}");
     assert!(
         !html.contains("<h1"),
         "the line was lifted to column 0: {html}"
@@ -46,7 +46,7 @@ fn a_line_comment_leaves_the_item_open_where_a_degraded_fence_ends_it() {
     // inside - the executable spec's own answer for that document, measured
     // rather than inherited.
     let html = to_html("- a\n  %% x\n b");
-    assert_eq!(html, "<ul>\n  <li>a\n    b\n  </li>\n</ul>", "{html}");
+    assert_eq!(html, "<ul>\n  <li>a</li>\n</ul>\n<p>b</p>", "{html}");
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn a_terminated_fence_leaves_the_item_open() {
     // A fence with a closer IS a fence: it opens a span, hides its body, and
     // ends nothing. Only the degraded spelling closes the item.
     let html = to_html("- x\n  %%% c\n  %%%\n b");
-    assert_eq!(html, "<ul>\n  <li>x\n    b\n  </li>\n</ul>", "{html}");
+    assert_eq!(html, "<ul>\n  <li>x</li>\n</ul>\n<p>b</p>", "{html}");
 }
 
 #[test]

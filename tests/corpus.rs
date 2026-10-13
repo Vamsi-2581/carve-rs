@@ -808,6 +808,26 @@ const IMPLEMENTED: &[&str] = &[
     "a-below-column-line-continues-a-paragraph-only-where-one-is-open",
     // Published raw-content contract, carve#2911: all three HTML goldens match.
     "an-unterminated-raw-fence-keeps-literal-payload-termination",
+    "a-closed-block-leaves-no-frame-for-the-line-below",
+    "a-container-boundary-is-read-at-the-container-s-own-column",
+    "a-description-keeps-a-block-at-its-body-column-whatever-leads-the-item",
+    "a-line-block-payload-span-pairs-past-the-content-column",
+    "a-line-final-run-of-spaces-and-tabs-is-dropped-before-the-line-is-read",
+    "a-line-retained-after-a-comment-opens-a-paragraph",
+    "a-paragraph-in-a-held-container-does-not-loosen-the-item",
+    "a-quoted-item-that-ends-on-a-block-past-its-column-holds-no-paragraph",
+    "a-tab-inside-a-line-is-content-in-a-label-and-after-a-definition-marker",
+    "a-tab-is-content-in-a-heading-key-and-in-a-cross-reference-id",
+    "a-closed-fence-in-a-quoted-sub-item-after-a-lazy-line-leaves-no-paragraph",
+    "a-description-marker-followed-by-a-no-break-space-has-content",
+    "a-footnote-reference-in-link-text-keeps-its-id-on-the-sup",
+    "a-head-row-alignment-marker-sets-the-whole-column",
+    "a-line-block-takes-a-lazy-line-whatever-its-last-payload-line",
+    "a-quoted-term-takes-a-lazy-line",
+    "a-shifted-fence-in-a-quoted-container-s-body-stores-no-continuation-claim",
+    "an-at-column-comment-retains-nothing",
+    "an-opener-past-a-hosted-container-s-column-interrupts-its-open-paragraph",
+    "an-opener-past-a-hosted-container-s-column-opens-there",
 ];
 
 // Spec-main categories tracked by separate implementation work. Keep them

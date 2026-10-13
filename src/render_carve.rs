@@ -2195,29 +2195,7 @@ fn render_block_body(session: &RenderSession, node: &BlockNode, ctx: &mut CarveC
             {
                 return String::new();
             }
-            // PART 12 §10 gave this a node precisely so the writer can put the
-            // line back. Before that there was nowhere to write it from, which is
-            // why every resolved reference was INLINED instead (carve-rs#631).
-            let title = def
-                .title
-                .as_ref()
-                .map(|t| format!(" \"{}\"", escape_quoted(t)))
-                .unwrap_or_default();
-            let attrs = render_attrs(&def.attrs);
-            let attrs = if attrs.is_empty() {
-                String::new()
-            } else {
-                format!(" {attrs}")
-            };
-            // The href is re-escaped the way the inline tail's is: the reader
-            // resolves the three destination escapes, so writing the resolved
-            // value bare would hand back a line whose parentheses no longer
-            // balance.
-            format!(
-                "[{}]: {}{title}{attrs}",
-                def.label,
-                escape_destination_escapes(&def.href)
-            )
+            render_link_reference_definition(def)
         }
         BlockNode::Heading(heading) => {
             // A heading is SINGLE-LINE (PART 2), so its text must not contain a
@@ -2305,7 +2283,7 @@ fn render_block_body(session: &RenderSession, node: &BlockNode, ctx: &mut CarveC
             let body = inner
                 .split('\n')
                 .map(|line| {
-                    if line.is_empty() {
+                    if line.trim_end_matches(' ').is_empty() {
                         ">".to_string()
                     } else {
                         format!("> {line}")
@@ -4209,6 +4187,14 @@ fn render_inline_body(
                 // Its run length is chosen once the whole run is written.
                 format!("{EMPTY_CODE_MARK}{}", render_inline_attrs(&code.attrs, ctx))
             } else {
+                if line_block_closer_in(&value, ctx)
+                    && !render_inline_attrs(&code.attrs, ctx).is_empty()
+                {
+                    crate::render_carve_error::record_unspellable(
+                        "code",
+                        "a prefixed or suffixed verbatim span cannot hide a line-block closer",
+                    );
+                }
                 format!(
                     "{}{}",
                     guard_code_lines(
@@ -4219,6 +4205,7 @@ fn render_inline_body(
                                 && ctx.table_cell_depth == 0
                                 && render_inline_attrs(&code.attrs, ctx).is_empty(),
                             ctx.in_term,
+                            line_block_closer_in(&value, ctx),
                         ),
                         ctx,
                         "code",
@@ -4276,6 +4263,7 @@ fn render_inline_body(
                 &render_code(
                     &spell_verse_empty_lines(&math.content, ctx.line_block_depth > 0),
                     ctx,
+                    "math",
                 ),
                 ctx,
                 "math",
@@ -4291,6 +4279,12 @@ fn render_inline_body(
                 return String::new();
             }
             let content = spell_verse_empty_lines(&raw.content, ctx.line_block_depth > 0);
+            if line_block_closer_in(&content, ctx) {
+                crate::render_carve_error::record_unspellable(
+                    "raw_inline",
+                    "a prefixed or suffixed verbatim span cannot hide a line-block closer",
+                );
+            }
             let verbatim = if raw.format.eq_ignore_ascii_case("html") {
                 let fence = code_span_fence(&content);
                 if verbatim_needs_padding(&content) {
@@ -4299,7 +4293,7 @@ fn render_inline_body(
                     format!("{fence}{content}{fence}")
                 }
             } else {
-                render_code(&content, ctx)
+                render_code(&content, ctx, "raw_inline")
             };
             format!(
                 "{}{{={}}}",
@@ -4315,7 +4309,12 @@ fn render_inline_body(
             let content = spell_verse_empty_lines(&lit.content, ctx.line_block_depth > 0);
             format!(
                 "!{}{}",
-                guard_code_lines(session, &render_code(&content, ctx), ctx, "literal_inline"),
+                guard_code_lines(
+                    session,
+                    &render_code(&content, ctx, "literal_inline"),
+                    ctx,
+                    "literal_inline"
+                ),
                 render_inline_attrs(&lit.attrs, ctx)
             )
         }
@@ -4896,7 +4895,11 @@ fn render_link(session: &RenderSession, node: &Link, ctx: &mut CarveContext) -> 
                 &node.attrs,
                 ctx.reference_targets.get(&crate::parse::label_key(label)),
             );
-            return format!("[{text}][{label}]{}", render_inline_attrs(&attrs, ctx));
+            return format!(
+                "[{text}][{}]{}",
+                if text == *label { "" } else { label },
+                render_inline_attrs(&attrs, ctx)
+            );
         }
         crate::render_carve_error::record_unspellable(
             "link",
@@ -5258,7 +5261,7 @@ fn guard_code_lines(
     }
     static MARKER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let marker =
-        MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|\[[^\]\n]+\]:[ \t])").unwrap());
+        MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|\[[^\]\n]+\]:[ \t]|[-*] +|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-z]|[A-Z])[.)] +)").unwrap());
     written
         .split('\n')
         .enumerate()
@@ -5297,11 +5300,31 @@ fn verbatim_needs_padding(content: &str) -> bool {
             && !content.chars().all(|c| c == ' '))
 }
 
-fn render_code(content: &str, ctx: &CarveContext) -> String {
-    render_code_with_unclosed(content, false, ctx.in_term)
+fn line_block_closer_in(content: &str, ctx: &CarveContext) -> bool {
+    ctx.line_block_depth > 0
+        && content.split_inclusive('\n').any(|line| {
+            line.ends_with('\n')
+                && line.trim_matches([' ', '\t', '\r', '\n'])
+                    == ":".repeat(ctx.colon_fence_depth + 2)
+        })
 }
 
-fn render_code_with_unclosed(content: &str, allow_unclosed: bool, in_term: bool) -> String {
+fn render_code(content: &str, ctx: &CarveContext, node_type: &'static str) -> String {
+    if line_block_closer_in(content, ctx) {
+        crate::render_carve_error::record_unspellable(
+            node_type,
+            "a prefixed or suffixed verbatim span cannot hide a line-block closer",
+        );
+    }
+    render_code_with_unclosed(content, false, ctx.in_term, false)
+}
+
+fn render_code_with_unclosed(
+    content: &str,
+    allow_unclosed: bool,
+    in_term: bool,
+    paired_fence: bool,
+) -> String {
     let normalized;
     let content = if content.contains('\r') {
         normalized = content.replace("\r\n", "\n").replace('\r', "\n");
@@ -5309,7 +5332,11 @@ fn render_code_with_unclosed(content: &str, allow_unclosed: bool, in_term: bool)
     } else {
         content
     };
-    let fence = code_span_fence(content);
+    let fence = if paired_fence {
+        safe_fence(content, 3)
+    } else {
+        code_span_fence(content)
+    };
     // Pad exactly where the parser strips, so the strip is reversible and fmt
     // stays idempotent; the padding sits inside the fence, so a trailing
     // attribute block still attaches to the closing run. The parser strips one
@@ -5361,6 +5388,18 @@ fn render_code_with_unclosed(content: &str, allow_unclosed: bool, in_term: bool)
             "a leading newline loses its padding where the code span cannot run to the end",
         );
     }
+    let repaired;
+    let content = if paired_fence {
+        let (head, tail) = content.rsplit_once('\n').unwrap();
+        if tail.chars().all(|ch| matches!(ch, ' ' | '\t' | '\u{a0}')) {
+            repaired = format!("{head}\n{}", tail.replace('\u{a0}', " "));
+            repaired.as_str()
+        } else {
+            content
+        }
+    } else {
+        content
+    };
     if needs_pad {
         format!("{fence} {content} {fence}")
     } else {
@@ -5418,6 +5457,10 @@ fn refuse_attributes_on_sigil(attrs: &Option<Attrs>, node_type: &'static str) {
             "an attribute block after a mention or tag reads back as text",
         );
     }
+}
+
+pub(crate) fn render_carrier_attrs(attrs: &Option<Attrs>) -> String {
+    render_attrs_with_markers(attrs, &['>'], false)
 }
 
 pub(crate) fn render_attrs(attrs: &Option<Attrs>) -> String {
@@ -6807,7 +6850,7 @@ fn escape_destination_escapes(text: &str) -> String {
     out
 }
 
-fn escape_destination(text: &str) -> String {
+pub(crate) fn escape_destination(text: &str) -> String {
     // Almost every destination holds neither a parenthesis nor a backslash, so
     // there is nothing for the scan to misread and nothing to mark. Skipping
     // the walk keeps that case free of the set entirely.
@@ -7187,7 +7230,7 @@ fn spell_crossref_target(text: &str) -> String {
     if text.is_empty()
         || text
             .bytes()
-            .any(|b| matches!(b, b'>' | b' ' | b'\t' | b'\r' | b'\n' | 0))
+            .any(|b| matches!(b, b'>' | b' ' | b'\r' | b'\n' | 0))
     {
         crate::render_carve_error::record_unspellable(
             "heading_ref",
@@ -7244,7 +7287,7 @@ fn first_boundary(node: &InlineNode) -> Option<char> {
 fn needs_comment_space(emitted: &str) -> bool {
     match emitted.chars().next_back() {
         None => false,
-        Some(last) => last != '\n' && !last.is_whitespace(),
+        Some(last) => last != '\n' && last != ' ',
     }
 }
 
@@ -7514,4 +7557,30 @@ mod raw_html_fence_tests {
             );
         }
     }
+}
+
+pub(crate) fn render_link_reference_definition(def: &LinkReferenceDefinition) -> String {
+    // PART 12 §10 gave this a node precisely so the writer can put the
+    // line back. Before that there was nowhere to write it from, which is
+    // why every resolved reference was INLINED instead (carve-rs#631).
+    let title = def
+        .title
+        .as_ref()
+        .map(|t| format!(" \"{}\"", escape_quoted(t)))
+        .unwrap_or_default();
+    let attrs = render_attrs(&def.attrs);
+    let attrs = if attrs.is_empty() {
+        String::new()
+    } else {
+        format!(" {attrs}")
+    };
+    // The href is re-escaped the way the inline tail's is: the reader
+    // resolves the three destination escapes, so writing the resolved
+    // value bare would hand back a line whose parentheses no longer
+    // balance.
+    format!(
+        "[{}]: {}{title}{attrs}",
+        def.label,
+        escape_destination_escapes(&def.href)
+    )
 }

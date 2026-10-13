@@ -10,13 +10,14 @@
 //! silently skip a container added later, and a directive inside it would stop
 //! expanding with nothing to say why.
 
-use crate::ast::{BlockNode, Div, FigureTarget, Image, InlineNode, Pos};
+use crate::ast::{Attrs, BlockNode, Div, FigureTarget, Image, InlineNode, Pos};
 
 /// What to do with each sequence the walk reaches.
 pub(crate) trait SubtreeVisitor {
     fn blocks(&mut self, _blocks: &mut Vec<BlockNode>) {}
     fn inlines(&mut self, _inlines: &mut Vec<InlineNode>) {}
     fn image(&mut self, _image: &mut Image) {}
+    fn attributes(&mut self, _attrs: &mut Option<Attrs>, _inline: bool) {}
     /// Called for every node's position, block and inline alike.
     fn position(&mut self, _pos: &mut Pos) {}
     /// The position SLOT, for a pass that REMOVES a position rather than
@@ -40,6 +41,9 @@ fn visit_pos<V: SubtreeVisitor>(pos: &mut Option<Pos>, v: &mut V) {
 /// itself. The caller decides whether to recurse further.
 pub(crate) fn visit_block_children<V: SubtreeVisitor>(block: &mut BlockNode, v: &mut V) {
     v.position_slot(block_pos_slot(block));
+    if let Some(attrs) = block_attrs_slot(block) {
+        v.attributes(attrs, false);
+    }
     match block {
         BlockNode::Heading(h) => v.inlines(&mut h.children),
         BlockNode::Paragraph(p) => v.inlines(&mut p.children),
@@ -62,6 +66,7 @@ pub(crate) fn visit_block_children<V: SubtreeVisitor>(block: &mut BlockNode, v: 
         BlockNode::List(l) => {
             for item in &mut l.items {
                 visit_pos(&mut item.pos, v);
+                v.attributes(&mut item.attrs, false);
                 v.blocks(&mut item.children);
             }
         }
@@ -69,15 +74,18 @@ pub(crate) fn visit_block_children<V: SubtreeVisitor>(block: &mut BlockNode, v: 
             for item in &mut d.items {
                 for term in &mut item.terms {
                     visit_pos(&mut term.pos, v);
+                    v.attributes(&mut term.attrs, false);
                     v.inlines(&mut term.children);
                 }
                 for def in &mut item.definitions {
                     visit_pos(&mut def.pos, v);
+                    v.attributes(&mut def.attrs, false);
                     v.blocks(&mut def.children);
                 }
             }
         }
         BlockNode::Table(t) => {
+            visit_table_attrs(t, v);
             if let Some(caption) = &mut t.short_caption {
                 v.inlines(caption);
             }
@@ -86,8 +94,10 @@ pub(crate) fn visit_block_children<V: SubtreeVisitor>(block: &mut BlockNode, v: 
             }
             for row in &mut t.rows {
                 visit_pos(&mut row.pos, v);
+                v.attributes(&mut row.attrs, false);
                 for cell in &mut row.cells {
                     visit_pos(&mut cell.pos, v);
+                    v.attributes(&mut cell.attrs, false);
                     v.inlines(&mut cell.children);
                     if let Some(blocks) = &mut cell.blocks {
                         v.blocks(blocks);
@@ -109,13 +119,18 @@ pub(crate) fn visit_block_children<V: SubtreeVisitor>(block: &mut BlockNode, v: 
             match &mut *f.target {
                 FigureTarget::BlockQuote(b) => {
                     visit_pos(&mut b.pos, v);
+                    v.attributes(&mut b.attrs, false);
                     v.blocks(&mut b.children);
                 }
                 FigureTarget::Paragraph(p) => {
                     visit_pos(&mut p.pos, v);
+                    v.attributes(&mut p.attrs, false);
                     v.inlines(&mut p.children);
                 }
                 FigureTarget::Table(t) => {
+                    visit_pos(&mut t.pos, v);
+                    v.attributes(&mut t.attrs, false);
+                    visit_table_attrs(t, v);
                     if let Some(caption) = &mut t.short_caption {
                         v.inlines(caption);
                     }
@@ -124,8 +139,10 @@ pub(crate) fn visit_block_children<V: SubtreeVisitor>(block: &mut BlockNode, v: 
                     }
                     for row in &mut t.rows {
                         visit_pos(&mut row.pos, v);
+                        v.attributes(&mut row.attrs, false);
                         for cell in &mut row.cells {
                             visit_pos(&mut cell.pos, v);
+                            v.attributes(&mut cell.attrs, false);
                             v.inlines(&mut cell.children);
                             if let Some(blocks) = &mut cell.blocks {
                                 v.blocks(blocks);
@@ -134,10 +151,14 @@ pub(crate) fn visit_block_children<V: SubtreeVisitor>(block: &mut BlockNode, v: 
                     }
                 }
                 FigureTarget::Image(i) => {
-                    v.image(i);
                     visit_pos(&mut i.pos, v);
+                    v.attributes(&mut i.attrs, true);
+                    v.image(i);
                 }
-                FigureTarget::CodeBlock(c) => visit_pos(&mut c.pos, v),
+                FigureTarget::CodeBlock(c) => {
+                    visit_pos(&mut c.pos, v);
+                    v.attributes(&mut c.attrs, false);
+                }
             }
         }
         BlockNode::BlockImage(image) => v.image(image),
@@ -174,6 +195,9 @@ pub(crate) fn visit_block_children<V: SubtreeVisitor>(block: &mut BlockNode, v: 
 /// Visit the sequences held by one inline node.
 pub(crate) fn visit_inline_children<V: SubtreeVisitor>(node: &mut InlineNode, v: &mut V) {
     v.position_slot(inline_pos_slot(node));
+    if let Some(attrs) = inline_attrs_slot(node) {
+        v.attributes(attrs, true);
+    }
     match node {
         InlineNode::Image(image) => v.image(image),
         InlineNode::Emphasis(e) => v.inlines(&mut e.children),
@@ -200,6 +224,7 @@ pub(crate) fn visit_inline_children<V: SubtreeVisitor>(node: &mut InlineNode, v:
         InlineNode::CitationGroup(g) => {
             for item in &mut g.items {
                 visit_pos(&mut item.pos, v);
+
                 if let Some(prefix) = &mut item.prefix {
                     v.inlines(prefix);
                 }
@@ -303,4 +328,77 @@ pub(crate) fn inline_pos_slot(node: &mut InlineNode) -> &mut Option<Pos> {
 
 pub(crate) fn inline_pos_mut(node: &mut InlineNode) -> Option<&mut Pos> {
     inline_pos_slot(node).as_mut()
+}
+
+fn block_attrs_slot(node: &mut BlockNode) -> Option<&mut Option<Attrs>> {
+    match node {
+        BlockNode::Heading(n) => Some(&mut n.attrs),
+        BlockNode::Paragraph(n) => Some(&mut n.attrs),
+        BlockNode::CodeBlock(n) => Some(&mut n.attrs),
+        BlockNode::List(n) => Some(&mut n.attrs),
+        BlockNode::BlockQuote(n) => Some(&mut n.attrs),
+        BlockNode::Table(n) => Some(&mut n.attrs),
+        BlockNode::Admonition(n) => Some(&mut n.attrs),
+        BlockNode::Directive(n) => Some(&mut n.attrs),
+        BlockNode::Div(n) => Some(&mut n.attrs),
+        BlockNode::Section(n) => Some(&mut n.attrs),
+        BlockNode::LineBlock(n) => Some(&mut n.attrs),
+        BlockNode::DefinitionList(n) => Some(&mut n.attrs),
+        BlockNode::Figure(n) => Some(&mut n.attrs),
+        BlockNode::FigureGroup(n) => Some(&mut n.attrs),
+        BlockNode::AbbreviationDef(_) => None,
+        BlockNode::LinkReferenceDefinition(n) => Some(&mut n.attrs),
+        BlockNode::CitationDefinition(n) => Some(&mut n.attrs),
+        BlockNode::RawBlock(n) => Some(&mut n.attrs),
+        BlockNode::Comment(_) => None,
+        BlockNode::BlockExtension(n) => Some(&mut n.attrs),
+        BlockNode::ExtensionCarrier(n) => Some(&mut n.attrs),
+        BlockNode::BlockImage(n) => Some(&mut n.attrs),
+        BlockNode::ThematicBreak(n) => Some(&mut n.attrs),
+    }
+}
+
+fn inline_attrs_slot(node: &mut InlineNode) -> Option<&mut Option<Attrs>> {
+    match node {
+        InlineNode::Text(_) => None,
+        InlineNode::EscapedText(_) => None,
+        InlineNode::SmartPunctuation(_) => None,
+        InlineNode::Emphasis(n) => Some(&mut n.attrs),
+        InlineNode::Code(n) => Some(&mut n.attrs),
+        InlineNode::Link(n) => Some(&mut n.attrs),
+        InlineNode::Image(n) => Some(&mut n.attrs),
+        InlineNode::Span(n) => Some(&mut n.attrs),
+        InlineNode::Ruby(n) => Some(&mut n.attrs),
+        InlineNode::Math(n) => Some(&mut n.attrs),
+        InlineNode::RawInline(_) => None,
+        InlineNode::LiteralInline(n) => Some(&mut n.attrs),
+        InlineNode::Symbol(n) => Some(&mut n.attrs),
+        InlineNode::AutoLink(n) => Some(&mut n.attrs),
+        InlineNode::CrossRef(_) => None,
+        InlineNode::CaptionNumber(_) => None,
+        InlineNode::Mention(n) => Some(&mut n.attrs),
+        InlineNode::Tag(n) => Some(&mut n.attrs),
+        InlineNode::CitationGroup(_) => None,
+        InlineNode::Extension(n) => Some(&mut n.attrs),
+        InlineNode::Abbreviation(_) => None,
+        InlineNode::Footnote(n) => Some(&mut n.attrs),
+        InlineNode::NonBreakingSpace(n) => Some(&mut n.attrs),
+        InlineNode::SoftBreak(_) => None,
+        InlineNode::HardBreak(_) => None,
+        InlineNode::CriticInsert(n) => Some(&mut n.attrs),
+        InlineNode::CriticDelete(n) => Some(&mut n.attrs),
+        InlineNode::CriticSubstitute(_) => None,
+        InlineNode::CriticComment(_) => None,
+        InlineNode::Comment(_) => None,
+    }
+}
+
+fn visit_table_attrs<V: SubtreeVisitor>(table: &mut crate::ast::Table, visitor: &mut V) {
+    if let Some(groups) = &mut table.row_groups {
+        visitor.attributes(&mut groups.head_attrs, false);
+        visitor.attributes(&mut groups.foot_attrs, false);
+        for body in &mut groups.bodies {
+            visitor.attributes(&mut body.attrs, false);
+        }
+    }
 }

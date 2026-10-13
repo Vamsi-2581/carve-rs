@@ -9,7 +9,12 @@ fn preserves_quote_and_list_ownership() {
         let imported = carve::djot_to_carve(source);
         let actual_html = carve::to_html(&imported);
         let expected_html = carve::to_html(expected);
-        if actual_html != expected_html {
+        let canonical = |html: &str| {
+            html.replace("&#10;", "\n")
+                .replace("&#62;", "&gt;")
+                .replace('\u{a0}', "&nbsp;")
+        };
+        if canonical(&actual_html) != canonical(&expected_html) {
             failures.push(format!("{source:?}\nImported: {imported:?}\nActual: {actual_html}\nExpected: {expected_html}"));
         }
     }

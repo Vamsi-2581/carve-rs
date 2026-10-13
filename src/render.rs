@@ -116,6 +116,9 @@ fn render_html_inner(
     // the parse tree deliberately does not (markup-carve/carve#1660). This is
     // the one place that difference is resolved, ahead of every layout decision
     // below, so nothing downstream has to know about the second shape.
+    if options.html_carriers() {
+        crate::roundtrip::report_reserved_attributes(&mut doc);
+    }
     crate::parse::collapse_lone_image_paragraphs(&mut doc);
     let crossref_index = crossref_index.unwrap_or_else(|| {
         crate::parse::crossref_index_for_document(&doc, options.heading_id_options())
@@ -249,6 +252,7 @@ fn render_html_pass(
     // already placed, and one rendering into a half-spent expansion budget would
     // clip abbreviations the first pass emitted whole.
     let _placement_guard = FootnotesPlacementGuard::install(marker);
+    let _reserved_guard = ReservedNameGuard::install(options.html_carriers());
 
     let mut state = RenderState {
         heading_id_options: options.heading_id_options(),
@@ -385,6 +389,44 @@ thread_local! {
     /// against. Nested renders share it for the same reason as above: their
     /// markers reach the same assembled document.
     static PLACEMENTS_EMITTED: Cell<usize> = const { Cell::new(0) };
+}
+
+thread_local! {
+    /// Whether the render on this thread is a roundtrip export, which drops an
+    /// authored `data-carve-src` (PART 10 §13a). A thread-local for the reason
+    /// `FOOTNOTES_PLACEMENT` is one: the attribute writers take no options, and
+    /// a nested render has to answer the same way.
+    static DROPS_RESERVED_NAME: Cell<bool> = const { Cell::new(false) };
+
+}
+
+struct ReservedNameGuard(bool);
+
+impl ReservedNameGuard {
+    fn install(active: bool) -> ReservedNameGuard {
+        ReservedNameGuard(DROPS_RESERVED_NAME.with(|slot| slot.replace(active)))
+    }
+}
+
+impl Drop for ReservedNameGuard {
+    fn drop(&mut self) {
+        DROPS_RESERVED_NAME.with(|slot| slot.set(self.0));
+    }
+}
+
+/// Whether an authored attribute reaches the element: its name is safe and
+/// spellable, and roundtrip export does not reserve it.
+///
+/// Reserved names are reported separately before the render pass.
+pub(crate) fn writes_authored_key(key: &str) -> bool {
+    if is_dangerous_attr_name(key) || !is_valid_attr_name(key) {
+        return false;
+    }
+    if crate::roundtrip::canonical(key).is_none() || !DROPS_RESERVED_NAME.with(Cell::get) {
+        return true;
+    }
+
+    false
 }
 
 /// Install `marker` for the duration of one pass, restoring the previous marker
@@ -1527,15 +1569,32 @@ fn render_section(
     // PART 10 §13a: presence says the id was AUTHORED rather than generated, so
     // an importer can put `{#id}` back instead of baking in a slug this render
     // derived. It rides the `<section>` where PART 9 §13 wraps one.
-    if options.html_carriers() && heading_id_is_authored(heading) {
-        write_carrier(
-            out,
-            crate::roundtrip::EXPLICIT_ID,
-            "1",
-            &None,
-            heading.pos.as_ref(),
-            crate::render_loss::RawNodeType::Block,
-        );
+    if options.html_carriers() {
+        let block = crate::render_loss::RawNodeType::Block;
+        let pos = heading.pos.as_ref();
+        if heading_id_is_authored(heading) {
+            write_carrier(out, crate::roundtrip::EXPLICIT_ID, "1", &None, pos, block);
+            // The id's slot among the heading's attributes, which the hoist
+            // onto the wrapper loses. 0 is where a reader puts it anyway.
+            let slot = heading
+                .attrs
+                .as_ref()
+                .and_then(|attrs| attrs.order.iter().filter(|slot| !matches!(slot, AttrSlot::Key(name) if crate::roundtrip::canonical(name).is_some())).position(|s| matches!(s, AttrSlot::Id)))
+                .unwrap_or(0);
+            if slot > 0 {
+                write_carrier(
+                    out,
+                    crate::roundtrip::ID_SLOT,
+                    &slot.to_string(),
+                    &None,
+                    pos,
+                    block,
+                );
+            }
+        } else {
+            // The id is generated, so an importer drops it without guessing.
+            write_carrier(out, crate::roundtrip::GENERATED_ID, "1", &None, pos, block);
+        }
     }
     out.push_str(">\n");
     render_heading_without_section_id(out, heading, level + 1, options, state);
@@ -1757,6 +1816,16 @@ fn render_heading(
             crate::roundtrip::EXPLICIT_ID,
             "1",
             &h.attrs,
+            h.pos.as_ref(),
+            crate::render_loss::RawNodeType::Block,
+        );
+    }
+    if options.html_carriers() && !authored_id {
+        write_carrier(
+            out,
+            crate::roundtrip::GENERATED_ID,
+            "1",
+            &None,
             h.pos.as_ref(),
             crate::render_loss::RawNodeType::Block,
         );
@@ -2135,14 +2204,41 @@ fn render_list(
             crate::render_loss::RawNodeType::Block,
         );
     }
+    // PART 10 §13a: a tight list whose item paragraph keeps its `<p>` for its
+    // own attributes reads back as loose without this.
+    let tight_carrier = options.html_carriers()
+        && l.tight
+        && l.items.iter().any(|item| {
+            item.children.iter().any(
+                |child| matches!(child, BlockNode::Paragraph(p) if has_authored_attrs(&p.attrs)),
+            )
+        });
+    if tight_carrier {
+        write_carrier(
+            out,
+            crate::roundtrip::TIGHT,
+            "1",
+            &l.attrs,
+            l.pos.as_ref(),
+            crate::render_loss::RawNodeType::Block,
+        );
+    }
     // PART 19 §1: `task-list` is a mandatory base class. Every item has to be a
     // task, so an ingested mixed list never hides a plain item's bullet.
     let task_list =
         !l.ordered && !l.items.is_empty() && l.items.iter().all(|item| item.checked.is_some());
-    // The carrier owns the name, so an authored copy does not reach the element.
-    let authored = match bullet_carrier {
-        Some(_) => strip_keys(&l.attrs, &[crate::roundtrip::MARKER]),
-        None => l.attrs.clone(),
+    // A carrier owns its name, so an authored copy does not reach the element.
+    let mut owned: Vec<&str> = Vec::new();
+    if bullet_carrier.is_some() {
+        owned.push(crate::roundtrip::MARKER);
+    }
+    if tight_carrier {
+        owned.push(crate::roundtrip::TIGHT);
+    }
+    let authored = if owned.is_empty() {
+        l.attrs.clone()
+    } else {
+        strip_keys(&l.attrs, &owned)
     };
     if task_list {
         out.push_str(&render_attrs_with_base_class(&authored, "task-list"));
@@ -3983,6 +4079,15 @@ fn render_inline_after(
             // its payload bytes; the ordinary disabled-raw path still strips
             // bidi controls through escape_text.
             if options.html_carriers() {
+                // The carrier restores the node; the target still did not write
+                // the format, so the row is owed in both modes.
+                if !html {
+                    crate::render_loss::record_raw_drop(
+                        &r.format,
+                        crate::RawNodeType::Inline,
+                        r.pos.clone(),
+                    );
+                }
                 out.push_str("<span");
                 write_carrier(
                     out,
@@ -4125,7 +4230,11 @@ fn render_inline_after(
                 if opens_anchor {
                     out.push_str("<a href=\"#");
                     write_escaped_attr(out, &actual_id);
-                    out.push_str("\">");
+                    out.push('"');
+                    if options.html_carriers() {
+                        out.push_str(" data-carve-xref");
+                    }
+                    out.push('>');
                     out.push_str(&text);
                     out.push_str("</a>");
                 } else {
@@ -4137,6 +4246,9 @@ fn render_inline_after(
         }
         InlineNode::CaptionNumber(n) => {
             match n.number {
+                Some(number) if options.html_carriers() => {
+                    write!(out, "<span data-carve-caption-number>{number}</span>").unwrap();
+                }
                 Some(number) => out.push_str(&number.to_string()),
                 // An unresolved placeholder stays the literal `#` the author
                 // wrote - the visible failure this language prefers to a
@@ -4262,6 +4374,32 @@ fn render_inline_after(
         }
         InlineNode::Footnote(f) => {
             if let (Some(number), Some(ref_id)) = (f.number, &f.ref_id) {
+                if state.link_depth > 0 {
+                    out.push_str("<sup id=\"");
+                    write_escaped_attr(out, ref_id);
+                    out.push('"');
+                    if options.html_carriers() {
+                        if let Some(label) = &f.id {
+                            write_carrier(
+                                out,
+                                crate::roundtrip::FOOTNOTE_LABEL,
+                                label,
+                                &f.attrs,
+                                f.pos.as_ref(),
+                                crate::render_loss::RawNodeType::Inline,
+                            );
+                        }
+                        out.push_str(&render_attrs_without_id_and_keys(
+                            &f.attrs,
+                            &[crate::roundtrip::FOOTNOTE_LABEL],
+                        ));
+                    } else {
+                        out.push_str(&render_attrs_without_id_for(&f.attrs, "sup"));
+                    }
+                    // The reference keeps its back-link target inside the link text.
+                    write!(out, ">{number}</sup>").unwrap();
+                    return;
+                }
                 out.push_str("<a id=\"");
                 write_escaped_attr(out, ref_id);
                 write!(out, "\" href=\"#fn{number}\" role=\"doc-noteref\"").unwrap();
@@ -4711,7 +4849,7 @@ fn write_attrs(out: &mut String, attrs: &Option<Attrs>) {
             write_attr_class(out, &attrs.classes);
         }
         for (key, value) in &attrs.key_values {
-            if !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+            if writes_authored_key(key) {
                 write_attr_key_value(out, key, value);
             }
         }
@@ -4740,7 +4878,7 @@ fn write_attrs(out: &mut String, attrs: &Option<Attrs>) {
             }
             AttrSlot::Key(key) => {
                 if let Some(value) = attrs.key_values.get(key) {
-                    if !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+                    if writes_authored_key(key) {
                         write_attr_key_value(out, key, value);
                     }
                 }
@@ -4757,10 +4895,7 @@ fn write_attrs(out: &mut String, attrs: &Option<Attrs>) {
         write_attr_class(out, &attrs.classes);
     }
     for (key, value) in &attrs.key_values {
-        if !seen_keys.contains(key.as_str())
-            && !is_dangerous_attr_name(key)
-            && is_valid_attr_name(key)
-        {
+        if !seen_keys.contains(key.as_str()) && writes_authored_key(key) {
             write_attr_key_value(out, key, value);
         }
     }
@@ -4893,28 +5028,21 @@ pub(crate) fn render_attrs(attrs: &Option<Attrs>) -> String {
     out
 }
 
-/// Write one PART 10 §13a carrier, reporting an authored attribute of the same
-/// name as dropped.
-///
-/// RULED on markup-carve/carve#2902 question 1: THE CARRIER WINS and the
-/// authored attribute is dropped with a diagnostic naming it. Emitting both,
-/// which carve-php did with a precedence that differed per carrier, is invalid
-/// HTML. The caller passes the same name to [`render_attrs_without_keys`] (or
-/// its block-level twin), so the suppression and the report stay one decision.
+/// Write one HTML roundtrip carrier. Reserved authored names are reported
+/// before rendering and excluded from the authored attribute walk.
 pub(crate) fn write_carrier(
     out: &mut String,
     name: &'static str,
     value: &str,
-    attrs: &Option<Attrs>,
-    pos: Option<&Pos>,
-    node_type: crate::render_loss::RawNodeType,
+    _attrs: &Option<Attrs>,
+    _pos: Option<&Pos>,
+    _node_type: crate::render_loss::RawNodeType,
 ) {
     out.push(' ');
     out.push_str(name);
     out.push_str("=\"");
     write_escaped_attr(out, value);
     out.push('"');
-    report_carrier_collision(name, attrs, pos, node_type);
 }
 
 /// Write a PRESENCE carrier bare, with no value at all.
@@ -4927,24 +5055,12 @@ pub(crate) fn write_carrier(
 pub(crate) fn write_bare_carrier(
     out: &mut String,
     name: &'static str,
-    attrs: &Option<Attrs>,
-    pos: Option<&Pos>,
-    node_type: crate::render_loss::RawNodeType,
+    _attrs: &Option<Attrs>,
+    _pos: Option<&Pos>,
+    _node_type: crate::render_loss::RawNodeType,
 ) {
     out.push(' ');
     out.push_str(name);
-    report_carrier_collision(name, attrs, pos, node_type);
-}
-
-fn report_carrier_collision(
-    name: &'static str,
-    attrs: &Option<Attrs>,
-    pos: Option<&Pos>,
-    node_type: crate::render_loss::RawNodeType,
-) {
-    if attrs_has_key(attrs, name) {
-        crate::render_loss::record_carrier_collision(name, name, pos, node_type);
-    }
 }
 
 /// The attribute set without the named keys, for a caller that has to hand the
@@ -5014,7 +5130,7 @@ pub(crate) fn render_attrs_with_base_class(attrs: &Option<Attrs>, base: &str) ->
             write_attr_id(&mut out, id);
         }
         for (key, value) in &attrs.key_values {
-            if !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+            if writes_authored_key(key) {
                 out.push_str(&format!(
                     " {}=\"{}\"",
                     escape_attr(key),
@@ -5049,7 +5165,7 @@ pub(crate) fn render_attrs_with_base_class(attrs: &Option<Attrs>, base: &str) ->
             }
             AttrSlot::Key(key) => {
                 if let Some(value) = attrs.key_values.get(key) {
-                    if !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+                    if writes_authored_key(key) {
                         out.push_str(&format!(
                             " {}=\"{}\"",
                             escape_attr(key),
@@ -5071,7 +5187,7 @@ pub(crate) fn render_attrs_after_class(attrs: &Attrs) -> String {
             out.push_str(&format!(" id=\"{}\"", escape_attr(id)));
         }
         for (key, value) in &attrs.key_values {
-            if !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+            if writes_authored_key(key) {
                 out.push_str(&format!(
                     " {}=\"{}\"",
                     escape_attr(key),
@@ -5091,7 +5207,7 @@ pub(crate) fn render_attrs_after_class(attrs: &Attrs) -> String {
             AttrSlot::Class => {}
             AttrSlot::Key(key) => {
                 if let Some(value) = attrs.key_values.get(key) {
-                    if !is_dangerous_attr_name(key) && is_valid_attr_name(key) {
+                    if writes_authored_key(key) {
                         out.push_str(&format!(
                             " {}=\"{}\"",
                             escape_attr(key),

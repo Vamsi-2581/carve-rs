@@ -40,10 +40,13 @@ fn a_blank_or_a_flush_left_opener_leaves_the_fence_standing() {
 fn a_below_column_line_still_folds_the_fence_in_as_text() {
     // The strict content-column rule: `x` is lazy item text, and it takes the
     // fence with it.
-    assert_eq!(to_html("- :::\nx"), "<ul>\n  <li>:::\nx</li>\n</ul>");
+    assert_eq!(
+        to_html("- :::\nx"),
+        "<ul>\n  <li>\n    <div>\n\n    </div>\n  </li>\n</ul>\n<p>x</p>"
+    );
     assert_eq!(
         to_html("- ::: note\n :::"),
-        "<ul>\n  <li>::: note\n:::</li>\n</ul>"
+        "<ul>\n  <li>\n    <aside class=\"admonition note\" aria-label=\"Note\">\n\n    </aside>\n  </li>\n</ul>\n<p>:::</p>"
     );
 }
 

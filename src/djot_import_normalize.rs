@@ -1268,6 +1268,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
     let mut quote_paragraph_depth = None;
     let track_quote_owners = source.contains("\0DJOTINVALIDATTR\0");
     let mut owned_quote_depths = HashSet::new();
+    let mut quote_paragraph_item_column = None;
     let mut quote_attribute_depth = None;
     let mut moved_quote_attributes = None;
     for (n, raw) in lines.iter().enumerate() {
@@ -1494,9 +1495,15 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
                 );
                 quote_paragraph_depth = None;
             }
-            if let Some(held) =
-                quote_paragraph_depth.filter(|&held| depth > held && !body.trim().is_empty())
-            {
+            if let Some(held) = quote_paragraph_depth.filter(|&held| {
+                depth > held
+                    && !body.trim().is_empty()
+                    && !quote_paragraph_item_column.is_some_and(|(item_depth, column)| {
+                        item_depth == held
+                            && djot_attribute_line(raw, held)
+                                .is_some_and(|content| leading_indent(content).0 <= column)
+                    })
+            }) {
                 let mut at = 0;
                 for _ in 0..held {
                     let rest = &raw[at..];
@@ -1505,6 +1512,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
                         at += 1;
                     }
                 }
+                at += raw[at..].len() - raw[at..].trim_start_matches([' ', '\t']).len();
                 let mut literal = display.clone();
                 let at = if target_indent == indent {
                     at
@@ -1531,9 +1539,27 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
             quote_paragraph_depth = (!body.trim().is_empty()
                 && !metadata_body
                 && !heading.is_match(block_body)
-                && !marker.is_match(block_body)
+                && (!marker.is_match(block_body)
+                    || marker.find(block_body).is_some_and(|item| {
+                        let content = block_body[item.end()..].trim_start();
+                        !content.is_empty()
+                            && !heading.is_match(content)
+                            && !(thematic(content)
+                                && !(content.contains('*') && content.contains('-')))
+                            && !rows[n]
+                            && !content.starts_with(['>', ':', '`', '~', '{'])
+                    }))
                 && !block_body.starts_with(":::"))
             .then_some(depth.max(quote_paragraph_depth.unwrap_or(depth)));
+            quote_paragraph_item_column = if quote_paragraph_depth.is_some() {
+                if marker.is_match(block_body) {
+                    Some((depth, leading_indent(body).0))
+                } else {
+                    quote_paragraph_item_column.filter(|&(item_depth, _)| item_depth == depth)
+                }
+            } else {
+                None
+            };
             result.push(if attribute_depth < depth {
                 format!(
                     "{}{}{}",
@@ -1815,7 +1841,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
                 }
             ));
             paragraph = false;
-        } else if (thematic(visible) && thematic(text)) {
+        } else if thematic(visible) && thematic(text) {
             result.push(
                 if !paragraph && lists.is_empty() && definition_columns.is_empty() {
                     "***".to_owned()
@@ -3043,7 +3069,16 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
     let mut findings: Vec<(usize, &'static str)> = Vec::new();
     if has_djot_code_layout_candidates(source) {
         let mut raw_code = Vec::new();
-        let _ = close_djot_table_code(source, Some(&mut |at| raw_code.push(at)));
+        let _ = close_djot_table_code(
+            source,
+            !source.contains("\\|")
+                && !source.lines().any(|line| {
+                    cached_regex!(r"^[ \t]+`{3,}")
+                        .unwrap()
+                        .is_match(quoted(line).1)
+                }),
+            Some(&mut |at| raw_code.push(at)),
+        );
         findings.extend(raw_code.into_iter().map(|at| {
             (
                 at,

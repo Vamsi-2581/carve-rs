@@ -344,16 +344,19 @@ pub(crate) fn assess(source: &str, value: &str) -> Assessment {
         .as_ref()
         .map_or(&[][..], |prepared| prepared.1.as_slice());
     let mut bare_url_at = 0;
-    let parser = Parser::new_ext(parser_source, options);
+    let strikes = crate::markdown_strike::prepare(parser_source, options);
+    let mut reference = |link| strikes.reference(link);
+    let parser =
+        Parser::new_with_broken_link_callback(&strikes.text, options, Some(&mut reference));
     let mut diagnostics = Vec::new();
     let mut complete = prepared_urls.as_ref().map_or(true, |prepared| prepared.2);
     let mut definition_spans = Vec::new();
     for (_, definition) in parser.reference_definitions().iter() {
-        definition_spans.push(definition.span.clone());
+        definition_spans.push(strikes.original_range(definition.span.clone()));
         diagnostics.push(diagnostic(
             "reference-definition",
             &line_starts,
-            definition.span.start,
+            strikes.original_range(definition.span.clone()).start,
             Normalized,
         ));
     }
@@ -370,6 +373,10 @@ pub(crate) fn assess(source: &str, value: &str) -> Assessment {
     static REWRITE: OnceLock<regex::Regex> = OnceLock::new();
     let rewrite = REWRITE.get_or_init(|| regex::Regex::new(r"&(?:#[xX][\da-fA-F]+|#\d+|[A-Za-z][A-Za-z\d]+);|\\[!\x22#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~]").unwrap());
     for (event, range) in parser.into_offset_iter() {
+        if strikes.synthetic_comment(&event, &range) {
+            continue;
+        }
+        let range = strikes.original_range(range);
         let mut paren_list = false;
         if !matches!(event, Event::Start(_) | Event::End(_)) {
             content_spans.push(range.clone());
@@ -761,6 +768,9 @@ mod tests {
             ("heading\n=======", "markdown-setext-heading"),
             ("**strong**", "markdown-strong"),
             ("~~gone~~", "markdown-strikethrough"),
+            ("a~b~c", "markdown-strikethrough"),
+            ("~a~b~", "markdown-strikethrough"),
+            ("€~a~b~", "markdown-strikethrough"),
             ("    code", "markdown-indented-code"),
             ("[label](https://example.org)", "markdown-link"),
             ("<https://example.org>", "markdown-autolink"),

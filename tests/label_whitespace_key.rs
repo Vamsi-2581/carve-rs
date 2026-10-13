@@ -1,9 +1,9 @@
 use carve::{to_carve, to_html};
 
 #[test]
-fn links_and_images_normalize_ascii_label_whitespace() {
+fn links_and_images_normalize_space_runs_in_labels() {
     assert!(to_html("[t][ a  b ]\n\n[a b]: /u\n").contains("href=\"/u\""));
-    assert!(to_html("![x][ a\tb ]\n\n[a b]: /i\n").contains("src=\"/i\""));
+    assert!(to_html("![x][ a  b ]\n\n[a b]: /i\n").contains("src=\"/i\""));
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn normalization_does_not_make_multiline_labels_valid() {
 
 #[test]
 fn footnotes_use_the_same_key_and_first_definition_wins() {
-    let html = to_html("[^ a\t b ]\n\n[^a b]: first\n\n[^ a  b ]: second\n");
+    let html = to_html("[^ a  b ]\n\n[^a b]: first\n\n[^ a  b ]: second\n");
     assert!(html.contains("doc-noteref"));
     assert!(html.contains("first"));
     assert!(!html.contains("second"));
@@ -32,4 +32,10 @@ fn the_winning_link_definition_keeps_its_raw_spelling() {
     let html = to_html(source);
     assert!(html.contains("href=\"/last\""), "{html}");
     assert!(to_carve(source).contains("[ a  b ]: /last"));
+}
+
+#[test]
+fn tabs_are_label_content() {
+    assert!(!to_html("![x][ a\tb ]\n\n[a b]: /i\n").contains("src=\"/i\""));
+    assert!(!to_html("[^ a\t b ]\n\n[^a b]: note\n").contains("doc-noteref"));
 }

@@ -44,34 +44,44 @@ fn assert_html(src: &str, expected: &str) {
     );
 }
 
-const INNER_ENDS: &str = "<ul><li><ul><li>x</li></ul> # h</li></ul>";
-
 /// The reported document. The span closes at the inner item's content column
 /// and ` # h` reaches nothing, so the inner item ends and the line is the OUTER
 /// item's text.
 #[test]
 fn the_reported_document_ends_the_inner_item() {
-    assert_html("- - x\n    %%% x\n    %%%\n # h\n", INNER_ENDS);
+    assert_html(
+        "- - x\n    %%% x\n    %%%\n # h\n",
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>",
+    );
 }
 
 /// THE CONTROL THAT NAMES THE DEFECT: the degraded spelling of the same
 /// document already answered this way, and must not move.
 #[test]
 fn the_degraded_spelling_answers_the_same_way() {
-    assert_html("- - x\n    %%% x\n # h\n", INNER_ENDS);
+    assert_html(
+        "- - x\n    %%% x\n # h\n",
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>",
+    );
 }
 
 /// A WIDER RUN degrades and closes the same - length is not what decides it.
 #[test]
 fn a_wider_run_answers_the_same_way() {
-    assert_html("- - x\n    %%%% x\n    %%%%\n # h\n", INNER_ENDS);
+    assert_html(
+        "- - x\n    %%%% x\n    %%%%\n # h\n",
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>",
+    );
 }
 
 /// AT DEPTH ONE there is no frame under the item, so the line folds into it.
 /// A fix that ended every frame would move this.
 #[test]
 fn depth_one_still_folds() {
-    assert_html("- x\n  %%% x\n  %%%\n # h\n", "<ul><li>x # h</li></ul>");
+    assert_html(
+        "- x\n  %%% x\n  %%%\n # h\n",
+        "<ul>\n  <li>x</li>\n</ul>\n<p># h</p>",
+    );
 }
 
 /// AT DEPTH THREE every frame the line did not reach ends.
@@ -79,7 +89,7 @@ fn depth_one_still_folds() {
 fn depth_three_ends_every_frame_below() {
     assert_html(
         "- - - x\n      %%% x\n      %%%\n # h\n",
-        "<ul><li><ul><li><ul><li>x</li></ul></li></ul> # h</li></ul>",
+        "<ul>\n  <li>\n    <ul>\n      <li>\n        <ul>\n          <li>x</li>\n        </ul>\n      </li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>",
     );
 }
 
@@ -109,7 +119,7 @@ fn a_span_below_every_column_ends_nothing() {
 fn a_thematic_break_follower_answers_the_same_way() {
     assert_html(
         "- - x\n    %%% x\n    %%%\n ---\n",
-        "<ul><li><ul><li>x</li></ul> —</li></ul>",
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p>—</p>",
     );
 }
 
@@ -118,7 +128,7 @@ fn a_thematic_break_follower_answers_the_same_way() {
 fn a_quote_follower_answers_the_same_way() {
     assert_html(
         "- - x\n    %%% x\n    %%%\n > q\n",
-        "<ul><li><ul><li>x</li></ul> &gt; q</li></ul>",
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p>&gt; q</p>",
     );
 }
 
@@ -129,7 +139,7 @@ fn a_quote_follower_answers_the_same_way() {
 fn a_plain_follower_does_not_move() {
     assert_html(
         "- - x\n    %%% x\n    %%%\n p\n",
-        "<ul><li><ul><li>x</li></ul> p</li></ul>",
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p>p</p>",
     );
 }
 
@@ -137,7 +147,10 @@ fn a_plain_follower_does_not_move() {
 /// DEGRADED, so the degraded test answers it and the two compose to one break.
 #[test]
 fn a_second_span_left_open_still_ends_it() {
-    assert_html("- - x\n    %%% x\n    %%%\n    %%% y\n # h\n", INNER_ENDS);
+    assert_html(
+        "- - x\n    %%% x\n    %%%\n    %%% y\n # h\n",
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n  </li>\n</ul>\n<p># h</p>",
+    );
 }
 
 /// Retention does not lower the content column for a child list.
@@ -170,6 +183,6 @@ fn a_span_that_reached_nothing_ends_nothing() {
 fn a_line_reaching_an_ancestor_keeps_the_frame_open() {
     assert_html(
         "- - x\n    %%% x\n    %%%\n   - m\n",
-        "<ul><li><ul><li>x - m</li></ul></li></ul>",
+        "<ul>\n  <li>\n    <ul>\n      <li>x</li>\n    </ul>\n    <ul>\n      <li>m</li>\n    </ul>\n  </li>\n</ul>",
     );
 }
