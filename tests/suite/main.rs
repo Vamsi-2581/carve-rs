@@ -2035,3 +2035,6 @@ mod wave7_link_footnotes;
 
 #[path = "../wave7_2606.rs"]
 mod wave7_2606;
+
+#[path = "../wave7_2607.rs"]
+mod wave7_2607;
