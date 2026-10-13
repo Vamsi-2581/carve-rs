@@ -129,6 +129,7 @@ fn quoted_list_boundaries<'a>(
     let embedded = cached_regex!(r"^(?:>(?:[ \t]+|$))+").unwrap();
     let heading = cached_regex!(r"^#{1,6}(?:[ \t]|$)").unwrap();
     let mut insertions = Vec::new();
+    let mut owned_divs: Vec<(usize, usize, usize)> = Vec::new();
     let mut div_closers = HashMap::new();
     if source.contains(":::") {
         djot_inline_boundaries_with_div_closers(source, mask, true, Some(&mut div_closers), None);
@@ -320,10 +321,34 @@ fn quoted_list_boundaries<'a>(
             insertions.push((line_offset, line_offset + prefix.len(), normalized));
             continue;
         }
+        owned_divs.retain(|&(held_depth, held_indent, _)| {
+            quote_depth >= held_depth
+                && (text.is_empty() || quote_depth > held_depth || indent >= held_indent)
+        });
+        let div_width = visible.bytes().take_while(|&byte| byte == b':').count();
+        let div_owner = (div_width >= 3
+            && visible[div_width..].trim_matches([' ', '\t']).is_empty())
+        .then(|| {
+            owned_divs
+                .iter()
+                .position(|&(held_depth, _, width)| held_depth == quote_depth && div_width >= width)
+        })
+        .flatten();
+        let div_close = div_owner.is_some();
+        if let Some(owner) = div_owner {
+            owned_divs.truncate(owner);
+        } else if !paragraph
+            && cached_regex!(r"^(:{3,})(?:[ \t]*[A-Za-z0-9_-]+)?[ \t]*$")
+                .unwrap()
+                .is_match(visible)
+        {
+            owned_divs.push((quote_depth, indent, div_width));
+        }
         if paragraph
             && !outside_item
             && !ends_item
             && !div_closers.contains_key(&line_offset)
+            && !div_close
             && quote_depth == depth
             && quote_depth > 0
             && (heading.is_match(visible) || thematic(visible) || visible.starts_with(":::"))
@@ -506,7 +531,7 @@ fn quoted_list_boundaries<'a>(
                 boundary = prefix.trim_end().to_owned();
             }
             paragraph = !(quote_body.is_empty()
-                || quote_body == "+"
+                || quote_body.trim_end_matches([' ', '\t']) == "+"
                 || reference.is_match(quote_body)
                 || thematic(quote_body)
                 || quote_body.starts_with(":::")
@@ -1545,6 +1570,7 @@ fn blocks_with_slot(source: &str, slot_prefix: Option<&str>, empty_note: Option<
                     || marker.find(block_body).is_some_and(|item| {
                         let content = block_body[item.end()..].trim_start();
                         !content.is_empty()
+                            && content.trim_end_matches([' ', '\t']) != "+"
                             && !heading.is_match(content)
                             && !(thematic(content)
                                 && !(content.contains('*') && content.contains('-')))
