@@ -1648,7 +1648,8 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // a loss.
     // Spec 32c0b881 adds section 592's three documents. All three round trip
     // strictly.
-    const STRICT: usize = 1883;
+    // Spec 32125a78 adds corpus 108-12, a strict round trip.
+    const STRICT: usize = 1884;
     const LOSSY: usize = 609;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
