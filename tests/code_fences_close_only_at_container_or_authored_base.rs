@@ -4,9 +4,9 @@
 //! A fence opened PAST its container's content column takes its own authored
 //! column as the local base. A closing run counts there, and at the container's
 //! content column where the container reclaims the line. A run strictly between
-//! the two is payload, and so is one past the base - the residue differs: below
-//! the base a payload line keeps what sits past the CONTAINER column, at or past
-//! it what sits past the BASE.
+//! the two is payload, and so is one past the base. Payload is measured from the
+//! base: a line below it loses its whole available prefix (carve#3133), and one
+//! at or past it keeps what sits past the BASE.
 //!
 //! MEASURED, NOT ASSUMED. Sixty documents cover five container kinds, two
 //! opener overshoots and every closer column from the content column to two past
@@ -63,7 +63,7 @@ fn a_fence_in_a_list_item_closes_at_two_columns() {
         ),
         (
             "- item\n\n    ```\n    a\n   ```\n\n  tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             3,
             "the band",
         ),
@@ -93,19 +93,19 @@ fn a_fence_in_a_list_item_closes_at_two_columns() {
         ),
         (
             "- item\n\n      ```\n      a\n   ```\n\n  tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             3,
             "the band",
         ),
         (
             "- item\n\n      ```\n      a\n    ```\n\n  tail\n",
-            "a\n  ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             4,
             "the band",
         ),
         (
             "- item\n\n      ```\n      a\n     ```\n\n  tail\n",
-            "a\n   ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             5,
             "the band",
         ),
@@ -142,7 +142,7 @@ fn a_fence_in_a_nested_item_closes_at_two_columns() {
         ),
         (
             "- a\n  - item\n\n      ```\n      a\n     ```\n\n    tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             5,
             "the band",
         ),
@@ -172,19 +172,19 @@ fn a_fence_in_a_nested_item_closes_at_two_columns() {
         ),
         (
             "- a\n  - item\n\n        ```\n        a\n     ```\n\n    tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             5,
             "the band",
         ),
         (
             "- a\n  - item\n\n        ```\n        a\n      ```\n\n    tail\n",
-            "a\n  ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             6,
             "the band",
         ),
         (
             "- a\n  - item\n\n        ```\n        a\n       ```\n\n    tail\n",
-            "a\n   ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             7,
             "the band",
         ),
@@ -221,7 +221,7 @@ fn a_fence_in_a_footnote_body_closes_at_two_columns() {
         ),
         (
             "x[^1]\n\n[^1]: note\n\n    ```\n    a\n   ```\n\n  tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             3,
             "the band",
         ),
@@ -251,19 +251,19 @@ fn a_fence_in_a_footnote_body_closes_at_two_columns() {
         ),
         (
             "x[^1]\n\n[^1]: note\n\n      ```\n      a\n   ```\n\n  tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             3,
             "the band",
         ),
         (
             "x[^1]\n\n[^1]: note\n\n      ```\n      a\n    ```\n\n  tail\n",
-            "a\n  ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             4,
             "the band",
         ),
         (
             "x[^1]\n\n[^1]: note\n\n      ```\n      a\n     ```\n\n  tail\n",
-            "a\n   ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             5,
             "the band",
         ),
@@ -300,7 +300,7 @@ fn a_fence_in_a_definition_description_closes_at_two_columns() {
         ),
         (
             ":: t\n:  d\n\n     ```\n     a\n    ```\n\n   tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             4,
             "the band",
         ),
@@ -330,19 +330,19 @@ fn a_fence_in_a_definition_description_closes_at_two_columns() {
         ),
         (
             ":: t\n:  d\n\n       ```\n       a\n    ```\n\n   tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             4,
             "the band",
         ),
         (
             ":: t\n:  d\n\n       ```\n       a\n     ```\n\n   tail\n",
-            "a\n  ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             5,
             "the band",
         ),
         (
             ":: t\n:  d\n\n       ```\n       a\n      ```\n\n   tail\n",
-            "a\n   ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             6,
             "the band",
         ),
@@ -379,7 +379,7 @@ fn a_fence_in_a_quoted_list_item_closes_at_two_columns() {
         ),
         (
             "> - item\n>\n>     ```\n>     a\n>    ```\n>   \n>   tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             3,
             "the band",
         ),
@@ -409,19 +409,19 @@ fn a_fence_in_a_quoted_list_item_closes_at_two_columns() {
         ),
         (
             "> - item\n>\n>       ```\n>       a\n>    ```\n>   \n>   tail\n",
-            "a\n ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             3,
             "the band",
         ),
         (
             "> - item\n>\n>       ```\n>       a\n>     ```\n>   \n>   tail\n",
-            "a\n  ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             4,
             "the band",
         ),
         (
             "> - item\n>\n>       ```\n>       a\n>      ```\n>   \n>   tail\n",
-            "a\n   ```\n\ntail\n",
+            "a\n```\n\ntail\n",
             5,
             "the band",
         ),
@@ -446,16 +446,16 @@ fn a_fence_in_a_quoted_list_item_closes_at_two_columns() {
     ]);
 }
 
-/// The base dedent is ALL OR NOTHING. A payload line that does not reach the
-/// base keeps every column past the container's; one that reaches it keeps only
-/// what sits past the base. Content column 2, base 8.
+/// Payload is measured from the base. A line that does not reach it loses its
+/// whole available prefix; one that reaches it keeps only what sits past the
+/// base. Content column 2, base 8.
 #[test]
-fn a_payload_line_below_the_base_keeps_its_container_residue() {
+fn a_payload_line_below_the_base_loses_its_prefix() {
     let html = both_paths("- item\n\n        ```\n  a\n   b\n    c\n     d\n      e\n       f\n        g\n         h\n          i\n        ```\n");
     let verbatim = html
         .split_once("<pre><code>")
         .and_then(|(_, rest)| rest.split_once("</code></pre>"))
         .map(|(verbatim, _)| verbatim)
         .expect("verbatim block");
-    assert_eq!(verbatim, "a\n b\n  c\n   d\n    e\n     f\ng\n h\n  i\n");
+    assert_eq!(verbatim, "a\nb\nc\nd\ne\nf\ng\n h\n  i\n");
 }

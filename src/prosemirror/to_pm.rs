@@ -496,6 +496,11 @@ impl Renderer {
         }
         let mut rows = Vec::new();
         for row in &table.rows {
+            if row.continuation_lines.is_some() {
+                // A `+` line with no content leaves no marker, and its loss is
+                // the same boundary the schema map declares for `cell_wrap`.
+                self.degrade("cell_wrap");
+            }
             let cells = row
                 .cells
                 .iter()
@@ -673,6 +678,10 @@ impl Renderer {
             }
             InlineNode::SoftBreak(_) => {
                 self.degrade("soft_break");
+                self.push_text(out, " ", marks);
+            }
+            InlineNode::CellWrap(_) => {
+                self.degrade("cell_wrap");
                 self.push_text(out, " ", marks);
             }
             InlineNode::HardBreak(_) => {
@@ -1365,6 +1374,7 @@ fn push_plain_text(nodes: &[InlineNode], out: &mut String) {
         match node {
             InlineNode::Text(t) => out.push_str(&t.value),
             InlineNode::NonBreakingSpace(_) => out.push('\u{00a0}'),
+            InlineNode::CellWrap(_) => out.push(' '),
             InlineNode::EscapedText(t) => out.push_str(&t.value),
             InlineNode::SmartPunctuation(t) => out.push_str(smart_punctuation_glyph(t)),
             InlineNode::Code(c) => out.push_str(&c.value),
