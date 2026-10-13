@@ -5265,21 +5265,24 @@ mod tests {
 
     #[test]
     fn image_reference_child_text() {
-        let cases: serde_json::Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/djot-image-reference-child-text.json"
-        ))
-        .unwrap();
         let alt = cached_regex!(r#"<img\b[^>]*\balt="([^"]*)""#).unwrap();
-        for case in cases.as_array().unwrap() {
-            let source = case["source"].as_str().unwrap();
-            let imported = djot_to_carve(source);
-            let html = crate::to_html(&imported);
-            let actual = alt.captures(&html).map(|capture| capture[1].to_owned());
-            assert_eq!(
-                actual.as_deref(),
-                case["alt"].as_str(),
-                "{source}\n{imported}"
-            );
+        for fixture in [
+            include_str!("../tests/fixtures/djot-image-reference-child-text.json"),
+            include_str!("../tests/fixtures/djot-image-reference-hard-breaks.json"),
+        ] {
+            let cases: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            for case in cases.as_array().unwrap() {
+                let source = case["source"].as_str().unwrap();
+                let imported = djot_to_carve(source);
+                let html = crate::to_html(&imported);
+                let actual = alt.captures(&html).map(|capture| capture[1].to_owned());
+                assert_eq!(
+                    actual.as_deref(),
+                    case["alt"].as_str(),
+                    "{}\n{source}\n{imported}",
+                    case["name"]
+                );
+            }
         }
     }
 
@@ -7143,7 +7146,10 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
         }
         let destination = djot_destination_lines(&raw_destination, owner.depth);
         let pipe_target = rows.get(line) == Some(&true) && destination.contains('|');
-        if owner.image && label.contains(&b'[') {
+        if owner.image
+            && !source[owner.at + 1..owner.label_end].contains('\n')
+            && label.contains(&b'[')
+        {
             let raw = String::from_utf8(label).expect("image labels preserve UTF-8");
             let raw = remove_inherited_attribute_markers(&raw, inherited);
             let definitions = cached_regex!(r"\[(carve-djot-pipe-target-[0-9]+)\]")
