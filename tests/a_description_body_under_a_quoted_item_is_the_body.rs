@@ -94,16 +94,16 @@ fn a_line_carrying_its_own_marker_answers_the_same_way() {
     );
 }
 
-/// Two quote markers. The OUTER quote declines the line - at its level the
-/// item is behind another `>` and no content column is visible - and the
-/// INNER one, whose lines carry no further marker, strips it to the same
-/// place. That is why this reader needs no quote-marker walk of its own.
+/// Two quote markers. The OUTER quote folds the line and hands it down flush,
+/// and to the INNER quote a flush-left `: ` ends the open term (CARVE-P2-028),
+/// so the line stays in the outer quote as text. The layout checker at carve
+/// `ab887d86` reads it this way.
 #[test]
 fn a_deeper_quote_answers_the_same_way() {
     assert_html(
         "> > - :: t\n      :  a\ntail\n",
-        "<blockquote><blockquote><ul><li><dl><dt>t</dt><dd>a tail</dd></dl></li>\
-         </ul></blockquote></blockquote>",
+        "<blockquote><blockquote><ul><li><dl><dt>t</dt></dl></li>\
+         </ul></blockquote><p>: a tail</p></blockquote>",
     );
 }
 

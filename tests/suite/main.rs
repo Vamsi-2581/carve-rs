@@ -158,6 +158,8 @@ mod a_code_blocks_last_newline_is_its_terminator;
 mod a_code_blocks_nbsp_sentinel_is_resolved;
 #[path = "../a_code_span_closer_is_searched_across_the_block.rs"]
 mod a_code_span_closer_is_searched_across_the_block;
+#[path = "../a_code_span_list_continuation_is_written_bare.rs"]
+mod a_code_span_list_continuation_is_written_bare;
 #[path = "../a_colon_container_keeps_a_band_payload_at_its_column.rs"]
 mod a_colon_container_keeps_a_band_payload_at_its_column;
 #[path = "../a_colon_fence_container_owns_a_link_def_past_its_column.rs"]
@@ -326,6 +328,8 @@ mod a_figures_target_keeps_its_own_attributes;
 mod a_flag_shaped_hyphen_run_is_literal;
 #[path = "../a_flatten_preserves_the_boundary_it_dissolves.rs"]
 mod a_flatten_preserves_the_boundary_it_dissolves;
+#[path = "../a_flush_left_description_ends_a_quoted_term.rs"]
+mod a_flush_left_description_ends_a_quoted_term;
 #[path = "../a_flush_left_opener_ends_a_description_body.rs"]
 mod a_flush_left_opener_ends_a_description_body;
 #[path = "../a_folded_lazy_line_leaves_the_container_open.rs"]
@@ -472,6 +476,8 @@ mod a_raw_bracketed_run_is_written_as_authored;
 mod a_raw_kept_element_reports_its_descendants_attributes;
 #[path = "../a_raw_span_ending_a_line_in_whitespace_is_degraded.rs"]
 mod a_raw_span_ending_a_line_in_whitespace_is_degraded;
+#[path = "../roundtrip_import_consumes_an_invalid_span_carrier.rs"]
+mod roundtrip_import_consumes_an_invalid_span_carrier;
 
 #[path = "../a_raw_span_ends_at_the_tag_it_recognized.rs"]
 mod a_raw_span_ends_at_the_tag_it_recognized;

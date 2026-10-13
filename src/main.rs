@@ -265,8 +265,11 @@ fn main() -> ExitCode {
                 Some("carrier-attribute-dropped") => {
                     allowed_render_losses.push("carrier-attribute-dropped")
                 }
+                Some("definition-list-flattened") => {
+                    allowed_render_losses.push("definition-list-flattened")
+                }
                 _ => {
-                    eprintln!("carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened or carrier-attribute-dropped");
+                    eprintln!("carve: --allow-loss expects raw-format-dropped, ruby-flattened, editorial-comment-flattened, carrier-attribute-dropped or definition-list-flattened");
                     return ExitCode::from(2);
                 }
             },
@@ -1743,7 +1746,8 @@ fn print_usage() {
          --strict-losses             refuse output when rendering loses content or structure\n  \
          --report-losses FILE        write JSON loss report (`-` for stderr)\n  \
          --allow-loss CODE          accept raw-format-dropped, ruby-flattened,\n                              \
-         editorial-comment-flattened or carrier-attribute-dropped\n  \
+         editorial-comment-flattened, carrier-attribute-dropped\n                              \
+         or definition-list-flattened\n  \
          --max-render-losses N       bound detailed losses (default 100)\n\n\
          --include-root DIR          containment root for {{ path }} includes.\n                              \
          Defaults to the input file's directory; pass this to widen\n                              \
