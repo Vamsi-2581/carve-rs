@@ -119,6 +119,7 @@ struct Item {
     content: usize,
     quotes: usize,
     deepest: usize,
+    marker_line_note: bool,
 }
 struct Fence {
     first: usize,
@@ -160,6 +161,7 @@ pub(super) fn collect(
     )
     .unwrap();
     let colon = regex::Regex::new(r"^(:{3,})(?:[ \t]|$)").unwrap();
+    let note_marker = regex::Regex::new(r"^\[\^[^\]\r\n]+\]:").unwrap();
     while let Some((block, depth)) = blocks.pop() {
         let pos = block_pos(block);
         if let Some(pos) = pos {
@@ -265,6 +267,7 @@ pub(super) fn collect(
                     deepest += visual(&m[1]) + m[2].chars().count() + m[4].len();
                     rest = &rest[m.get(0).unwrap().end()..];
                 }
+                let marker_tail = &row.text[at + m.get(0).unwrap().end()..];
                 items.push(Item {
                     first: p.start_line,
                     last: p.end_line,
@@ -272,6 +275,7 @@ pub(super) fn collect(
                     content,
                     quotes: row.text[..at].matches('>').count(),
                     deepest,
+                    marker_line_note: note_marker.is_match(marker_tail),
                 });
             }
         }
@@ -453,6 +457,30 @@ pub(super) fn collect(
         }
         if folded.contains(&ln) || column == 0 || !block_opener.is_match(view) {
             continue;
+        }
+        if let Some(note) = containing
+            .filter(|item| item.marker_line_note && column == item.content + 2)
+            .filter(|_| {
+                rows[..index]
+                    .iter()
+                    .rev()
+                    .find(|previous| !previous.text.trim().is_empty())
+                    .is_some_and(|previous| {
+                        let (previous_view, previous_at) =
+                            quoted_view(previous.text, owner.map_or(0, |item| item.quotes));
+                        previous_view.starts_with("%%")
+                            && visual(&previous.text[..previous_at]) == column
+                    })
+            })
+        {
+            if let Some(ch) = view.chars().next().filter(|ch| matches!(ch, '`' | '~')) {
+                open_fence = Some((
+                    note.first,
+                    ch,
+                    view.chars().take_while(|c| *c == ch).count(),
+                ));
+                continue;
+            }
         }
         if owner.is_some_and(|i| i.deepest > i.content && i.deepest == column) {
             continue;
