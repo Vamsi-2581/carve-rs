@@ -31440,3 +31440,7 @@ mod named_colon_rebase_work {
         }
     }
 }
+
+pub(crate) fn carrier_next_is_list_marker(line: &str) -> bool {
+    detect_list_marker_full(trim_ascii_start(line)).is_some()
+}

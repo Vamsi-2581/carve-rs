@@ -809,6 +809,16 @@ pub(crate) fn lift_carrier_markers(markdown: &str) -> CarrierLift {
                 // Fence placeholders share the body's paragraph so list hosts
                 // retain their content column without extra block separators.
                 out.push(format!("{}{token}{}Z", found.host, slots.len()));
+                if found.closer
+                    && lines.get(at + 1).is_some_and(|next| {
+                        let body = strip_host_prefix(next, &found.host);
+                        !body.trim().is_empty()
+                            && !body.starts_with("<!-- carve:")
+                            && !crate::parse::carrier_next_is_list_marker(body)
+                    })
+                {
+                    out.push(found.host.trim_end_matches([' ', '\t']).to_owned());
+                }
             } else {
                 out.push(format!(
                     "{}<!-- {token}{}Z{math} -->",
