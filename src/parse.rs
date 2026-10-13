@@ -17690,7 +17690,30 @@ fn collect_indented_block_mapped_with_columns(
         if comment_fence.is_none() {
             comment_fence_strip = None;
         }
-        let (mut sliced, consumed, synthetic) = slice_columns_mapped(payload_line, stripped, true);
+        let (sliced, consumed, synthetic) = slice_columns_mapped(payload_line, stripped, true);
+        // A tab left in a closer's indent after the slice would expand from the
+        // body's column 0, not its source column, and land the closer below
+        // its opener. Its columns are measured in the source (carve#3141).
+        let (sliced, consumed, synthetic) = match *fence {
+            Some(open)
+                if literal_colon.is_none()
+                    && stripped < indent
+                    && indent <= open.content_col
+                    && sliced[..sliced.len() - trim_ascii_start(&sliced).len()].contains('\t')
+                    && is_fence_close(trim_ascii_start(payload_line), open) =>
+            {
+                let lead = payload_line.len() - trim_ascii_start(payload_line).len();
+                let mut columns = " ".repeat(indent - stripped);
+                columns.push_str(&payload_line[lead..]);
+                (
+                    columns,
+                    payload_line[..lead].chars().count(),
+                    indent - stripped,
+                )
+            }
+            _ => (sliced, consumed, synthetic),
+        };
+        let mut sliced = sliced;
         if marker_colon_retained_para && indent < strip_cols {
             sliced = trim_ascii_start(&sliced).to_string();
         }
@@ -20159,7 +20182,7 @@ fn reparse_table_cell(cell: &mut TableCell, input: &CellInput, options: &Options
 
 /// T6 under a span: a continuation fragment on a `^` or `<` marker joins the
 /// cell the T5 walk resolves that marker into, in row-major order. A blocked
-/// marker renders empty and keeps none of it.
+/// marker is a cell of its own and keeps its fragments (carve#3151).
 fn join_marker_continuations(
     rows: &mut [TableRow],
     row_inputs: &mut [Vec<CellInput>],
@@ -20184,9 +20207,6 @@ fn join_marker_continuations(
         |origin, marker| absorbed.push((origin, marker)),
     );
     for (origin, marker) in absorbed {
-        if rows[origin.0].cells[origin.1].span.is_some() {
-            continue;
-        }
         let mut moved = std::mem::take(&mut row_inputs[marker.0][marker.1].extra);
         if moved.is_empty() {
             continue;
@@ -20204,10 +20224,6 @@ fn join_marker_continuations(
         }
     }
     for (r, c) in dirty {
-        if rows[r].cells[c].span.is_some() {
-            // The marker itself renders empty, whether or not its text moved.
-            row_inputs[r][c].extra.clear();
-        }
         reparse_table_cell(&mut rows[r].cells[c], &row_inputs[r][c], options);
     }
 }

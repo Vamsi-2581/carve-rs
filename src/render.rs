@@ -1154,7 +1154,7 @@ fn collect_footnotes_inline_scoped(
                 }
                 if let Some(inline) = &f.inline {
                     let number = order.len() + 1;
-                    let ref_id = format!("fnref{number}");
+                    let ref_id = authored_ref_id(f).unwrap_or_else(|| format!("fnref{number}"));
                     f.number = Some(number);
                     if assign_ref_ids {
                         f.ref_id = Some(ref_id.clone());
@@ -1197,11 +1197,15 @@ fn collect_footnotes_inline_scoped(
                 let number = idx + 1;
                 let occurrence = seen.entry(key).or_insert(0);
                 *occurrence += 1;
-                let ref_id = if *occurrence == 1 {
-                    format!("fnref{number}")
-                } else {
-                    format!("fnref{number}-{occurrence}")
-                };
+                // An authored id replaces the generated one, and the backlink
+                // follows it (PART 9 §16).
+                let ref_id = authored_ref_id(f).unwrap_or_else(|| {
+                    if *occurrence == 1 {
+                        format!("fnref{number}")
+                    } else {
+                        format!("fnref{number}-{occurrence}")
+                    }
+                });
                 f.number = Some(number);
                 if assign_ref_ids {
                     f.ref_id = Some(ref_id.clone());
@@ -1534,6 +1538,7 @@ fn render_backlinks(backrefs: &[String], options: &Options<'_>) -> String {
         return backrefs
             .iter()
             .map(|ref_id| {
+                let ref_id = crate::escape::escape_attr(ref_id);
                 format!("<a href=\"#{ref_id}\" role=\"doc-backlink\" aria-label=\"{name}\">↩</a>")
             })
             .collect();
@@ -1543,6 +1548,7 @@ fn render_backlinks(backrefs: &[String], options: &Options<'_>) -> String {
         .enumerate()
         .map(|(k, ref_id)| {
             let name = crate::escape::escape_attr(&format!("{label} {}", k + 1));
+            let ref_id = crate::escape::escape_attr(ref_id);
             format!(
                 "<a href=\"#{ref_id}\" role=\"doc-backlink\" aria-label=\"{name}\">↩<sup>{}</sup></a>",
                 k + 1
@@ -5514,4 +5520,8 @@ mod escaped_raw_block {
             "<pre><code class=\"language-latex\">\\emph{x}</code></pre>"
         );
     }
+}
+
+fn authored_ref_id(f: &crate::ast::Footnote) -> Option<String> {
+    f.attrs.as_ref()?.id.clone()
 }
