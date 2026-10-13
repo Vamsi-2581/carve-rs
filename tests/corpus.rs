@@ -885,7 +885,19 @@ fn expected_corpus_size() -> usize {
 /// Empty is the normal end state: the pin catching up is what retires an entry,
 /// and the `assert_ne!` in `check_pair` is what forces the deletion rather than
 /// leaving a declaration that no longer declares anything.
-const AHEAD_OF_PIN: &[(&str, &str, &str)] = &[];
+const AHEAD_OF_PIN: &[(&str, &str, &str)] = &[(
+    "107-colspan-marker-scans-left-past-a-consumed-cell",
+    "carve#3051: a `<` beside a cell that started in an earlier row is BLOCKED, so the span cannot overlap",
+    r#"<table>
+  <thead>
+    <tr><th scope="col">p</th><th scope="col">q</th><th scope="col">r</th><th scope="col">s</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>a</td><td rowspan="2">b</td><td>c</td><td>d</td></tr>
+    <tr><td>p</td><td></td><td>e</td></tr>
+  </tbody>
+</table>"#,
+)];
 
 /// Pairs this engine renders differently from the pinned corpus because it has
 /// not reached the rule yet - the mirror of [`AHEAD_OF_PIN`].
