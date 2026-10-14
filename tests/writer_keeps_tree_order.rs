@@ -119,6 +119,23 @@ fn a_main_file_definition_keeps_its_tree_slot_around_an_include() {
 }
 
 #[test]
+fn a_main_file_definition_before_an_include_keeps_its_source_place() {
+    let mut doc = carve::parse_with_options(
+        "[r]: /u\n\na\n\nincluded\n\nb\n",
+        &carve::Options::new().with_positions(true),
+    );
+    if let carve::ast::BlockNode::Paragraph(paragraph) = &mut doc.children[1] {
+        paragraph.pos.as_mut().unwrap().file = Some("included.crv".into());
+    }
+    let output = carve::render_markdown(&doc).unwrap();
+    let indices = ["[r]: /u", "a\n", "included", "b\n"].map(|text| output.find(text).unwrap());
+    assert!(
+        indices.windows(2).all(|pair| pair[0] < pair[1]),
+        "{output:?}"
+    );
+}
+
+#[test]
 fn ansi_blanks_a_denied_definition_destination() {
     let source = "Text.\n\n[y]: javascript:alert(3)\n";
     let output = carve::to_ansi(source);
