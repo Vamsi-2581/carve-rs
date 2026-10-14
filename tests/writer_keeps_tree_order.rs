@@ -93,6 +93,59 @@ fn a_definition_from_another_file_stays_at_its_tree_slot() {
 }
 
 #[test]
+fn a_main_file_definition_precedes_an_include_at_its_source_line() {
+    let mut doc = carve::parse_with_options(
+        "a\n\nincluded\n\nb\n\n[r]: /u\n",
+        &carve::Options::new().with_positions(true),
+    );
+    if let carve::ast::BlockNode::Paragraph(paragraph) = &mut doc.children[1] {
+        paragraph.pos.as_mut().unwrap().file = Some("included.crv".into());
+    }
+    let definition = doc
+        .children
+        .iter_mut()
+        .find_map(|block| match block {
+            carve::ast::BlockNode::LinkReferenceDefinition(def) => Some(def),
+            _ => None,
+        })
+        .unwrap();
+    definition.pos.as_mut().unwrap().start_offset = 3;
+    let output = carve::render_markdown(&doc).unwrap();
+    let indices = ["a\n", "[r]: /u", "included", "b\n"].map(|text| output.find(text).unwrap());
+    assert!(
+        indices.windows(2).all(|pair| pair[0] < pair[1]),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn a_definition_at_the_end_of_an_include_precedes_following_main_text() {
+    let mut doc = carve::parse_with_options(
+        "a\n\nincluded\n\nb\n\n[r]: /u\n",
+        &carve::Options::new().with_positions(true),
+    );
+    for block in &mut doc.children {
+        match block {
+            carve::ast::BlockNode::Paragraph(paragraph)
+                if paragraph.children.iter().any(|node| matches!(node, carve::ast::InlineNode::Text(text) if text.value == "included")) =>
+            {
+                paragraph.pos.as_mut().unwrap().file = Some("included.crv".into());
+            }
+            carve::ast::BlockNode::LinkReferenceDefinition(def) => {
+                def.pos.as_mut().unwrap().file = Some("included.crv".into());
+            }
+            _ => {}
+        }
+    }
+    let output = carve::render_markdown(&doc).unwrap();
+    let indices = ["a\n", "included", "[r]: /u", "b\n"].map(|text| output.find(text).unwrap());
+    assert!(
+        indices.windows(2).all(|pair| pair[0] < pair[1]),
+        "{output:?}"
+    );
+}
+
+#[test]
 fn ansi_blanks_a_denied_definition_destination() {
     let source = "Text.\n\n[y]: javascript:alert(3)\n";
     let output = carve::to_ansi(source);
@@ -110,11 +163,27 @@ fn markdown_and_plain_blank_a_denied_definition_destination() {
 }
 
 #[test]
+fn markdown_blanks_a_scheme_with_an_embedded_control() {
+    let mut doc = carve::parse("[y]: /safe\n");
+    let definition = doc
+        .children
+        .iter_mut()
+        .find_map(|block| match block {
+            carve::ast::BlockNode::LinkReferenceDefinition(def) => Some(def),
+            _ => None,
+        })
+        .unwrap();
+    definition.href = "java\u{1}script:alert(3)".into();
+    let output = carve::render_markdown(&doc).unwrap();
+    assert_eq!(output, "[y]: <>\n");
+}
+
+#[test]
 fn non_html_corpus_writer_rows_follow_their_clauses() {
     let rows: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/non-html-writer-output.json")).unwrap();
     let rows = rows.as_array().unwrap();
-    assert_eq!(rows.len(), 46);
+    assert_eq!(rows.len(), 47);
     for row in rows {
         let slug = row["slug"].as_str().unwrap();
         let source = std::fs::read_to_string(format!(

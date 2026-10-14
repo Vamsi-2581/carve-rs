@@ -219,6 +219,14 @@ fn a_thematic_break_uses_a_non_setext_marker() {
 }
 
 #[test]
+fn a_thematic_break_inside_a_transparent_div_cannot_become_setext() {
+    let source = "- a\n  :::\n  ---\n  :::\n";
+    let markdown = carve::to_markdown(source);
+    assert_eq!(markdown, "- a\n  ***\n");
+    assert!(reads_back_tight(source));
+}
+
+#[test]
 fn a_headerless_table_keeps_the_separator() {
     // A headerless table gets an empty header and its delimiter row (PART 11
     // §10n), which is what lets it open under the paragraph line like any

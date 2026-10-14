@@ -1190,9 +1190,12 @@ fn render_list_item(
             };
         }
         let non_setext = tight
-            && matches!(child, BlockNode::ThematicBreak(_))
+            && matches!(opening_block(child), BlockNode::ThematicBreak(_))
             && index > 0
-            && matches!(item.children[index - 1], BlockNode::Paragraph(_));
+            && matches!(
+                closing_block(&item.children[index - 1]),
+                BlockNode::Paragraph(_)
+            );
         let previous_thematic = std::mem::replace(&mut ctx.thematic_after_paragraph, non_setext);
         let rendered = render_block(child, ctx, depth);
         ctx.thematic_after_paragraph = previous_thematic;
@@ -1361,6 +1364,16 @@ fn opening_block(node: &BlockNode) -> &BlockNode {
         }
         match div.children.first() {
             Some(first) => node = first,
+            None => break,
+        }
+    }
+    node
+}
+
+fn closing_block(mut node: &BlockNode) -> &BlockNode {
+    while let BlockNode::Div(div) = node {
+        match div.children.last() {
+            Some(last) => node = last,
             None => break,
         }
     }

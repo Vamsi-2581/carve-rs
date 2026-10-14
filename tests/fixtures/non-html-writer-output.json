@@ -228,5 +228,10 @@
     "slug": "566-an-opener-past-a-hosted-container-s-column-opens-there-5",
     "target": "markdown",
     "expected": "- outer\n  - para\n  ---\n  ```\n  ```\n"
+  },
+  {
+    "slug": "108-security-hardening-12",
+    "target": "plain",
+    "expected": "Text.\n\n[x]: /u\n\n[y]:\n"
   }
 ]
