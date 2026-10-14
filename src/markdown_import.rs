@@ -2084,7 +2084,8 @@ impl Builder {
                         .trim_start_matches([' ', '\t'])
                         .chars()
                         .next()
-                        .unwrap_or('-')
+                        .filter(|marker| *marker != '+')
+                        .unwrap_or('*')
                 }),
                 items: Vec::new(),
                 tight: true,
@@ -3336,6 +3337,21 @@ mod tests {
         assert_eq!(markdown_to_carve("- a\n- b"), "- a\n- b\n");
         assert!(markdown_to_carve("- a\n  - b").contains("- b"));
         assert_eq!(markdown_to_carve("1. a\n2. b"), "1. a\n2. b\n");
+    }
+
+    #[test]
+    fn a_changed_markdown_bullet_remains_a_second_list() {
+        let value = markdown_to_carve("- x\n+ y\n");
+        assert_eq!(value, "- x\n\n* y\n");
+        assert_eq!(
+            crate::to_html(&value),
+            "<ul>\n  <li>x</li>\n</ul>\n<ul>\n  <li>y</li>\n</ul>"
+        );
+        let value = markdown_to_carve("* x\n+ y\n");
+        assert_eq!(
+            crate::to_html(&value),
+            "<ul>\n  <li>x</li>\n</ul>\n<ul>\n  <li>y</li>\n</ul>"
+        );
     }
 
     #[test]
