@@ -3021,39 +3021,14 @@ fn render_table(session: &RenderSession, node: &Table, ctx: &mut CarveContext) -
             // cell to carry it and keeps its own marker.
             let suppress_align =
                 row_index == 0 && authored_widths.is_some_and(|widths| cell_index < widths.len());
-            let mut rendered = render_table_cell(session, cell, ctx, mark_header, suppress_align);
-            // A hard break in a cell is dropped as an ignored break, so it is no text.
-            let has_text = cell
-                .children
-                .iter()
-                .any(|child| !matches!(child, crate::ast::InlineNode::HardBreak(_)));
-            if cell.span.is_some() && has_text {
-                if row.continuation_lines.unwrap_or(0) == 0 {
-                    crate::render_carve_error::record_unspellable(
-                        "table_cell",
-                        "a span cell with text needs a continuation line",
-                    );
-                }
-                let mut text_cell = cell.clone();
-                text_cell.span = None;
-                let text = render_table_cell(session, &text_cell, ctx, false, false);
-                // The text goes back on the `+` line it was written on.
-                let lines = row.continuation_lines.unwrap_or(0);
-                let first = cell
-                    .children
-                    .iter()
-                    .find_map(|child| child.pos().map(|pos| pos.start_line));
-                let line = match (first, row.pos.as_ref()) {
-                    (Some(first), Some(row_pos))
-                        if first > row_pos.start_line && first - row_pos.start_line <= lines =>
-                    {
-                        first - row_pos.start_line
-                    }
-                    _ => 1,
-                };
-                rendered.push_str(&format!("\u{2}0,{line},0\u{3}"));
-                rendered.push_str(text.trim());
-            }
+            let rendered = render_table_cell(
+                session,
+                cell,
+                ctx,
+                mark_header,
+                suppress_align,
+                row.continuation_lines.unwrap_or(0) > 0,
+            );
             match place_cell_wraps(
                 &rendered,
                 cell.span.is_some(),
@@ -3305,6 +3280,7 @@ fn render_table_cell(
     ctx: &mut CarveContext,
     mark_header: bool,
     suppress_align: bool,
+    has_continuations: bool,
 ) -> String {
     if cell.blocks.is_some() && !cell.children.is_empty() {
         crate::render_carve_error::record_unspellable(
@@ -3330,7 +3306,22 @@ fn render_table_cell(
         } else {
             "<"
         };
-        return pad_cell(&attrs, marker);
+        let own = pad_cell(&attrs, marker);
+        if cell.children.is_empty() || !has_continuations {
+            return own;
+        }
+        // A blocked marker keeps its continuation in its own cell. Its first
+        // fragment has no cell_wrap node because the marker has no inline
+        // content on the ordinary row; place it on continuation line one.
+        ctx.table_cell_depth += 1;
+        let content = render_inlines(session, &cell.children, ctx);
+        ctx.table_cell_depth -= 1;
+        let first_wrap = if matches!(cell.children.first(), Some(InlineNode::CellWrap(_))) {
+            ""
+        } else {
+            "\u{2}0,1,0\u{3}"
+        };
+        return format!("{own}{first_wrap}{content}");
     }
     let align = if suppress_align {
         ""

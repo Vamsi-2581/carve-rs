@@ -20647,7 +20647,7 @@ fn parse_cell_content(
     let mut breaks = Vec::new();
     let mut wraps = Vec::new();
     for fragment in extra {
-        if !text.is_empty() {
+        if !text.is_empty() || fragment.line > 1 {
             wraps.push((
                 text.len(),
                 CellWrap {
@@ -20662,15 +20662,24 @@ fn parse_cell_content(
             // the next segment on it instead puts the exclusive end of a span
             // that stops just short of it into the following segment, and every
             // node at the end of a fragment loses its position.
-            text.push(' ');
+            if !text.is_empty() {
+                text.push(' ');
+            }
         }
         breaks.push(text.len());
         text.push_str(&fragment.text);
         lines.push(fragment.anchor);
     }
+    let leading_wrap = wraps
+        .first()
+        .filter(|(offset, _)| *offset == 0)
+        .map(|(_, wrap)| wrap.clone());
     let outer = CELL_WRAPS.with(|cell| cell.replace(wraps));
-    let parsed = parse_inline_segments_with_anchor(&text, options, lines, breaks);
+    let mut parsed = parse_inline_segments_with_anchor(&text, options, lines, breaks);
     CELL_WRAPS.with(|cell| cell.replace(outer));
+    if let Some(wrap) = leading_wrap {
+        parsed.insert(0, InlineNode::CellWrap(wrap));
+    }
     parsed
 }
 
