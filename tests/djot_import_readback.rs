@@ -42,6 +42,14 @@ fn multiline_attributes_attach_to_the_following_quote() {
         carve::to_html(&value),
         "<blockquote attr=\"long value spanning multiple lines\"><p>a</p></blockquote>"
     );
+    assert_eq!(
+        carve::djot_to_carve("> {\n>  a=\"x\n>  y\"\n>  }\n> > q\n"),
+        "> {a=\"x y\"}\n> > q\n"
+    );
+    assert_eq!(
+        carve::djot_to_carve("- x\n\n  {\n   a=\"x\n   y\"\n   }\n  > q\n"),
+        "{loose}\n- x\n\n  {a=\"x y\"}\n  > q\n"
+    );
 }
 
 /// Djot attaches an attribute line with no block after it to nothing, so the importer
