@@ -2182,5 +2182,8 @@ mod djot_definition_boundaries;
 #[path = "../djot_container_definitions.rs"]
 mod djot_container_definitions;
 
+#[path = "../djot_image_deletion.rs"]
+mod djot_image_deletion;
+
 #[path = "../djot_definition_interruptions.rs"]
 mod djot_definition_interruptions;
