@@ -3017,7 +3017,14 @@ fn render_table(session: &RenderSession, node: &Table, ctx: &mut CarveContext) -
             // cell to carry it and keeps its own marker.
             let suppress_align =
                 row_index == 0 && authored_widths.is_some_and(|widths| cell_index < widths.len());
-            let rendered = render_table_cell(session, cell, ctx, mark_header, suppress_align);
+            let rendered = render_table_cell(
+                session,
+                cell,
+                ctx,
+                mark_header,
+                suppress_align,
+                row.continuation_lines.unwrap_or(0) > 0,
+            );
             match place_cell_wraps(&rendered, row_index, cell_index, &mut continuations) {
                 Ok(own) => cells.push(own),
                 Err(reason) => {
@@ -3243,6 +3250,7 @@ fn render_table_cell(
     ctx: &mut CarveContext,
     mark_header: bool,
     suppress_align: bool,
+    has_continuations: bool,
 ) -> String {
     if cell.blocks.is_some() && !cell.children.is_empty() {
         crate::render_carve_error::record_unspellable(
@@ -3269,7 +3277,7 @@ fn render_table_cell(
             "<"
         };
         let own = pad_cell(&attrs, marker);
-        if cell.children.is_empty() {
+        if cell.children.is_empty() || !has_continuations {
             return own;
         }
         // A blocked marker keeps its continuation in its own cell. Its first
@@ -3278,7 +3286,12 @@ fn render_table_cell(
         ctx.table_cell_depth += 1;
         let content = render_inlines(session, &cell.children, ctx);
         ctx.table_cell_depth -= 1;
-        return format!("{own}\u{2}0,1\u{3}{content}");
+        let first_wrap = if matches!(cell.children.first(), Some(InlineNode::CellWrap(_))) {
+            ""
+        } else {
+            "\u{2}0,1\u{3}"
+        };
+        return format!("{}{first_wrap}{content}", own.trim_end());
     }
     let align = if suppress_align {
         ""

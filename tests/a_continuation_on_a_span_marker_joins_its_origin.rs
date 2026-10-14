@@ -126,3 +126,11 @@ fn blocked_markers_keep_their_continuations_when_formatted() {
         assert_eq!(carve::to_carve(&formatted), formatted, "{source}");
     }
 }
+
+#[test]
+fn blocked_marker_continuation_keeps_its_line() {
+    let source = "| ^ | b |\n+   | y |\n+ z | w |\n";
+    let formatted = "| ^ | b |\n+ | y |\n+ z | w |\n";
+    assert_eq!(carve::to_carve(source), formatted);
+    assert_eq!(carve::to_carve(formatted), formatted);
+}
