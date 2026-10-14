@@ -106,3 +106,31 @@ fn a_marker_widening_a_blocked_cell_joins_its_fragment() {
         "<table>\n  <tbody>\n    <tr><td colspan=\"2\">x y</td></tr>\n  </tbody>\n</table>"
     );
 }
+
+#[test]
+fn blocked_markers_keep_their_continuations_when_formatted() {
+    let cases = [
+        "| a | b |\n| < | c |\n+ x | y |\n",
+        "| ^ | b |\n+ x | y |\n",
+        "| a | < |\n| ^ | b |\n+ x | y |\n",
+        "| a | b |\n| ^ | c |\n| < | d |\n+ x | y |\n",
+        "| ^ | < |\n+ x | y |\n",
+    ];
+    for source in cases {
+        let formatted = carve::to_carve(source);
+        assert_eq!(
+            carve::to_html(&formatted),
+            carve::to_html(source),
+            "{source}"
+        );
+        assert_eq!(carve::to_carve(&formatted), formatted, "{source}");
+    }
+}
+
+#[test]
+fn blocked_marker_continuation_keeps_its_line() {
+    let source = "| ^ | b |\n+   | y |\n+ z | w |\n";
+    let formatted = "| ^ | b |\n+ | y |\n+ z | w |\n";
+    assert_eq!(carve::to_carve(source), formatted);
+    assert_eq!(carve::to_carve(formatted), formatted);
+}
