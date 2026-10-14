@@ -1558,7 +1558,10 @@ fn render_table(node: &Table, ctx: &mut MarkdownContext) -> String {
                     Some(blocks) => {
                         crate::render_plain::flatten_cell_block_inlines_with(blocks, true)
                     }
-                    None => crate::render_plain::flatten_cell_inlines(&cell.children, true),
+                    None => crate::render_plain::flatten_cell_inlines(
+                        crate::ast::visible_table_cell_children(&cell.children),
+                        true,
+                    ),
                 };
                 ctx.single_line_depth += 1;
                 let roundtrip = ctx.roundtrip;
@@ -2074,9 +2077,6 @@ fn render_recorded_inlines(
     let mut parts: Vec<String> = Vec::with_capacity(nodes.len());
     for node in nodes {
         parts.push(render_inline(node, ctx, depth));
-    }
-    if matches!(nodes.first(), Some(InlineNode::CellWrap(_))) {
-        parts[0].clear();
     }
     let has_content = |part: &str| {
         visible_inline(part)

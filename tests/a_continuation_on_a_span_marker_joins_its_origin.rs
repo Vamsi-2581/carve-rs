@@ -146,3 +146,13 @@ fn a_later_first_fragment_has_no_leading_space() {
         assert!(carve::to_markdown(source).contains("| z |"), "{source}");
     }
 }
+
+#[test]
+fn a_wrap_at_the_start_of_a_link_still_separates_text() {
+    let source = "| see[ |\n+ docs](u) |\n";
+    assert!(
+        carve::to_html(source).contains("see<a href=\"u\"> docs</a>"),
+        "{}",
+        carve::to_html(source)
+    );
+}

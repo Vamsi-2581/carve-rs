@@ -213,7 +213,9 @@ pub(crate) fn flatten_cell_block_inlines_with(
             for cell in row.cells.iter().rev() {
                 match &cell.blocks {
                     Some(blocks) => push_blocks(pending, blocks),
-                    None => pending.push(Part::Inlines(&cell.children)),
+                    None => pending.push(Part::Inlines(crate::ast::visible_table_cell_children(
+                        &cell.children,
+                    ))),
                 }
             }
         }
@@ -609,7 +611,10 @@ fn render_table(node: &Table) -> String {
                 .iter()
                 .map(|cell| match &cell.blocks {
                     Some(blocks) => flatten_cell_blocks(blocks),
-                    None => trim_non_nbsp(&render_inlines(&cell.children)).to_string(),
+                    None => trim_non_nbsp(&render_inlines(
+                        crate::ast::visible_table_cell_children(&cell.children),
+                    ))
+                    .to_string(),
                 })
                 .collect::<Vec<_>>()
                 .join(" | "),
@@ -729,10 +734,7 @@ fn render_inlines_stateful(nodes: &[InlineNode], depth: usize) -> String {
         return String::new();
     }
     let mut out = String::new();
-    for node in nodes.iter().skip(usize::from(matches!(
-        nodes.first(),
-        Some(InlineNode::CellWrap(_))
-    ))) {
+    for node in nodes {
         out.push_str(&render_inline(node, depth));
     }
     out

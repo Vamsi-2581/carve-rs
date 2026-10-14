@@ -555,7 +555,10 @@ impl Renderer {
                         a.insert("carveCellBlocks".into(), Json::Bool(true));
                         self.blocks(blocks)
                     } else {
-                        self.inlines(&cell.children, &[])
+                        if matches!(cell.children.first(), Some(InlineNode::CellWrap(_))) {
+                            self.degrade("cell_wrap");
+                        }
+                        self.inlines(crate::ast::visible_table_cell_children(&cell.children), &[])
                     };
                     Some(node_with(name, a, content))
                 })
@@ -599,11 +602,7 @@ impl Renderer {
         for pair in nodes.windows(2) {
             self.note_merging_siblings(&pair[0], &pair[1]);
         }
-        for (index, node) in nodes.iter().enumerate() {
-            if index == 0 && matches!(node, InlineNode::CellWrap(_)) {
-                self.degrade("cell_wrap");
-                continue;
-            }
+        for node in nodes {
             self.inline(node, marks, &mut out);
         }
         out

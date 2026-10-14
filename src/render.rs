@@ -2883,7 +2883,12 @@ fn render_table_row(
         if let Some(blocks) = &cell.blocks {
             out.push_str(&render_blocks(blocks, 0, options, state));
         } else {
-            render_inlines(out, &cell.children, options, state);
+            render_inlines(
+                out,
+                crate::ast::visible_table_cell_children(&cell.children),
+                options,
+                state,
+            );
         }
         out.push_str("</");
         out.push_str(tag);
@@ -2950,7 +2955,12 @@ fn render_table_body_row(
         if let Some(blocks) = &cell.blocks {
             out.push_str(&render_blocks(blocks, 0, ctx.options, ctx.state));
         } else {
-            render_inlines(out, &cell.children, ctx.options, ctx.state);
+            render_inlines(
+                out,
+                crate::ast::visible_table_cell_children(&cell.children),
+                ctx.options,
+                ctx.state,
+            );
         }
         out.push_str("</");
         out.push_str(tag);
@@ -3738,10 +3748,7 @@ fn render_inlines_stateful(
         return;
     }
     state.inline_depth += 1;
-    for node in nodes.iter().skip(usize::from(matches!(
-        nodes.first(),
-        Some(InlineNode::CellWrap(_))
-    ))) {
+    for node in nodes {
         render_inline_after(out, node, options, state);
     }
     state.inline_depth -= 1;
