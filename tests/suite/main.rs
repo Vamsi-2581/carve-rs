@@ -2107,3 +2107,6 @@ mod precut_parser_bugs;
 
 #[path = "../precut_writer_bugs.rs"]
 mod precut_writer_bugs;
+
+#[path = "../djot_div_openers.rs"]
+mod djot_div_openers;
