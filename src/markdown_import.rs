@@ -2080,7 +2080,11 @@ impl Builder {
                     (digits > 0 && marker.as_bytes().get(digits) == Some(&b')')).then_some(')')
                 }),
                 bullet_char: start.is_none().then(|| {
-                    source.trim_start_matches([' ', '\t']).chars().next().unwrap_or('-')
+                    source
+                        .trim_start_matches([' ', '\t'])
+                        .chars()
+                        .next()
+                        .unwrap_or('-')
                 }),
                 items: Vec::new(),
                 tight: true,
