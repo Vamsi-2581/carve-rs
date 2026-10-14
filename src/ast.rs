@@ -1367,10 +1367,12 @@ pub struct VerbatimCellWrap {
     pub offset: usize,
     pub line: usize,
     pub row: Option<usize>,
+    pub col: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellWrap {
+    pub col: Option<usize>,
     /// The row's continuation line this part came from, counted from 1.
     pub line: usize,
     /// Rows down from the cell to the row holding that line, when the cell
