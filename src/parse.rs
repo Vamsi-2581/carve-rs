@@ -20139,6 +20139,7 @@ struct CellFragment {
     line: usize,
     /// Rows down from the receiving cell to that row (CARVE-P12-069).
     row: usize,
+    col: usize,
 }
 
 thread_local! {
@@ -20179,6 +20180,7 @@ fn verbatim_cell_wraps(
                 offset: 0,
                 line: wrap.line,
                 row: wrap.row,
+                col: wrap.col,
             });
         }
     }
@@ -20191,6 +20193,7 @@ fn verbatim_cell_wraps(
                 offset,
                 line: wrap.line,
                 row: wrap.row,
+                col: wrap.col,
             });
         }
     }
@@ -20200,6 +20203,7 @@ fn verbatim_cell_wraps(
                 offset: value.chars().count(),
                 line: wrap.line,
                 row: wrap.row,
+                col: wrap.col,
             });
         }
     }
@@ -20272,6 +20276,7 @@ fn join_marker_continuations(
         }
         for fragment in &mut moved {
             fragment.row += marker.0 - origin.0;
+            fragment.col += marker.1 - origin.1;
             // A row below the cell's own lies outside the cell's placed span.
             if marker.0 != origin.0 {
                 fragment.anchor = None;
@@ -20440,6 +20445,7 @@ fn collect_continuation_fragments(
                     anchor,
                     line: line_index + 1,
                     row: 0,
+                    col: 0,
                 });
             }
         }
@@ -20647,6 +20653,7 @@ fn parse_cell_content(
                 CellWrap {
                     line: fragment.line,
                     row: (fragment.row > 0).then_some(fragment.row),
+                    col: (fragment.col > 0).then_some(fragment.col),
                     pos: None,
                 },
             ));
