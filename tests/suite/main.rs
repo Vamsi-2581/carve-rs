@@ -2101,3 +2101,9 @@ mod djot_image_quote_child_text;
 
 #[path = "../djot_collapsed_image_keys.rs"]
 mod djot_collapsed_image_keys;
+
+#[path = "../precut_parser_bugs.rs"]
+mod precut_parser_bugs;
+
+#[path = "../precut_writer_bugs.rs"]
+mod precut_writer_bugs;

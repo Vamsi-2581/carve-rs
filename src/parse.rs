@@ -1469,6 +1469,10 @@ fn extract_footnote_defs(
     let mut previous_non_blank = "";
     let mut i = 0;
     while i < lines.len() {
+        let folded_fence = detect_fence_open(trim_ascii_start(lines[i])).is_some_and(|open| {
+            !closer_maxima.closes_after(i, open)
+                && prepass_paragraph_open_above(&lines, i, &[], &folded_into_term)
+        });
         // A footnote definition is collected at the top level AND from inside a
         // blockquote / bullet-list container: `> [^a]: body` and `- [^a]: body`
         // both stash the def and leave the container empty, matching carve-js
@@ -1482,6 +1486,7 @@ fn extract_footnote_defs(
         columns.observe(
             lines[i],
             in_fence.is_some()
+                || folded_fence
                 || verse_lines[i].is_body()
                 || in_comment_fence.is_some()
                 || prepass_quote_line_is_folded(&folded_into_term, i, lines[i]),
@@ -1843,7 +1848,7 @@ fn extract_footnote_defs(
                     if retained_below_comment
                         && column < body_indent
                         && !is_blank_line(line)
-                        && !item_block_opener(trim_ascii_start(line))
+                        && (column > 0 || !item_block_opener(trim_ascii_start(line)))
                     {
                         let kept = trim_ascii_start(line).to_owned();
                         def_line_map.push(Some(first_source_line + i));
@@ -3774,8 +3779,14 @@ fn prepass_fence_opens(
                         || indent_columns(previous) <= indent_columns(current))
             })
         });
+    let follows_colon_opener = index
+        .checked_sub(1)
+        .is_some_and(|above| detect_container_open(trim_ascii_start(lines[above])).is_some());
     PrepassFence {
-        opens: closer_ahead || terms.fence_openers.contains_key(&index) || !paragraph_above,
+        opens: closer_ahead
+            || terms.fence_openers.contains_key(&index)
+            || !paragraph_above
+            || follows_colon_opener,
         quote_columns,
         host_content_col: if inline_marker_fence {
             0
@@ -3956,6 +3967,10 @@ fn extract_link_defs_with_guard_full(
     // See `extract_footnote_defs`: the line the `after_term` gate asks about.
     let mut previous_non_blank = "";
     for (line_index, line) in all_lines.iter().copied().enumerate() {
+        let folded_fence = detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
+            !closer_maxima.closes_after(line_index, open)
+                && prepass_paragraph_open_above(&all_lines, line_index, &[], &folded_into_term)
+        });
         // Verse text is opaque: a line-block body line like `- verse` is not a
         // list marker, and letting it push a content column left the NEXT
         // top-level opener unprotected. A COMMENT body is opaque the same way,
@@ -3967,6 +3982,7 @@ fn extract_link_defs_with_guard_full(
         let content_col = columns.observe(
             line,
             in_fence.is_some()
+                || folded_fence
                 || verse_lines[line_index].is_body()
                 || in_comment_fence.is_some()
                 || prepass_quote_line_is_folded(&folded_into_term, line_index, line),
@@ -7375,7 +7391,7 @@ fn rebased_quote_end(lines: &[Cow<'_, str>], start: usize, base: usize) -> usize
 fn rebased_table_end(lines: &[Cow<'_, str>], start: usize, base: usize) -> usize {
     let mut end = start;
     for (j, candidate) in lines.iter().enumerate().skip(start + 1) {
-        if is_blank_line(candidate) || indent_columns(candidate) < base {
+        if is_blank_line(candidate) || indent_columns(candidate) != base {
             break;
         }
         let local = strip_leading_columns(candidate, base);
@@ -7858,6 +7874,7 @@ fn rebase_body_blocks(
                 continue;
             }
             if let Some(open) = detect_comment_fence_line(&lines[i]) {
+                let comment_at = i;
                 let close = entry_closers
                     .get_or_init(|| comment_closers_by_run(&lines))
                     .get(&open.fence_len)
@@ -7865,7 +7882,10 @@ fn rebase_body_blocks(
                 i = close.map_or(i + 1, |at| at + 1);
                 after_blank = false;
                 paragraph_open = false;
-                block_at_minimum = term_boundary;
+                block_at_minimum = term_boundary
+                    || (close.is_none()
+                        && !include_sublists
+                        && (block_at_minimum || comment_at == 0));
                 continue;
             }
             // Verse lines are inline content, including indented block markers.
@@ -8188,8 +8208,10 @@ fn rebase_body_blocks(
             // A comment reaching this frame closes its paragraph. A lower
             // comment preserves the owner established before it; the next
             // opener must still reach this frame to use that evidence.
-            block_at_minimum =
-                block_at_minimum || reaches_container || !is_line_comment_any_column(&lines[i]);
+            block_at_minimum = block_at_minimum
+                || reaches_container
+                || (i == 0 && source.item_marker_at_start)
+                || !is_line_comment_any_column(&lines[i]);
             i += 1;
             continue;
         }
@@ -8424,6 +8446,9 @@ fn definition_entry_extent(
             break;
         }
         let local = strip_leading_columns(candidate, base);
+        if term_open && column == base && caption_content(&local).is_some() {
+            break;
+        }
         let description = (column == base)
             .then(|| strip_definition_marker(&local))
             .flatten();
@@ -12058,7 +12083,6 @@ fn collect_blockquote_body(
                     && detect_list_marker_full(stripped).is_some()
                     && !para_open.get()
                     && detect_fence_open(innermost_marker_content(stripped)).is_none()
-                    && detect_container_open(innermost_marker_content(stripped)).is_none()
                     && !body_ends_with_open_paragraph(stripped, options);
                 para_open = if nested_item_closes {
                     ParaOpen::Closed
@@ -12189,6 +12213,7 @@ fn collect_blockquote_body(
         };
         if !(term_open || fenced_below.unwrap_or_else(|| para_open.get()))
             || is_blank_line(line)
+            || (term_open && detect_list_marker_full(line).is_some_and(|marker| marker.indent == 0))
             || caption_content(line).is_some()
             || {
                 let line_owned = line.to_string();
@@ -14078,34 +14103,55 @@ fn parse_list(
             while let Some(rest) = strip_blockquote_prefix(innermost) {
                 innermost = rest;
             }
-            let quote_holds_a_paragraph = body_ends_with_open_paragraph(marker.content, options)
+            let quote_holds_a_paragraph = (!innermost.trim().is_empty()
+                && body_ends_with_open_paragraph(marker.content, options))
                 || colon_fences_left_open(marker.content) > 0
                 || detect_fence_open(innermost).is_some()
                 || detect_comment_fence_line(innermost).is_some();
-            let continuation = collect_indented_block_mapped(
-                cur,
-                if quote_holds_a_paragraph {
-                    base_indent
-                } else {
-                    content_col.saturating_sub(1)
-                },
-                content_col,
-            );
-            if fence_after_quote && !continuation.source.is_empty() {
-                stream.push_newline_at(String::new(), None, None);
+            let below_empty_quote_marker = !quote_holds_a_paragraph
+                && cur.peek().is_some_and(|line| {
+                    detect_list_marker_full(line)
+                        .is_some_and(|next| next.indent < content_col.saturating_sub(1))
+                });
+            let nested_marker_at_floor = !quote_holds_a_paragraph
+                && cur.peek().is_some_and(|line| {
+                    detect_list_marker_full(line)
+                        .is_some_and(|next| next.indent == content_col.saturating_sub(1))
+                });
+            let mut continuation_has_content = false;
+            if !below_empty_quote_marker {
+                let continuation = collect_indented_block_mapped(
+                    cur,
+                    if quote_holds_a_paragraph || nested_marker_at_floor {
+                        base_indent
+                    } else {
+                        content_col.saturating_sub(1)
+                    },
+                    if nested_marker_at_floor {
+                        content_col.saturating_sub(1)
+                    } else {
+                        content_col
+                    },
+                );
+                if fence_after_quote && !continuation.source.is_empty() {
+                    stream.push_newline_at(String::new(), None, None);
+                }
+                continuation_has_content = !continuation.source.trim().is_empty();
+                stream.append(continuation);
             }
-            stream.append(continuation);
             let after_blank = cur.pos > 0 && is_blank_line(cur.lines.at(cur.pos - 1));
-            fold_lazy_run_and_resume(
-                cur,
-                &mut stream,
-                content_col,
-                |src, below| {
-                    !after_blank
-                        && nested_ends_with_open_paragraph_rebased(src, below, below, options)
-                },
-                |cur| collect_indented_block_mapped(cur, base_indent, content_col),
-            );
+            if quote_holds_a_paragraph || continuation_has_content {
+                fold_lazy_run_and_resume(
+                    cur,
+                    &mut stream,
+                    content_col,
+                    |src, below| {
+                        !after_blank
+                            && nested_ends_with_open_paragraph_rebased(src, below, below, options)
+                    },
+                    |cur| collect_indented_block_mapped(cur, base_indent, content_col),
+                );
+            }
             // A blank line between the item's blocks loosens the list, whatever
             // the marker-line lead happens to be. This branch and the two beside
             // it build their item and `continue` past the loosening test the
@@ -14133,9 +14179,10 @@ fn parse_list(
                     let indent = indent_columns(line);
                     !is_blank_line(line)
                         && trim_ascii(line) != "+"
-                        && detect_list_marker_full(line).is_none()
                         && indent > base_indent
                         && indent < content_col
+                        && (detect_list_marker_full(line).is_none()
+                            || indent < content_col.saturating_sub(1))
                 })
             {
                 break;
@@ -17666,13 +17713,8 @@ fn collect_indented_block_mapped_with_columns(
             _ if authored_code_base.is_some_and(|base| indent >= base) => {
                 authored_code_base.unwrap()
             }
-            // A line below the opener's base loses its available prefix.
-            _ if literal_colon.is_none()
-                && fence.is_some_and(|open| {
-                    indent < open.content_col
-                        && is_fence_close(trim_ascii_start(payload_line), open)
-                }) =>
-            {
+            // A payload line below the opener's base loses its available prefix.
+            _ if literal_colon.is_none() && fence.is_some_and(|open| indent < open.content_col) => {
                 indent
             }
             _ if lazy_code_line
@@ -18431,7 +18473,7 @@ fn interrupts_lazy_continuation(cur: &mut LineCursor<'_>, line: &str) -> bool {
     cur.in_item_body = false;
     let interrupts = interrupts_paragraph(cur, line);
     cur.in_item_body = saved;
-    interrupts || is_colon_fence_opener_shape(line) || caption_content(line).is_some()
+    interrupts || is_colon_fence_opener_shape(line)
 }
 
 fn interrupts_paragraph_as_container(cur: &mut LineCursor<'_>, line: &str) -> bool {
@@ -18614,6 +18656,7 @@ fn fold_term(
             || strip_lazy(next).strip_prefix(":: ").is_some()
             || strip_definition_marker(strip_lazy(next)).is_some()
             || is_list_marker(next)
+            || caption_content(next).is_some()
         {
             break;
         }
@@ -19769,7 +19812,7 @@ fn parse_table(cur: &mut LineCursor, options: &Options<'_>) -> BlockNode {
         // row it continues, below, so reaching one here means the row above did
         // not want it - after a delimiter row, where a continuation has only a
         // HEADER to attach to and the table ends instead.
-        if !is_table_start(line) {
+        if line.starts_with([' ', '\t']) || !is_table_start(line) {
             break;
         }
         let row_at = cur.pos;
@@ -19795,7 +19838,7 @@ fn parse_table(cur: &mut LineCursor, options: &Options<'_>) -> BlockNode {
         let mut conts: Vec<(&str, Option<(usize, isize)>)> = Vec::new();
         let mut last_cont_at = None;
         while let Some(next) = cur.peek() {
-            if !is_table_continuation(next) {
+            if next.starts_with([' ', '\t']) || !is_table_continuation(next) {
                 break;
             }
             let cont_at = cur.pos;
