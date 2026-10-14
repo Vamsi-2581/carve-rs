@@ -3268,7 +3268,17 @@ fn render_table_cell(
         } else {
             "<"
         };
-        return pad_cell(&attrs, marker);
+        let own = pad_cell(&attrs, marker);
+        if cell.children.is_empty() {
+            return own;
+        }
+        // A blocked marker keeps its continuation in its own cell. Its first
+        // fragment has no cell_wrap node because the marker has no inline
+        // content on the ordinary row; place it on continuation line one.
+        ctx.table_cell_depth += 1;
+        let content = render_inlines(session, &cell.children, ctx);
+        ctx.table_cell_depth -= 1;
+        return format!("{own}\u{2}0,1\u{3}{content}");
     }
     let align = if suppress_align {
         ""
