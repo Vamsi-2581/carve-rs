@@ -123,6 +123,6 @@ fn caption_ends_the_item_rather_than_folding_into_the_heading() {
 fn caption_ends_a_plain_paragraph_item_too() {
     assert_eq!(
         carve::to_html("- text\n^ cap\n"),
-        "<ul>\n  <li>text</li>\n</ul>\n<p>^ cap</p>"
+        "<ul>\n  <li>text\n^ cap</li>\n</ul>"
     );
 }

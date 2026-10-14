@@ -51,6 +51,7 @@ struct CarveContext {
     note_content_depth: usize,
     after_caption_host: bool,
     paragraph_starts_after_caption_host: bool,
+    in_caption: bool,
     /// Inside a definition term, where a comment opening a line keeps its
     /// separator instead of joining a `%`-leading content into a fence.
     in_term: bool,
@@ -1128,6 +1129,7 @@ fn render_with_escapes_once(
         note_content_depth: 0,
         after_caption_host: false,
         paragraph_starts_after_caption_host: false,
+        in_caption: false,
         in_term: false,
         at_item_content_column: false,
         item_paragraph: false,
@@ -1776,7 +1778,9 @@ fn caption_row(
     caption: &[InlineNode],
     ctx: &mut CarveContext,
 ) -> Option<String> {
+    let was_in_caption = std::mem::replace(&mut ctx.in_caption, true);
     let written = render_inlines(session, caption, ctx);
+    ctx.in_caption = was_in_caption;
     if writes_nothing(&written) {
         return None;
     }
@@ -4361,6 +4365,7 @@ fn render_inline_body(
                                     && render_inline_attrs(&code.attrs, ctx).is_empty(),
                                 ctx.in_term,
                                 line_block_closer_in(&value, ctx),
+                                ctx.in_caption,
                             )
                         ),
                         ctx,
@@ -5433,9 +5438,10 @@ fn guard_code_lines(
     // A list marker on a continuation line does not interrupt a paragraph, so
     // it stays bare unless the line would end an item, description or term.
     let marker = if ctx.in_term || ctx.item_paragraph {
-        MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|\[[^\]\n]+\]:[ \t]|[-*] +|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-z]|[A-Z])[.)] +)").unwrap())
+        MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|:{3,}|\[[^\]\n]+\]:[ \t]|[-*] +|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-z]|[A-Z])[.)] +)").unwrap())
     } else {
-        BLOCK_MARKER.get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|\[[^\]\n]+\]:[ \t])").unwrap())
+        BLOCK_MARKER
+            .get_or_init(|| regex::Regex::new(r"^(?:>(?: |$)|:{3,}|\[[^\]\n]+\]:[ \t])").unwrap())
     };
     written
         .split('\n')
@@ -5570,7 +5576,7 @@ fn render_code(content: &str, ctx: &CarveContext, node_type: &'static str) -> St
             "a prefixed or suffixed verbatim span cannot hide a line-block closer",
         );
     }
-    render_code_with_unclosed(content, false, ctx.in_term, false)
+    render_code_with_unclosed(content, false, ctx.in_term, false, ctx.in_caption)
 }
 
 fn render_code_with_unclosed(
@@ -5578,6 +5584,7 @@ fn render_code_with_unclosed(
     allow_unclosed: bool,
     in_term: bool,
     paired_fence: bool,
+    in_caption: bool,
 ) -> String {
     let normalized;
     let content = if content.contains('\r') {
@@ -5609,6 +5616,7 @@ fn render_code_with_unclosed(
     {
         Some("a line of the value ends in whitespace, which the block layer strips")
     } else if !in_term
+        && !in_caption
         && content
             .as_bytes()
             .windows(2)
