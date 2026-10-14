@@ -634,7 +634,13 @@ fn djot_image_label_child_text(
     preserve_source_nuls: bool,
 ) -> String {
     if let Some(inner) = simple_nested_image_label(label) {
-        return djot_image_label_child_text(inner, inherited, omit_quote_delimiters, nul_shielded);
+        return djot_image_label_child_text(
+            inner,
+            inherited,
+            omit_quote_delimiters,
+            nul_shielded,
+            preserve_source_nuls,
+        );
     }
     #[cfg(test)]
     IMAGE_LABEL_FULL_PARSES.with(|count| count.set(count.get() + 1));
