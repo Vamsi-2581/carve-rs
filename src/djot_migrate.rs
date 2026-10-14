@@ -120,7 +120,8 @@ fn convert_djot_document(
 ) -> String {
     let normalized = &stripped_definitions.source;
     let (frontmatter, separator, body) = split_frontmatter(normalized);
-    let table_attributes = escape_djot_table_attribute_boundaries(body);
+    let div_openers = normalize_djot_div_openers(body);
+    let table_attributes = escape_djot_table_attribute_boundaries(&div_openers);
     let body = table_attributes.as_ref();
     let early_references = if body.lines().any(|line| {
         cached_regex!(r"^\[([^\]\n]*)\]:")
@@ -3063,6 +3064,50 @@ fn list_marker(line: &str) -> bool {
             && marker[1..marker.len() - 1]
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric()))
+}
+
+fn normalize_djot_div_openers(source: &str) -> std::borrow::Cow<'_, str> {
+    if !source.contains(":::") {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let mut mask: Option<String> = None;
+    let mut boundaries: Option<HashSet<usize>> = None;
+    let opener = cached_regex!(r"^(:{3,})([ \t]*)([A-Za-z0-9_-]+)([ \t]*)(\r?)$").unwrap();
+    let mut changed = false;
+    let mut offset = 0;
+    let lines: Vec<_> = source
+        .split('\n')
+        .map(|line| {
+            let start = offset;
+            offset += line.len() + 1;
+            let at = djot_content_start(line);
+            let prefix = &line[..at];
+            if let Some(caps) = opener.captures(&line[at..]) {
+                if &caps[2] != " " {
+                    let mask = mask.get_or_insert_with(|| mask_code_and_destinations(source));
+                    let boundaries = boundaries.get_or_insert_with(|| {
+                        djot_inline_boundaries_with_code_scopes(source, mask, true)
+                            .into_iter()
+                            .collect()
+                    });
+                    if mask.as_bytes().get(start + at) == Some(&b':') && boundaries.contains(&start)
+                    {
+                        changed = true;
+                        return std::borrow::Cow::Owned(format!(
+                            "{}{} {}{}{}",
+                            prefix, &caps[1], &caps[3], &caps[4], &caps[5]
+                        ));
+                    }
+                }
+            }
+            std::borrow::Cow::Borrowed(line)
+        })
+        .collect();
+    if changed {
+        std::borrow::Cow::Owned(lines.join("\n"))
+    } else {
+        std::borrow::Cow::Borrowed(source)
+    }
 }
 
 fn convert_djot_block_markers(source: &str) -> String {
