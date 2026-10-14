@@ -279,7 +279,7 @@ fn convert_djot_document(
                     child_text_cache
                         .entry(format!("0:{normalized}"))
                         .or_insert_with(|| {
-                            djot_image_label_child_text(&normalized, &inherited, true, true)
+                            djot_image_label_child_text(&normalized, &inherited, true, true, true)
                         })
                         .trim_matches([' ', '\t', '\r', '\n']),
                     " ",
@@ -350,7 +350,7 @@ fn convert_djot_document(
         let plain = child_text_cache
             .entry(format!("1:{normalized_label}"))
             .or_insert_with(|| {
-                djot_image_label_child_text(&normalized_label, &inherited, true, true)
+                djot_image_label_child_text(&normalized_label, &inherited, true, true, false)
             });
         let plain = crate::render_carve::escape_image_alt(plain, in_table);
         let mut alt = String::new();
@@ -633,9 +633,16 @@ fn djot_image_label_child_text(
     inherited: &HashSet<String>,
     omit_quote_delimiters: bool,
     nul_shielded: bool,
+    preserve_source_nuls: bool,
 ) -> String {
     if let Some(inner) = simple_nested_image_label(label) {
-        return djot_image_label_child_text(inner, inherited, omit_quote_delimiters, nul_shielded);
+        return djot_image_label_child_text(
+            inner,
+            inherited,
+            omit_quote_delimiters,
+            nul_shielded,
+            preserve_source_nuls,
+        );
     }
     #[cfg(test)]
     IMAGE_LABEL_FULL_PARSES.with(|count| count.set(count.get() + 1));
@@ -645,7 +652,10 @@ fn djot_image_label_child_text(
     };
     let normalized = normalize::image_label_attributes(label);
     let label = normalized.as_str();
-    let (protected_label, scalars, scalar_prefix) = protect_image_alt_scalars(label);
+    let (protected_label, scalars, scalar_prefix) = protect_image_alt_scalars(
+        label,
+        preserve_source_nuls.then_some(if nul_shielded { "\0U\0" } else { "\0" }),
+    );
     let native = djot_to_carve_prepared_with_quotes(
         &strip_footnote_definition_attributes(&format!("DJOTALT {} DJOTEND", protected_label)),
         omit_quote_delimiters,
@@ -1073,10 +1083,11 @@ fn image_alt_layout(
     (normalized, continuations, valid)
 }
 
-fn protect_image_alt_scalars(label: &str) -> (String, Vec<String>, String) {
+fn protect_image_alt_scalars(label: &str, nul_key: Option<&str>) -> (String, Vec<String>, String) {
     let names = cached_regex!(r"DJOTALTSCALAR([0-9]+)Z").unwrap();
+    let projected: String = label.chars().filter(char::is_ascii_alphanumeric).collect();
     let reserved: HashSet<String> = names
-        .captures_iter(label)
+        .captures_iter(&projected)
         .map(|caps| caps[1].to_string())
         .collect();
     let mut serial = 0;
@@ -1201,6 +1212,14 @@ fn protect_image_alt_scalars(label: &str) -> (String, Vec<String>, String) {
             output.push_str(line);
         }
         offset += line.len() + 1;
+    }
+    // Reference keys retain NUL identity even though image text renders it as U+FFFD.
+    if let Some(value) = nul_key {
+        if output.contains(value) {
+            let token = format!("{prefix}{}Z", values.len());
+            values.push(value.to_string());
+            output = output.replace(value, &token);
+        }
     }
     (output, values, prefix)
 }

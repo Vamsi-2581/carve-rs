@@ -3303,6 +3303,12 @@ fn reference_label(text: &str, explicit: &str) -> String {
         return label(text);
     }
     let source = reference_labels_as_spans(&image_label_attributes(text));
+    let source = if source.contains('\0') {
+        let (attributes, inherited) = escape_invalid_djot_attributes(&source);
+        remove_inherited_attribute_markers(&attributes, &inherited)
+    } else {
+        source
+    };
     let converted =
         emphasis::convert_image_child(&source, &mask_code_and_destinations(&source), |text| {
             escape_plain_carve_syntax(text, HandledDelimiters::DJOT)
@@ -3311,6 +3317,16 @@ fn reference_label(text: &str, explicit: &str) -> String {
         smart_typography: crate::SmartTypographyMode::Source,
         ..Default::default()
     };
+    let nul_token = if converted.contains('\0') {
+        let occupied = crate::sentinel_run::occupied_private_use(&converted);
+        Some(crate::sentinel_run::pick_sentinel_run::<1>(&occupied, 0xe001)[0].to_string())
+    } else {
+        None
+    };
+    let converted = nul_token.as_ref().map_or_else(
+        || std::borrow::Cow::Borrowed(converted.as_str()),
+        |token| std::borrow::Cow::Owned(converted.replace('\0', token)),
+    );
     let nodes = crate::parse::parse_inline_with_options(&converted, &options);
     let mut pending: Vec<_> = nodes.iter().rev().collect();
     let mut text = String::new();
@@ -3340,6 +3356,9 @@ fn reference_label(text: &str, explicit: &str) -> String {
                 crate::SmartTypographyMode::Source,
             ));
         }
+    }
+    if let Some(token) = nul_token {
+        text = text.replace(&token, "\0");
     }
     definition_label(&text)
 }
@@ -3682,7 +3701,7 @@ pub(super) fn caret_references(
 }
 
 pub(super) fn reference_key_needs_alias(key: &str) -> bool {
-    key.bytes().any(|byte| b"`{^\\|[".contains(&byte))
+    key.bytes().any(|byte| b"`{^\\|[\0".contains(&byte))
         || key.bytes().any(|byte| b"_*~\"'<:".contains(&byte)) && reference_label(key, "") != key
 }
 
@@ -4446,7 +4465,8 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
             )),
             Some(_) if image && reference.text.contains('\n') => {
                 let projected = projected_reference_text(reference.text, reference.quote_depth);
-                let child = djot_image_label_child_text(&projected, &HashSet::new(), true, false);
+                let child =
+                    djot_image_label_child_text(&projected, &HashSet::new(), true, false, true);
                 if cached_regex!(r"\n[ \t]*\n").unwrap().is_match(&child) {
                     findings.push((
                         at,
@@ -4550,7 +4570,7 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
                 {
                     let projected = projected_reference_text(&source[start + 1..i], depth);
                     let child =
-                        djot_image_label_child_text(&projected, &HashSet::new(), true, false);
+                        djot_image_label_child_text(&projected, &HashSet::new(), true, false, true);
                     if cached_regex!(r"\n[ \t]*\n").unwrap().is_match(&child) {
                         findings.push((start, "An image alternative text with a blank line cannot be spelled in Carve."));
                     }
