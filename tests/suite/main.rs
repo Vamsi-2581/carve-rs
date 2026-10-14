@@ -2110,3 +2110,6 @@ mod precut_writer_bugs;
 
 #[path = "../djot_div_openers.rs"]
 mod djot_div_openers;
+
+#[path = "../djot_image_label_nuls.rs"]
+mod djot_image_label_nuls;
