@@ -5,6 +5,45 @@ use std::collections::BTreeSet;
 /// The `(term, expansion)` pairs whose expansion this render will emit.
 pub(crate) type ConsumedAbbreviations = BTreeSet<(String, String)>;
 
+/// Link definitions are collected at document scope, so their place in
+/// `children` can be later than the line that supplied them. Non-HTML writers
+/// emit unused definitions at that authored position.
+pub(crate) fn blocks_with_link_definitions_in_source_order(
+    blocks: &[BlockNode],
+) -> Vec<&BlockNode> {
+    let mut ordered: Vec<&BlockNode> = blocks
+        .iter()
+        .filter(
+            |block| !matches!(block, BlockNode::LinkReferenceDefinition(def) if def.pos.is_some()),
+        )
+        .collect();
+    let mut definitions: Vec<(usize, &BlockNode, &crate::ast::Pos)> = blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| match block {
+            BlockNode::LinkReferenceDefinition(def) => {
+                def.pos.as_ref().map(|pos| (index, block, pos))
+            }
+            _ => None,
+        })
+        .collect();
+    definitions.sort_by(|a, b| {
+        a.2.file
+            .cmp(&b.2.file)
+            .then(a.2.start_offset.cmp(&b.2.start_offset))
+            .then(a.0.cmp(&b.0))
+    });
+    for (_, definition, pos) in definitions {
+        let before = ordered.iter().position(|block| {
+            crate::ast_json::block_pos(block).is_some_and(|other| {
+                other.file == pos.file && other.start_offset > pos.start_offset
+            })
+        });
+        ordered.insert(before.unwrap_or(ordered.len()), definition);
+    }
+    ordered
+}
+
 /// Which abbreviation DEFINITIONS the plain-text and terminal targets drop.
 ///
 /// PART 11 §10f splits the referenced definition by target: Markdown keeps the

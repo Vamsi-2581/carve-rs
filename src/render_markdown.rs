@@ -225,6 +225,7 @@ fn render_markdown_once(
         suppress_automatic_abbreviation: false,
         heading_slugs,
         list_depth: 0,
+        tight_item: false,
         in_footnote: false,
         footnote_allowed_lists: HashSet::new(),
         list_item_opening_list: None,
@@ -239,7 +240,11 @@ fn render_markdown_once(
         delimiter_ancestors: Vec::new(),
         rendered_children: HashMap::new(),
     };
-    let out = render_blocks(&doc.children, &mut ctx, 0);
+    let out: String =
+        crate::render_text::blocks_with_link_definitions_in_source_order(&doc.children)
+            .into_iter()
+            .map(|block| render_block(block, &mut ctx, 0))
+            .collect();
     let footnotes = render_footnote_defs(doc, &mut ctx);
     let body = normalize(&format!("{out}{footnotes}"));
     let body = INLINE_CARRIER_PATTERN.with(|pattern| {
@@ -381,6 +386,7 @@ struct MarkdownContext {
     /// document assigned it (PART 11 §11).
     heading_slugs: HashMap<String, String>,
     list_depth: usize,
+    tight_item: bool,
     in_footnote: bool,
     footnote_allowed_lists: HashSet<usize>,
     list_item_opening_list: Option<usize>,
@@ -798,7 +804,9 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
             }
             out
         }
-        BlockNode::ThematicBreak(_) => "---\n\n".to_string(),
+        BlockNode::ThematicBreak(_) => {
+            if ctx.tight_item { "***\n\n" } else { "---\n\n" }.to_string()
+        }
         BlockNode::Table(table) => render_table(table, ctx),
         BlockNode::Admonition(admonition) => {
             if let Some(table) = list_table_as_table(admonition) {
@@ -1161,7 +1169,7 @@ fn render_list_item(
         return String::new();
     }
     let mut out = String::new();
-    for child in &item.children {
+    for (index, child) in item.children.iter().enumerate() {
         let outer_opening = ctx.list_item_opening_list;
         if out.is_empty() {
             ctx.list_item_opening_list = match child {
@@ -1169,13 +1177,19 @@ fn render_list_item(
                 _ => None,
             };
         }
+        let previous_tight = std::mem::replace(&mut ctx.tight_item, tight);
         let rendered = render_block(child, ctx, depth);
+        ctx.tight_item = previous_tight;
         ctx.list_item_opening_list = outer_opening;
         // Check the block that opens the rendered output through any div wrappers.
         let opener = opening_block(child);
         if tight
             && out.ends_with("\n\n")
-            && interrupts_a_paragraph(opener, &rendered)
+            && (interrupts_a_paragraph(opener, &rendered)
+                || matches!(opener, BlockNode::ThematicBreak(_))
+                || matches!(opener, BlockNode::Paragraph(_))
+                    && index > 0
+                    && matches!(item.children[index - 1], BlockNode::CodeBlock(_)))
             && !absorbs_below(&out, opener)
         {
             out.pop();

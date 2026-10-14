@@ -45,6 +45,53 @@ fn tight_in_source(source: &str) -> bool {
 }
 
 #[test]
+fn closed_blocks_keep_the_seven_corpus_lists_tight() {
+    let cases = [
+        (
+            "164-tight-list-item-keeps-trailing-text-after-a-block-bare",
+            "- item\n  ```\n  c\n  ```\n  tail\n",
+        ),
+        (
+            "361-a-paragraph-opened-after-a-block-in-an-item-is-still-open-for-a-lazy-line-3",
+            "- ```\n  c\n  ```\n  b\n  tail\n",
+        ),
+        (
+            "553-a-below-column-line-continues-a-paragraph-only-where-one-is-open-13",
+            "- a\n  - b\n    ```\n    ::: note\n    ```\n    text\n    lazy\n",
+        ),
+        (
+            "553-a-below-column-line-continues-a-paragraph-only-where-one-is-open-3",
+            "- a\n  - b\n    ***\n\nlazy\n",
+        ),
+        (
+            "556-a-closed-block-leaves-no-frame-for-the-line-below-2",
+            "- a\n  <code></code>\n  ***\n  ```\n  code\n  ```\n\nafter\n",
+        ),
+        (
+            "556-a-closed-block-leaves-no-frame-for-the-line-below-3",
+            "- a\n  <code></code>\n  ```\n  code\n  ```\n  more\n  after\n",
+        ),
+        (
+            "75-list-nesting-and-looseness-6",
+            "- ```\n  x\n  ```\n  after\n",
+        ),
+    ];
+    for (slug, expected) in cases {
+        let source = std::fs::read_to_string(format!(
+            "{}/tests/spec/tests/corpus/{slug}.crv",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let markdown = carve::to_markdown(&source);
+        assert_eq!(markdown, expected, "{slug}");
+        assert!(
+            first_list(&carve::markdown_import::markdown_to_ast(&markdown)).tight,
+            "{slug}"
+        );
+    }
+}
+
+#[test]
 fn a_nested_list_does_not_loosen_the_item_above_it() {
     assert_eq!(
         carve::to_markdown("- parent\n  - child\n"),

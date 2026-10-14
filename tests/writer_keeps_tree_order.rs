@@ -46,3 +46,49 @@ fn the_written_source_still_renders_the_same_html() {
     let from_written = carve::render_html(&carve::parse(&written(src))).expect("render");
     assert_eq!(from_source, from_written);
 }
+
+#[test]
+fn non_html_targets_keep_an_unused_definition_between_blocks() {
+    let source = "before\n\n[r]: /u\n\nafter\n";
+    for output in [
+        carve::to_markdown(source),
+        carve::to_plain_text(source),
+        carve::to_ansi(source),
+    ] {
+        let before = output.find("before").unwrap();
+        let definition = output.find("[r]: /u").unwrap();
+        let after = output.find("after").unwrap();
+        assert!(before < definition && definition < after, "{output:?}");
+    }
+}
+
+#[test]
+fn ansi_blanks_a_denied_definition_destination() {
+    let source = "Text.\n\n[y]: javascript:alert(3)\n";
+    let output = carve::to_ansi(source);
+    assert!(output.contains("[y]: "), "{output:?}");
+    assert!(!output.contains("javascript:"), "{output:?}");
+}
+
+#[test]
+fn non_html_corpus_writer_rows_follow_their_clauses() {
+    let rows: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/non-html-writer-output.json")).unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 39);
+    for row in rows {
+        let slug = row["slug"].as_str().unwrap();
+        let source = std::fs::read_to_string(format!(
+            "{}/tests/spec/tests/corpus/{slug}.crv",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let actual = match row["target"].as_str().unwrap() {
+            "markdown" => carve::to_markdown(&source),
+            "plain" => carve::to_plain_text(&source),
+            "ansi" => carve::to_ansi(&source),
+            target => panic!("unexpected target {target}"),
+        };
+        assert_eq!(actual, row["expected"].as_str().unwrap(), "{slug}");
+    }
+}
