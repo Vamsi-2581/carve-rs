@@ -30,6 +30,28 @@ fn djot_address_autolinks_keep_a_single_scheme() {
     }
 }
 
+#[test]
+fn multiline_attributes_attach_to_the_following_quote() {
+    let source = "{\n attr=\"long\n value\n spanning\n multiple\n lines\"\n }\n> a\n";
+    let value = carve::djot_to_carve(source);
+    assert_eq!(
+        value,
+        "{attr=\"long value spanning multiple lines\"}\n> a\n"
+    );
+    assert_eq!(
+        carve::to_html(&value),
+        "<blockquote attr=\"long value spanning multiple lines\"><p>a</p></blockquote>"
+    );
+    assert_eq!(
+        carve::djot_to_carve("> {\n>  a=\"x\n>  y\"\n>  }\n> > q\n"),
+        "> {a=\"x y\"}\n> > q\n"
+    );
+    assert_eq!(
+        carve::djot_to_carve("- x\n\n  {\n   a=\"x\n   y\"\n   }\n  > q\n"),
+        "{loose}\n- x\n\n  {a=\"x y\"}\n  > q\n"
+    );
+}
+
 /// Djot attaches an attribute line with no block after it to nothing, so the importer
 /// consumes it before writing any closer, synthetic or real.
 #[test]

@@ -3347,6 +3347,11 @@ mod tests {
             crate::to_html(&value),
             "<ul>\n  <li>x</li>\n</ul>\n<ul>\n  <li>y</li>\n</ul>"
         );
+        let value = markdown_to_carve("* x\n+ y\n");
+        assert_eq!(
+            crate::to_html(&value),
+            "<ul>\n  <li>x</li>\n</ul>\n<ul>\n  <li>y</li>\n</ul>"
+        );
     }
 
     #[test]
