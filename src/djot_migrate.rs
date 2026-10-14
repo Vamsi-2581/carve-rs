@@ -632,6 +632,11 @@ fn djot_image_label_child_text(
     omit_quote_delimiters: bool,
     nul_shielded: bool,
 ) -> String {
+    if let Some(inner) = simple_nested_image_label(label) {
+        return djot_image_label_child_text(inner, inherited, omit_quote_delimiters);
+    }
+    #[cfg(test)]
+    IMAGE_LABEL_FULL_PARSES.with(|count| count.set(count.get() + 1));
     let options = crate::Options {
         smart_typography: crate::SmartTypographyMode::Source,
         ..crate::Options::default()
@@ -683,6 +688,44 @@ fn djot_image_label_child_text(
             })
     };
     plain.into_owned()
+}
+
+// A chain of images whose entire label is another image has the innermost
+// label as its plain text. Reading each enclosing label independently would
+// reparse the same suffix at every depth.
+fn simple_nested_image_label(label: &str) -> Option<&str> {
+    let bytes = label.as_bytes();
+    let mut start = 0;
+    while bytes.get(start..start + 2) == Some(b"![") {
+        start += 2;
+    }
+    if start == 0 {
+        return None;
+    }
+    let mut end = bytes.len();
+    let mut count = 0;
+    while end > start && bytes[end - 1] == b')' {
+        let open = label[..end].rfind("](")?;
+        if !bytes[open + 2..end - 1]
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(b))
+        {
+            return None;
+        }
+        end = open;
+        count += 1;
+    }
+    (count == start / 2
+        && start < end
+        && !bytes[start..end]
+            .iter()
+            .any(|byte| matches!(byte, b'[' | b']' | b'\\')))
+    .then_some(&label[start..end])
+}
+
+#[cfg(test)]
+thread_local! {
+    static IMAGE_LABEL_FULL_PARSES: std::cell::Cell<usize> = std::cell::Cell::new(0);
 }
 
 fn image_quote_layout(source: &str, omit_quote_delimiters: bool) -> String {
@@ -5603,6 +5646,16 @@ mod tests {
         ] {
             assert_eq!(super::djot_to_carve(source), expected, "{source:?}");
         }
+    }
+
+    #[test]
+    fn nested_image_label_import_has_bounded_work() {
+        let depth = 1600;
+        let source = format!("{}x{}", "![".repeat(depth), "](u)".repeat(depth));
+        super::IMAGE_LABEL_FULL_PARSES.with(|count| count.set(0));
+        assert_eq!(super::djot_to_carve(&source), "{%%}![x](u)");
+        super::IMAGE_LABEL_FULL_PARSES.with(|count| assert!(count.get() <= 2));
+        assert!(super::simple_nested_image_label("![a](u) ![b](v)").is_none());
     }
     use super::*;
 
