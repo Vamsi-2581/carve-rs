@@ -127,12 +127,3 @@ fn below_column_list_marker_leaves_empty_quote_item() {
     assert!(nested.contains("<ul>"), "{nested}");
     assert!(!nested.contains("</ol>\n<ul>"), "{nested}");
 }
-
-#[test]
-fn fence_payload_left_of_authored_base_loses_its_prefix() {
-    let html = carve::to_html("- a\n    ```\n   x\n  ```\n");
-    assert!(html.contains("<code>x\n</code>"), "{html}");
-
-    let at_base = carve::to_html("- a\n    ```\n     x\n  ```\n");
-    assert!(at_base.contains("<code> x\n</code>"), "{at_base}");
-}

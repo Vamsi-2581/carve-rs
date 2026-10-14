@@ -1470,7 +1470,7 @@ fn extract_footnote_defs(
     let mut i = 0;
     while i < lines.len() {
         let folded_fence = detect_fence_open(trim_ascii_start(lines[i])).is_some_and(|open| {
-            !closer_maxima.closes_after(i, open)
+            !closer_maxima.has_run_after(i, open)
                 && prepass_paragraph_open_above(&lines, i, &[], &folded_into_term)
         });
         // A footnote definition is collected at the top level AND from inside a
@@ -3374,6 +3374,15 @@ struct PrepassFenceClosers {
 }
 
 impl PrepassFenceClosers {
+    fn has_run_after(&self, index: usize, open: FenceOpen) -> bool {
+        let suffix_max = if open.fence_char == b'`' {
+            self.maxima.0[index + 1]
+        } else {
+            self.maxima.1[index + 1]
+        };
+        suffix_max >= open.fence_len
+    }
+
     fn closes_after_at(&self, index: usize, open: FenceOpen, column: usize) -> bool {
         self.by_column
             .get(&(open.quoted, open.fence_char, column))
@@ -3968,7 +3977,7 @@ fn extract_link_defs_with_guard_full(
     let mut previous_non_blank = "";
     for (line_index, line) in all_lines.iter().copied().enumerate() {
         let folded_fence = detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
-            !closer_maxima.closes_after(line_index, open)
+            !closer_maxima.has_run_after(line_index, open)
                 && prepass_paragraph_open_above(&all_lines, line_index, &[], &folded_into_term)
         });
         // Verse text is opaque: a line-block body line like `- verse` is not a
@@ -14694,6 +14703,7 @@ fn parse_list(
         let mut anchors = options
             .positions
             .then(|| vec![inline_anchor_for_line(cur, item_at, marker.content)]);
+        let mut caption_below_content_column = false;
         let literal_colon_opener = detect_container_open(marker.content)
             .map(|open| open.fence_len)
             .or_else(|| detect_line_block_open(marker.content))
@@ -14763,6 +14773,7 @@ fn parse_list(
                     break;
                 }
                 let inline_line = trim_ascii_start(next);
+                caption_below_content_column |= caption_content(inline_line).is_some();
                 if let Some(anchors) = &mut anchors {
                     anchors.push(inline_anchor_for_line(cur, cur.pos, inline_line));
                 }
@@ -14895,7 +14906,7 @@ fn parse_list(
             // as literal text (carve-rs#610). Lines folded in from BELOW the
             // content column are lazy continuations and never start this
             // paragraph, so the flag describes the first line correctly.
-            at_content_column: true,
+            at_content_column: !caption_below_content_column,
             block_image: false,
             pos: item_paragraph_span(
                 cur,
@@ -17713,8 +17724,13 @@ fn collect_indented_block_mapped_with_columns(
             _ if authored_code_base.is_some_and(|base| indent >= base) => {
                 authored_code_base.unwrap()
             }
-            // A payload line below the opener's base loses its available prefix.
-            _ if literal_colon.is_none() && fence.is_some_and(|open| indent < open.content_col) => {
+            // A line below the opener's base loses its available prefix.
+            _ if literal_colon.is_none()
+                && fence.is_some_and(|open| {
+                    indent < open.content_col
+                        && is_fence_close(trim_ascii_start(payload_line), open)
+                }) =>
+            {
                 indent
             }
             _ if lazy_code_line

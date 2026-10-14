@@ -91,10 +91,8 @@ fn an_image_indented_past_the_content_column_uses_its_authored_base() {
 
 #[test]
 fn a_lazy_caption_at_column_zero_does_not_attach() {
-    // A caption BELOW the content column ends the item instead of folding in, so
-    // it never reaches the item's paragraph. Pinned because the fix's premise is
-    // that the item lead paragraph always starts AT the content column - if a
-    // lazy line could start it, the flag would be a lie.
+    // The caption folds into the item paragraph but cannot turn its image into
+    // a figure from below the item's content column.
     let html = to_html(&format!("- {IMAGE}\n^ lazy cap\n"));
     assert!(!html.contains("<figcaption>"), "{html}");
     assert!(html.contains("^ lazy cap"), "{html}");

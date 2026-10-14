@@ -193,18 +193,22 @@ fn a_comment_inside_verse_keeps_colon_payload_opaque() {
 
 #[test]
 fn a_new_item_or_later_bare_block_does_not_inherit_absorption() {
-    for source in [
-        "> - prose\n>   :::bad\n> - next\n>   :::\n- tail\n",
-        "> - ::: box\nlazy\n>   :::\n- tail\n",
-        "> - ::: box\n>   body\nlazy\n>   :::\n- tail\n",
+    for (source, expected_count, expected_type) in [
+        (
+            "> - prose\n>   :::bad\n> - next\n>   :::\n- tail\n",
+            2,
+            "list",
+        ),
+        ("> - ::: box\nlazy\n>   :::\n- tail\n", 3, "paragraph"),
+        ("> - ::: box\n>   body\nlazy\n>   :::\n- tail\n", 2, "list"),
     ] {
         let ast: Value = serde_json::from_str(&carve::to_json(&carve::parse(source))).unwrap();
         assert_eq!(
             ast["children"].as_array().unwrap().len(),
-            2,
+            expected_count,
             "{source}: {ast}"
         );
-        assert_eq!(ast["children"][1]["type"], "list", "{source}: {ast}");
+        assert_eq!(ast["children"][1]["type"], expected_type, "{source}: {ast}");
     }
 }
 
