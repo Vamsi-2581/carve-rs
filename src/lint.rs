@@ -405,7 +405,7 @@ fn collect_table_span_marker_warnings(
                     continue;
                 }
                 let (marker, reason) = match span {
-                    TableCellSpan::Rowspan if r == 0 =>
+                    TableCellSpan::Rowspan if r == 0 || c >= table.rows[r - 1].cells.len() =>
                         ('^', "There is no cell above it to extend."),
                     TableCellSpan::Rowspan =>
                         ('^', "Extending the cell above would cover another cell."),
@@ -451,6 +451,32 @@ fn collect_table_span_marker_warnings(
     });
 }
 
+/// The byte start and text of 1-based `line`, breaking at CRLF, lone CR or LF
+/// as the parser does.
+fn source_line(source: &str, line: usize) -> Option<(usize, &str)> {
+    let bytes = source.as_bytes();
+    let mut start = 0;
+    let mut current = 1;
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'\r' || bytes[at] == b'\n' {
+            if current == line {
+                return Some((start, &source[start..at]));
+            }
+            at += if bytes[at] == b'\r' && bytes.get(at + 1) == Some(&b'\n') {
+                2
+            } else {
+                1
+            };
+            start = at;
+            current += 1;
+        } else {
+            at += 1;
+        }
+    }
+    (current == line).then(|| (start, &source[start..]))
+}
+
 fn locate_marker_in_row(
     source: &str,
     row: &TableRow,
@@ -458,28 +484,15 @@ fn locate_marker_in_row(
     marker: char,
 ) -> Option<(usize, usize, usize)> {
     let line = row.pos.as_ref()?.start_line;
-    let line_text = source.split_inclusive('\n').nth(line.checked_sub(1)?)?;
-    let line_start = source
-        .split_inclusive('\n')
-        .take(line - 1)
-        .map(str::len)
-        .sum::<usize>();
-    let line_text = line_text.trim_end_matches(['\r', '\n']);
-    let pipes: Vec<usize> = line_text
-        .match_indices('|')
-        .filter(|(at, _)| {
-            line_text[..*at]
-                .bytes()
-                .rev()
-                .take_while(|&b| b == b'\\')
-                .count()
-                % 2
-                == 0
-        })
-        .map(|(at, _)| at)
-        .collect();
-    let from = *pipes.get(cell)? + 1;
-    let to = pipes.get(cell + 1).copied().unwrap_or(line_text.len());
+    let (line_start, line_text) = source_line(source, line)?;
+    let row_column = row.pos.as_ref()?.start_column;
+    let row_at = line_text
+        .char_indices()
+        .nth(row_column.checked_sub(1)?)
+        .map_or(line_text.len(), |(at, _)| at);
+    let (from, to) = crate::parse::lint_table_cell_ranges(&line_text[row_at..])
+        .get(cell)
+        .map(|&(from, to)| (row_at + from, row_at + to))?;
     let at = line_text.get(from..to)?.find(marker)? + from;
     Some((line, line_text[..at].chars().count() + 1, line_start + at))
 }

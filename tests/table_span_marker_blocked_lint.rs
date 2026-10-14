@@ -18,6 +18,8 @@ fn blocked_markers_report_the_marker_and_reason() {
         ("- item\n\n  | ^ | b |\n", 3, 5, "There is no cell above it to extend."),
         ("x[^n]\n\n[^n]: note\n\n    | ^ | b |\n", 5, 7, "There is no cell above it to extend."),
         ("| ^ | b |\n^ Table: cap\n", 1, 3, "There is no cell above it to extend."),
+        ("| a |\n| b | ^ |\n", 2, 7, "There is no cell above it to extend."),
+        ("| `a|b` | ^ |\n+ x | y |\n", 1, 11, "There is no cell above it to extend."),
     ];
     for (source, line, column, reason) in cases {
         let warnings = findings(source);
@@ -77,4 +79,20 @@ fn continuation_fallback_uses_byte_offsets_with_crlf() {
         (warning.line, warning.column, warning.start, warning.end),
         (2, 3, start, start + 1)
     );
+}
+
+#[test]
+fn continuation_fallback_splits_lone_cr_lines() {
+    for source in [
+        "| a | b |\r| < | c |\r+ x | y |\r",
+        "| a | b |\r| < | c |\r",
+    ] {
+        let warning = findings(source).pop().expect("blocked marker");
+        let start = source.find('<').unwrap();
+        assert_eq!(
+            (warning.line, warning.column, warning.start, warning.end),
+            (2, 3, start, start + 1),
+            "{source:?}"
+        );
+    }
 }
