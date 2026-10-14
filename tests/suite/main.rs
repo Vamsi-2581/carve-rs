@@ -2148,6 +2148,9 @@ mod djot_task_marker_tabs;
 #[path = "../djot_task_bullet_separators.rs"]
 mod djot_task_bullet_separators;
 
+#[path = "../djot_unresolved_nul_heading_references.rs"]
+mod djot_unresolved_nul_heading_references;
+
 #[path = "../djot_empty_nested_tasks.rs"]
 mod djot_empty_nested_tasks;
 
