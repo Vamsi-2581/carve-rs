@@ -861,7 +861,7 @@ fn quoted_list_boundaries<'a>(
                 });
         if quote_depth < depth
             && visible.starts_with('{')
-            && read_djot_word_attributes(visible, 0)
+            && read_djot_word_attributes(text, 0)
                 .is_some_and(|(end, _)| end == visible.trim_end_matches([' ', '\t', '\r']).len())
         {
             depth = quote_depth;
@@ -1117,7 +1117,7 @@ fn quoted_list_boundaries<'a>(
                 || reference.is_match(text)
                 || (!paragraph
                     && visible.starts_with('{')
-                    && read_djot_word_attributes(visible, 0).is_some_and(|(end, _)| {
+                    && read_djot_word_attributes(text, 0).is_some_and(|(end, _)| {
                         end == visible.trim_end_matches([' ', '\t', '\r']).len()
                     }))
                 || thematic(visible)
@@ -1129,7 +1129,7 @@ fn quoted_list_boundaries<'a>(
             || heading.is_match(visible)
             || (!paragraph
                 && visible.starts_with('{')
-                && read_djot_word_attributes(visible, 0)
+                && read_djot_word_attributes(text, 0)
                     .is_some_and(|(end, _)| end == visible.trim_end().len()))
             || visible.starts_with('|')
             || visible.starts_with(":::")
