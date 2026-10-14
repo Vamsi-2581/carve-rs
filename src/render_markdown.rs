@@ -225,7 +225,7 @@ fn render_markdown_once(
         suppress_automatic_abbreviation: false,
         heading_slugs,
         list_depth: 0,
-        tight_item: false,
+        thematic_after_paragraph: false,
         in_footnote: false,
         footnote_allowed_lists: HashSet::new(),
         list_item_opening_list: None,
@@ -386,7 +386,7 @@ struct MarkdownContext {
     /// document assigned it (PART 11 §11).
     heading_slugs: HashMap<String, String>,
     list_depth: usize,
-    tight_item: bool,
+    thematic_after_paragraph: bool,
     in_footnote: bool,
     footnote_allowed_lists: HashSet<usize>,
     list_item_opening_list: Option<usize>,
@@ -619,14 +619,23 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
             {
                 return String::new();
             }
-            let destination = neutralize_char_refs(
-                &strip_control_chars(&definition.href)
-                    .replace('\\', "\\\\")
-                    .replace('(', "\\(")
-                    .replace(')', "\\)")
-                    .replace('<', "\\<")
-                    .replace('>', "\\>"),
+            let safe = crate::escape::sanitize_destination(
+                &definition.href,
+                definition.pos.as_ref(),
+                crate::render_loss::DeniedSink::Destination,
             );
+            let destination = if safe.is_empty() {
+                "<>".to_string()
+            } else {
+                neutralize_char_refs(
+                    &strip_control_chars(&safe)
+                        .replace('\\', "\\\\")
+                        .replace('(', "\\(")
+                        .replace(')', "\\)")
+                        .replace('<', "\\<")
+                        .replace('>', "\\>"),
+                )
+            };
             let title = definition
                 .title
                 .as_ref()
@@ -804,9 +813,12 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
             }
             out
         }
-        BlockNode::ThematicBreak(_) => {
-            if ctx.tight_item { "***\n\n" } else { "---\n\n" }.to_string()
+        BlockNode::ThematicBreak(_) => if ctx.thematic_after_paragraph {
+            "***\n\n"
+        } else {
+            "---\n\n"
         }
+        .to_string(),
         BlockNode::Table(table) => render_table(table, ctx),
         BlockNode::Admonition(admonition) => {
             if let Some(table) = list_table_as_table(admonition) {
@@ -1177,9 +1189,13 @@ fn render_list_item(
                 _ => None,
             };
         }
-        let previous_tight = std::mem::replace(&mut ctx.tight_item, tight);
+        let non_setext = tight
+            && matches!(child, BlockNode::ThematicBreak(_))
+            && index > 0
+            && matches!(item.children[index - 1], BlockNode::Paragraph(_));
+        let previous_thematic = std::mem::replace(&mut ctx.thematic_after_paragraph, non_setext);
         let rendered = render_block(child, ctx, depth);
-        ctx.tight_item = previous_tight;
+        ctx.thematic_after_paragraph = previous_thematic;
         ctx.list_item_opening_list = outer_opening;
         // Check the block that opens the rendered output through any div wrappers.
         let opener = opening_block(child);

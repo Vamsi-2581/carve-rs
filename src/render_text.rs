@@ -11,12 +11,45 @@ pub(crate) type ConsumedAbbreviations = BTreeSet<(String, String)>;
 pub(crate) fn blocks_with_link_definitions_in_source_order(
     blocks: &[BlockNode],
 ) -> Vec<&BlockNode> {
-    let mut ordered: Vec<&BlockNode> = blocks
+    let ordinary: Vec<&BlockNode> = blocks
         .iter()
         .filter(
             |block| !matches!(block, BlockNode::LinkReferenceDefinition(def) if def.pos.is_some()),
         )
         .collect();
+    let mut original_slots = Vec::with_capacity(blocks.len());
+    let mut ordinary_seen = 0;
+    for block in blocks {
+        original_slots.push(ordinary_seen);
+        if !matches!(block, BlockNode::LinkReferenceDefinition(def) if def.pos.is_some()) {
+            ordinary_seen += 1;
+        }
+    }
+    let mut later_by_file: std::collections::HashMap<
+        Option<crate::ast::SourceFile>,
+        Vec<(usize, usize)>,
+    > = std::collections::HashMap::new();
+    for (index, block) in ordinary.iter().enumerate() {
+        if let Some(pos) = crate::ast_json::block_pos(block) {
+            later_by_file
+                .entry(pos.file.clone())
+                .or_default()
+                .push((pos.start_offset, index));
+        }
+    }
+    for positions in later_by_file.values_mut() {
+        positions.sort_by_key(|(offset, _)| *offset);
+        for index in (0..positions.len().saturating_sub(1)).rev() {
+            positions[index].1 = positions[index].1.min(positions[index + 1].1);
+        }
+    }
+    let mut file_order = std::collections::HashMap::new();
+    for block in blocks {
+        if let Some(pos) = crate::ast_json::block_pos(block) {
+            let next = file_order.len();
+            file_order.entry(pos.file.clone()).or_insert(next);
+        }
+    }
     let mut definitions: Vec<(usize, &BlockNode, &crate::ast::Pos)> = blocks
         .iter()
         .enumerate()
@@ -28,19 +61,26 @@ pub(crate) fn blocks_with_link_definitions_in_source_order(
         })
         .collect();
     definitions.sort_by(|a, b| {
-        a.2.file
-            .cmp(&b.2.file)
+        file_order[&a.2.file]
+            .cmp(&file_order[&b.2.file])
             .then(a.2.start_offset.cmp(&b.2.start_offset))
             .then(a.0.cmp(&b.0))
     });
-    for (_, definition, pos) in definitions {
-        let before = ordered.iter().position(|block| {
-            crate::ast_json::block_pos(block).is_some_and(|other| {
-                other.file == pos.file && other.start_offset > pos.start_offset
-            })
+    let mut slots = vec![Vec::new(); ordinary.len() + 1];
+    for (original_index, definition, pos) in definitions {
+        let before = later_by_file.get(&pos.file).and_then(|positions| {
+            positions
+                .get(positions.partition_point(|(offset, _)| *offset <= pos.start_offset))
+                .map(|(_, index)| *index)
         });
-        ordered.insert(before.unwrap_or(ordered.len()), definition);
+        slots[before.unwrap_or(original_slots[original_index])].push(definition);
     }
+    let mut ordered = Vec::with_capacity(blocks.len());
+    for (index, block) in ordinary.into_iter().enumerate() {
+        ordered.append(&mut slots[index]);
+        ordered.push(block);
+    }
+    ordered.append(slots.last_mut().unwrap());
     ordered
 }
 

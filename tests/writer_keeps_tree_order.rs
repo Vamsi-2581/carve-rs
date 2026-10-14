@@ -63,6 +63,36 @@ fn non_html_targets_keep_an_unused_definition_between_blocks() {
 }
 
 #[test]
+fn a_definition_from_another_file_stays_at_its_tree_slot() {
+    let mut doc = carve::parse_with_options(
+        "before\n\n[a]: /a\n\n[b]: /b\n\nafter\n",
+        &carve::Options::new().with_positions(true),
+    );
+    let mut ordinary = Vec::new();
+    let mut definitions = Vec::new();
+    for mut block in std::mem::take(&mut doc.children) {
+        if let carve::ast::BlockNode::LinkReferenceDefinition(def) = &mut block {
+            def.pos.as_mut().unwrap().file = Some("included.crv".into());
+            definitions.push(block);
+        } else {
+            ordinary.push(block);
+        }
+    }
+    doc.children = vec![
+        ordinary.remove(0),
+        definitions.remove(0),
+        definitions.remove(0),
+        ordinary.remove(0),
+    ];
+    let output = carve::render_markdown(&doc).unwrap();
+    let indices = ["before", "[a]: /a", "[b]: /b", "after"].map(|text| output.find(text).unwrap());
+    assert!(
+        indices.windows(2).all(|pair| pair[0] < pair[1]),
+        "{output:?}"
+    );
+}
+
+#[test]
 fn ansi_blanks_a_denied_definition_destination() {
     let source = "Text.\n\n[y]: javascript:alert(3)\n";
     let output = carve::to_ansi(source);
@@ -71,11 +101,20 @@ fn ansi_blanks_a_denied_definition_destination() {
 }
 
 #[test]
+fn markdown_and_plain_blank_a_denied_definition_destination() {
+    let source = "Text.\n\n[y]: javascript:alert(3)\n";
+    let markdown = carve::to_markdown(source);
+    let plain = carve::to_plain_text(source);
+    assert!(markdown.contains("[y]: <>") && !markdown.contains("javascript:"));
+    assert!(plain.contains("[y]:") && !plain.contains("javascript:"));
+}
+
+#[test]
 fn non_html_corpus_writer_rows_follow_their_clauses() {
     let rows: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/non-html-writer-output.json")).unwrap();
     let rows = rows.as_array().unwrap();
-    assert_eq!(rows.len(), 39);
+    assert_eq!(rows.len(), 46);
     for row in rows {
         let slug = row["slug"].as_str().unwrap();
         let source = std::fs::read_to_string(format!(

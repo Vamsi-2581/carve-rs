@@ -197,20 +197,20 @@ fn a_table_does_not_loosen_the_item_above_it() {
 }
 
 #[test]
-fn a_thematic_break_keeps_the_separator() {
-    // `---` under a paragraph line is a setext underline, so the break does not
-    // interrupt the paragraph - it turns it into a heading. The blank stays.
+fn a_thematic_break_uses_a_non_setext_marker() {
+    // `***` interrupts the paragraph without a blank line, so the item stays
+    // tight and the break cannot be read as a setext underline.
     let source = "- a\n  ---\n";
     let out = carve::to_markdown(source);
-    assert_eq!(out, "- a\n\n  ---\n");
+    assert_eq!(out, "- a\n  ***\n");
+    assert!(reads_back_tight(source));
     assert!(matches!(
         first_list(&carve::markdown_import::markdown_to_ast(&out)).items[0]
             .children
             .get(1),
         Some(BlockNode::ThematicBreak(_))
     ));
-    // Without the blank the same reader answers a heading, which is the reading
-    // the separator buys.
+    // Gluing the authored dashes instead would make a heading.
     let glued = carve::markdown_import::markdown_to_ast("- a\n  ---\n");
     assert!(matches!(
         first_list(&glued).items[0].children.first(),

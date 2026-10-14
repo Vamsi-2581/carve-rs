@@ -193,5 +193,40 @@
     "slug": "82-blockquote-lazy-continuation-6",
     "target": "plain",
     "expected": "\"\"\n\n[f]: ~\n\n/\n"
+  },
+  {
+    "slug": "108-security-hardening-12",
+    "target": "markdown",
+    "expected": "Text.\n\n[x]: /u\n\n[y]: <>\n"
+  },
+  {
+    "slug": "266-a-reference-definition-is-anchored-at-end-of-line-14",
+    "target": "plain",
+    "expected": "\"text\"\n\n[a]: /u {.c}\n\nlazy\n"
+  },
+  {
+    "slug": "266-a-reference-definition-is-anchored-at-end-of-line-14",
+    "target": "ansi",
+    "expected": "\u001b[36m\u001b[2m│\u001b[0m text\n\n\u001b[2m[a]: /u {.c}\u001b[0m\n\nlazy\n"
+  },
+  {
+    "slug": "326-a-column-0-line-after-a-container-s-last-block-when-that-block-left-no-paragraph-open-4",
+    "target": "markdown",
+    "expected": "- ---\n\ntail\n"
+  },
+  {
+    "slug": "363-a-task-item-s-checkbox-is-not-decided-by-its-first-block",
+    "target": "markdown",
+    "expected": "- [ ] > q\n- [x] # h\n- [ ] ---\n"
+  },
+  {
+    "slug": "535-a-marker-line-opaque-quote-keeps-overindented-markers-literal-33",
+    "target": "markdown",
+    "expected": "- > ---\n  >\n  > y\n"
+  },
+  {
+    "slug": "566-an-opener-past-a-hosted-container-s-column-opens-there-5",
+    "target": "markdown",
+    "expected": "- outer\n  - para\n  ---\n  ```\n  ```\n"
   }
 ]
