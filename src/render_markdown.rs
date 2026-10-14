@@ -2075,6 +2075,9 @@ fn render_recorded_inlines(
     for node in nodes {
         parts.push(render_inline(node, ctx, depth));
     }
+    if matches!(nodes.first(), Some(InlineNode::CellWrap(_))) {
+        parts[0].clear();
+    }
     let has_content = |part: &str| {
         visible_inline(part)
             .bytes()

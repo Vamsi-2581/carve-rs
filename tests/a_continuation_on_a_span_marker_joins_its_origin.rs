@@ -134,3 +134,15 @@ fn blocked_marker_continuation_keeps_its_line() {
     assert_eq!(carve::to_carve(source), formatted);
     assert_eq!(carve::to_carve(formatted), formatted);
 }
+
+#[test]
+fn a_later_first_fragment_has_no_leading_space() {
+    for source in [
+        "| ^ | b |\n+   | y |\n+ z | w |\n",
+        "| | b |\n+   | y |\n+ z | w |\n",
+    ] {
+        assert!(carve::to_html(source).contains("<td>z</td>"), "{source}");
+        assert!(carve::to_plain_text(source).starts_with('z'), "{source}");
+        assert!(carve::to_markdown(source).contains("| z |"), "{source}");
+    }
+}

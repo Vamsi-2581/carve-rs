@@ -599,7 +599,11 @@ impl Renderer {
         for pair in nodes.windows(2) {
             self.note_merging_siblings(&pair[0], &pair[1]);
         }
-        for node in nodes {
+        for (index, node) in nodes.iter().enumerate() {
+            if index == 0 && matches!(node, InlineNode::CellWrap(_)) {
+                self.degrade("cell_wrap");
+                continue;
+            }
             self.inline(node, marks, &mut out);
         }
         out

@@ -702,7 +702,10 @@ fn render_inlines(nodes: &[InlineNode], ctx: &mut AnsiContext, depth: usize) -> 
         return String::new();
     }
     let mut out = String::new();
-    for node in nodes {
+    for node in nodes.iter().skip(usize::from(matches!(
+        nodes.first(),
+        Some(InlineNode::CellWrap(_))
+    ))) {
         out.push_str(&render_inline(node, ctx, depth));
     }
     out

@@ -3738,7 +3738,10 @@ fn render_inlines_stateful(
         return;
     }
     state.inline_depth += 1;
-    for node in nodes {
+    for node in nodes.iter().skip(usize::from(matches!(
+        nodes.first(),
+        Some(InlineNode::CellWrap(_))
+    ))) {
         render_inline_after(out, node, options, state);
     }
     state.inline_depth -= 1;
