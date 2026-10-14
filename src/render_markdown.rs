@@ -225,7 +225,7 @@ fn render_markdown_once(
         suppress_automatic_abbreviation: false,
         heading_slugs,
         list_depth: 0,
-        thematic_after_paragraph: false,
+        thematic_glued: false,
         in_footnote: false,
         footnote_allowed_lists: HashSet::new(),
         list_item_opening_list: None,
@@ -386,7 +386,7 @@ struct MarkdownContext {
     /// document assigned it (PART 11 §11).
     heading_slugs: HashMap<String, String>,
     list_depth: usize,
-    thematic_after_paragraph: bool,
+    thematic_glued: bool,
     in_footnote: bool,
     footnote_allowed_lists: HashSet<usize>,
     list_item_opening_list: Option<usize>,
@@ -813,7 +813,7 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
             }
             out
         }
-        BlockNode::ThematicBreak(_) => if ctx.thematic_after_paragraph {
+        BlockNode::ThematicBreak(_) => if ctx.thematic_glued {
             "***\n\n"
         } else {
             "---\n\n"
@@ -1191,14 +1191,10 @@ fn render_list_item(
         }
         let non_setext = tight
             && matches!(opening_block(child), BlockNode::ThematicBreak(_))
-            && index > 0
-            && matches!(
-                closing_block(&item.children[index - 1]),
-                BlockNode::Paragraph(_)
-            );
-        let previous_thematic = std::mem::replace(&mut ctx.thematic_after_paragraph, non_setext);
+            && out.ends_with("\n\n");
+        let previous_thematic = std::mem::replace(&mut ctx.thematic_glued, non_setext);
         let rendered = render_block(child, ctx, depth);
-        ctx.thematic_after_paragraph = previous_thematic;
+        ctx.thematic_glued = previous_thematic;
         ctx.list_item_opening_list = outer_opening;
         // Check the block that opens the rendered output through any div wrappers.
         let opener = opening_block(child);
@@ -1208,7 +1204,10 @@ fn render_list_item(
                 || matches!(opener, BlockNode::ThematicBreak(_))
                 || matches!(opener, BlockNode::Paragraph(_))
                     && index > 0
-                    && matches!(item.children[index - 1], BlockNode::CodeBlock(_)))
+                    && matches!(
+                        closing_block(&item.children[index - 1]),
+                        BlockNode::CodeBlock(_)
+                    ))
             && !absorbs_below(&out, opener)
         {
             out.pop();

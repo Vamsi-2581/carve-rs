@@ -93,7 +93,7 @@ fn a_definition_from_another_file_stays_at_its_tree_slot() {
 }
 
 #[test]
-fn a_main_file_definition_precedes_an_include_at_its_source_line() {
+fn a_main_file_definition_keeps_its_tree_slot_around_an_include() {
     let mut doc = carve::parse_with_options(
         "a\n\nincluded\n\nb\n\n[r]: /u\n",
         &carve::Options::new().with_positions(true),
@@ -111,34 +111,7 @@ fn a_main_file_definition_precedes_an_include_at_its_source_line() {
         .unwrap();
     definition.pos.as_mut().unwrap().start_offset = 3;
     let output = carve::render_markdown(&doc).unwrap();
-    let indices = ["a\n", "[r]: /u", "included", "b\n"].map(|text| output.find(text).unwrap());
-    assert!(
-        indices.windows(2).all(|pair| pair[0] < pair[1]),
-        "{output:?}"
-    );
-}
-
-#[test]
-fn a_definition_at_the_end_of_an_include_precedes_following_main_text() {
-    let mut doc = carve::parse_with_options(
-        "a\n\nincluded\n\nb\n\n[r]: /u\n",
-        &carve::Options::new().with_positions(true),
-    );
-    for block in &mut doc.children {
-        match block {
-            carve::ast::BlockNode::Paragraph(paragraph)
-                if paragraph.children.iter().any(|node| matches!(node, carve::ast::InlineNode::Text(text) if text.value == "included")) =>
-            {
-                paragraph.pos.as_mut().unwrap().file = Some("included.crv".into());
-            }
-            carve::ast::BlockNode::LinkReferenceDefinition(def) => {
-                def.pos.as_mut().unwrap().file = Some("included.crv".into());
-            }
-            _ => {}
-        }
-    }
-    let output = carve::render_markdown(&doc).unwrap();
-    let indices = ["a\n", "included", "[r]: /u", "b\n"].map(|text| output.find(text).unwrap());
+    let indices = ["a\n", "included", "b\n", "[r]: /u"].map(|text| output.find(text).unwrap());
     assert!(
         indices.windows(2).all(|pair| pair[0] < pair[1]),
         "{output:?}"

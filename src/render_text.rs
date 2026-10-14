@@ -11,6 +11,13 @@ pub(crate) type ConsumedAbbreviations = BTreeSet<(String, String)>;
 pub(crate) fn blocks_with_link_definitions_in_source_order(
     blocks: &[BlockNode],
 ) -> Vec<&BlockNode> {
+    // Offsets from different files cannot establish where an include appears.
+    if blocks
+        .iter()
+        .any(|block| crate::ast_json::block_pos(block).is_some_and(|pos| pos.file.is_some()))
+    {
+        return blocks.iter().collect();
+    }
     let ordinary: Vec<&BlockNode> = blocks
         .iter()
         .filter(
