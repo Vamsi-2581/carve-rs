@@ -3238,6 +3238,221 @@ fn finish_definition_frame(frame: DefinitionFrame, lines: &mut [String], empty_t
 /// Translate Djot's definition-item shape without canonicalizing unrelated
 /// links, raw blocks, attributes, or author spelling elsewhere in the file.
 fn convert_definition_lists(source: &str, empty_term: &str) -> String {
+    convert_definition_lists_at(source, empty_term, 0)
+}
+
+fn convert_definition_lists_at(source: &str, empty_term: &str, depth: usize) -> String {
+    if depth >= crate::parse::MAX_NESTING_DEPTH {
+        return convert_root_definition_lists(source, empty_term);
+    }
+    let gate = cached_regex!(r"(?m)^[ \t]*(?:>[ \t]*)+(?:(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)*:(?:[ \t]|$)").unwrap();
+    if !gate.is_match(source) {
+        return convert_unquoted_definition_lists(source, empty_term, depth);
+    }
+    let lines: Vec<&str> = source.split('\n').collect();
+    let mask = mask_code_and_destinations(source);
+    let masks: Vec<&str> = mask.split('\n').collect();
+    let quote = cached_regex!(r"^(>)(?:[ \t]|$)").unwrap();
+    let quote_start = cached_regex!(r"^>").unwrap();
+    let mut result = Vec::new();
+    let mut at = 0;
+    while at < lines.len() {
+        let accepted = quote
+            .captures(lines[at])
+            .filter(|capture| masks[at].as_bytes().get(capture[1].len() - 1) == Some(&b'>'));
+        let Some(accepted) = accepted else {
+            let mut end = at + 1;
+            while end < lines.len() && !quote_start.is_match(masks[end]) {
+                end += 1;
+            }
+            result.push(convert_unquoted_definition_lists(
+                &lines[at..end].join("\n"),
+                empty_term,
+                depth,
+            ));
+            at = end;
+            continue;
+        };
+        let mut nested = Vec::new();
+        let mut term_column = None;
+        let mut ends_block = false;
+        let mut end = at;
+        while end < lines.len() {
+            let prefix = quote.find(lines[end]).filter(|prefix| {
+                masks[end]
+                    .as_bytes()
+                    .get(prefix.as_str().find('>').unwrap())
+                    == Some(&b'>')
+            });
+            let Some(prefix) = prefix else {
+                let text = lines[end].trim_start_matches([' ', '\t']);
+                let visible = masks[end].trim_start_matches([' ', '\t']);
+                let block = cached_regex!(r"^(?:#{1,6}(?:[ \t]|$)|>|:(?:[ \t]|$)|:{3,}|[-*+][ \t]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)[ \t]|(?:[*-][ \t]*){3,}$)").unwrap().is_match(visible)
+                    || visible.starts_with('|') && text.ends_with('|')
+                    || cached_regex!(r"^(?:`{3,}|~{3,})[ \t]*=?[A-Za-z0-9_+#.-]*[ \t]*$").unwrap().is_match(text);
+                if term_column.is_none() || text.is_empty() || block {
+                    ends_block = block;
+                    break;
+                }
+                nested.push(lines[end]);
+                end += 1;
+                continue;
+            };
+            let child = &lines[end][prefix.end()..];
+            let body = quoted(child).1;
+            if let Some(term) = cached_regex!(r"^([ \t]*(?:(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)*):(?:[ \t]|$)").unwrap().captures(body) {
+                term_column = Some(term[1].len());
+            } else if body.trim_matches([' ', '\t']).is_empty() || term_column.is_some_and(|column| leading_indent(body).0 <= column)
+                && cached_regex!(r"^(?:#{1,6}(?:[ \t]|$)|>|:{3,}|[-*+][ \t]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)[ \t])").unwrap().is_match(body.trim_start_matches([' ', '\t'])) {
+                term_column = None;
+            }
+            nested.push(child);
+            end += 1;
+        }
+        let converted = convert_definition_lists_at(&nested.join("\n"), empty_term, depth + 1);
+        result.push(
+            converted
+                .split('\n')
+                .map(|line| {
+                    format!(
+                        "{}{}",
+                        &accepted[1],
+                        if line.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" {line}")
+                        }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        if ends_block {
+            result.push(String::new());
+        }
+        at = end;
+    }
+    result.join("\n")
+}
+
+fn convert_unquoted_definition_lists(source: &str, empty_term: &str, depth: usize) -> String {
+    let gate = cached_regex!(r"(?m)^[ \t]*(?:(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)+:").unwrap();
+    if !gate.is_match(source) {
+        return convert_root_definition_lists(source, empty_term);
+    }
+    let lines: Vec<&str> = source.split('\n').collect();
+    let mask = mask_code_and_destinations(source);
+    let masks: Vec<&str> = mask.split('\n').collect();
+    let boundaries: HashSet<usize> = djot_inline_boundaries_with_code_scopes(source, &mask, true)
+        .into_iter()
+        .collect();
+    let item = cached_regex!(r"^([ \t]*(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)((?:(?:[-*+]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\))[ \t]+)*:(?:[ \t].*|$))$").unwrap();
+    let block = cached_regex!(r"^(?:[-*+][ \t]|(?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)[.)][ \t]|\((?:[0-9]+|[A-Za-z]|[ivxlcdm]+|[IVXLCDM]+)\)[ \t]|#{1,6}(?:[ \t]|$)|>|:{3,}|[`~]{3,}|\|)").unwrap();
+    let mut result = Vec::new();
+    let mut offset = 0;
+    let mut start = 0;
+    let mut at = 0;
+    while at < lines.len() {
+        let line = lines[at];
+        let source_at = offset;
+        offset += line.len() + 1;
+        let accepted = item.captures(line).filter(|capture| {
+            masks[at].as_bytes().get(capture[1].len()) == line.as_bytes().get(capture[1].len())
+                && (at == 0 || boundaries.contains(&source_at))
+        });
+        let Some(accepted) = accepted else {
+            at += 1;
+            continue;
+        };
+        if at > start {
+            result.push(convert_root_definition_lists(
+                &lines[start..at].join("\n"),
+                empty_term,
+            ));
+        }
+        let prefix = &accepted[1];
+        let column = leading_indent(prefix).0
+            + prefix
+                .trim_start_matches([' ', '\t'])
+                .replace('\t', " ")
+                .len();
+        let mut nested = vec![&line[prefix.len()..]];
+        let mut end = at + 1;
+        let mut blank = false;
+        while end < lines.len() {
+            let next = lines[end];
+            let indent = leading_indent(next).0;
+            let text = next.trim_start_matches([' ', '\t']);
+            if !text.is_empty()
+                && indent < column
+                && (blank || block.is_match(masks[end].trim_start_matches([' ', '\t'])))
+            {
+                break;
+            }
+            nested.push(&next[bytes_through_columns(next, column.min(indent))..]);
+            blank = text.is_empty();
+            offset += next.len() + 1;
+            end += 1;
+        }
+        let converted = convert_definition_lists_at(&nested.join("\n"), empty_term, depth + 1);
+        let converted = converted.strip_prefix("{loose}\n").unwrap_or(&converted);
+        let converted: Vec<&str> = converted.split('\n').collect();
+        let mut removed = HashSet::new();
+        let mut index = 0;
+        while index < converted.len() {
+            if !converted[index].trim_matches([' ', '\t']).is_empty() {
+                index += 1;
+                continue;
+            }
+            let mut end = index;
+            while end < converted.len() && converted[end].trim_matches([' ', '\t']).is_empty() {
+                end += 1;
+            }
+            if converted
+                .get(end)
+                .is_some_and(|line| line.trim_start_matches([' ', '\t']).starts_with(":  "))
+            {
+                removed.extend(index..end);
+            }
+            index = end;
+        }
+        let empty = format!(":  {empty_term}");
+        for index in 0..converted.len() {
+            if converted[index] != empty {
+                continue;
+            }
+            let mut end = index + 1;
+            while end < converted.len() && converted[end].trim_matches([' ', '\t']).is_empty() {
+                end += 1;
+            }
+            if end > index + 1
+                && end < converted.len()
+                && !converted[end].starts_with([' ', '\t'])
+                && !converted[end].starts_with("::")
+            {
+                removed.extend(index + 1..end);
+            }
+        }
+        let mut written = vec![format!("{prefix}{empty_term}")];
+        for (index, value) in converted.iter().enumerate() {
+            if !removed.contains(&index) {
+                written.push(format!("{}{value}", " ".repeat(column)));
+            }
+        }
+        result.push(written.join("\n"));
+        at = end;
+        start = end;
+    }
+    if start < lines.len() {
+        result.push(convert_root_definition_lists(
+            &lines[start..].join("\n"),
+            empty_term,
+        ));
+    }
+    result.join("\n")
+}
+
+fn convert_root_definition_lists(source: &str, empty_term: &str) -> String {
     let _paragraph_cache = ParagraphCacheScope::new(source);
     let mut lines: Vec<String> = source.split('\n').map(str::to_owned).collect();
     let masked_source = mask_code_and_destinations(source);
@@ -3265,7 +3480,9 @@ fn convert_definition_lists(source: &str, empty_term: &str) -> String {
             let payload = &lines[index][content..];
             (payload.starts_with("~~~")
                 || (payload.starts_with("```") && !payload.trim_start_matches('`').contains('`')))
-                && masked[index].trim_start().starts_with(':')
+                && masked[index]
+                    .trim_start_matches([' ', '\t'])
+                    .starts_with(':')
         });
         let container_body = raw_term.is_some_and(|(_, content)| {
             cached_regex!(r"^:{3,}(?:[ \t]*[A-Za-z0-9_-]+)?[ \t]*$")
@@ -3274,7 +3491,10 @@ fn convert_definition_lists(source: &str, empty_term: &str) -> String {
         });
         let starts_definition_body = raw_fence || container_body;
         if let (Some((indent, _)), Some((raw_indent, content))) = (
-            if masked[index].trim_start().starts_with(':') {
+            if masked[index]
+                .trim_start_matches([' ', '\t'])
+                .starts_with(':')
+            {
                 raw_term
             } else {
                 definition_term(masked[index])
@@ -3290,7 +3510,10 @@ fn convert_definition_lists(source: &str, empty_term: &str) -> String {
             let top = stack.last().copied();
             let may_start = top.is_some()
                 || index == 0
-                || lines[index - 1].trim().is_empty()
+                || lines[index - 1].trim_matches([' ', '\t']).is_empty()
+                || cached_regex!(r"^ *:{3,}(?:[ \t]+[A-Za-z0-9_-]+)?[ \t]*$")
+                    .unwrap()
+                    .is_match(masked[index - 1])
                 || boundaries
                     .get_or_insert_with(|| {
                         djot_inline_boundaries_with_code_scopes(source, &masked_source, true)
@@ -3300,8 +3523,8 @@ fn convert_definition_lists(source: &str, empty_term: &str) -> String {
                     .contains(&source_at);
             if may_start {
                 let mut term = lines[index][content..].to_owned();
-                if term.trim().is_empty()
-                    || term.trim_start().starts_with('{')
+                if term.trim_matches([' ', '\t']).is_empty()
+                    || term.trim_start_matches([' ', '\t']).starts_with('{')
                         && cached_regex!(r"^(?:[ \t]|\{%%\})*$")
                             .unwrap()
                             .is_match(&normalize::image_label_attributes(&term))
@@ -3402,12 +3625,12 @@ fn convert_definition_lists(source: &str, empty_term: &str) -> String {
         if stack.is_empty() {
             continue;
         }
-        if lines[index].trim().is_empty() {
+        if lines[index].trim_matches([' ', '\t']).is_empty() {
             if let Some(frame) = stack.last_mut() {
                 if !frame.body
-                    && lines
-                        .get(index + 1)
-                        .is_some_and(|line| rejected_comment_starts_block(line.trim_start()))
+                    && lines.get(index + 1).is_some_and(|line| {
+                        rejected_comment_starts_block(line.trim_start_matches([' ', '\t']))
+                    })
                 {
                     lines[index] = format!("{}:  {empty_term}\n", " ".repeat(frame.target));
                     frame.body = true;
@@ -3417,7 +3640,7 @@ fn convert_definition_lists(source: &str, empty_term: &str) -> String {
             continue;
         }
         if !stack.last().is_some_and(|frame| frame.ready) {
-            let continuation = lines[index].trim_start();
+            let continuation = lines[index].trim_start_matches([' ', '\t']);
             let indent = leading_indent(&lines[index]).0;
             let first = leading_indent(&lines[index]).1;
             let visible = masked[index].as_bytes().get(first) == lines[index].as_bytes().get(first)
