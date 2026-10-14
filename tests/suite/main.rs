@@ -2098,3 +2098,6 @@ mod a_continuation_on_a_span_marker_joins_its_origin;
 
 #[path = "../djot_image_quote_child_text.rs"]
 mod djot_image_quote_child_text;
+
+#[path = "../djot_collapsed_image_keys.rs"]
+mod djot_collapsed_image_keys;
