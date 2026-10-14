@@ -2166,5 +2166,8 @@ mod djot_generic_div_classes;
 #[path = "../djot_image_alt_losses.rs"]
 mod djot_image_alt_losses;
 
+#[path = "../djot_image_reference_keys.rs"]
+mod djot_image_reference_keys;
+
 #[path = "../djot_empty_definitions.rs"]
 mod djot_empty_definitions;
