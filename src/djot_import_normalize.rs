@@ -4431,7 +4431,7 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
             )),
             Some(_) if image && reference.text.contains('\n') => {
                 let projected = projected_reference_text(reference.text, reference.quote_depth);
-                let child = djot_image_label_child_text(&projected, &HashSet::new(), true);
+                let child = djot_image_label_child_text(&projected, &HashSet::new(), true, false);
                 if cached_regex!(r"\n[ \t]*\n").unwrap().is_match(&child) {
                     findings.push((
                         at,
@@ -4534,7 +4534,8 @@ pub(super) fn losses(source: &str) -> Vec<crate::MigrationDiagnostic> {
                     })
                 {
                     let projected = projected_reference_text(&source[start + 1..i], depth);
-                    let child = djot_image_label_child_text(&projected, &HashSet::new(), true);
+                    let child =
+                        djot_image_label_child_text(&projected, &HashSet::new(), true, false);
                     if cached_regex!(r"\n[ \t]*\n").unwrap().is_match(&child) {
                         findings.push((start, "An image alternative text with a blank line cannot be spelled in Carve."));
                     }

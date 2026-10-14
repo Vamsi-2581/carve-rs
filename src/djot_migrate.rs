@@ -78,14 +78,15 @@ pub fn djot_to_carve(djot: &str) -> String {
 }
 
 pub(crate) fn djot_to_carve_prepared(stripped_definitions: &DjotFootnoteAttributeStrip) -> String {
-    djot_to_carve_prepared_with_quotes(stripped_definitions, false)
+    djot_to_carve_prepared_with_quotes(stripped_definitions, false, false)
 }
 
 fn djot_to_carve_prepared_with_quotes(
     stripped_definitions: &DjotFootnoteAttributeStrip,
     omit_quote_delimiters: bool,
+    nul_shielded: bool,
 ) -> String {
-    if !stripped_definitions.source.contains('\0') {
+    if nul_shielded || !stripped_definitions.source.contains('\0') {
         return convert_djot_document(stripped_definitions, omit_quote_delimiters);
     }
     let token = "\0U\0";
@@ -276,7 +277,7 @@ fn convert_djot_document(
                     child_text_cache
                         .entry(format!("0:{normalized}"))
                         .or_insert_with(|| {
-                            djot_image_label_child_text(&normalized, &inherited, true)
+                            djot_image_label_child_text(&normalized, &inherited, true, true)
                         })
                         .trim_matches([' ', '\t', '\r', '\n']),
                     " ",
@@ -346,7 +347,9 @@ fn convert_djot_document(
         }
         let plain = child_text_cache
             .entry(format!("1:{normalized_label}"))
-            .or_insert_with(|| djot_image_label_child_text(&normalized_label, &inherited, true));
+            .or_insert_with(|| {
+                djot_image_label_child_text(&normalized_label, &inherited, true, true)
+            });
         let plain = crate::render_carve::escape_image_alt(plain, in_table);
         let mut alt = String::new();
         for (index, line) in plain.split('\n').enumerate() {
@@ -627,6 +630,7 @@ fn djot_image_label_child_text(
     label: &str,
     inherited: &HashSet<String>,
     omit_quote_delimiters: bool,
+    nul_shielded: bool,
 ) -> String {
     let options = crate::Options {
         smart_typography: crate::SmartTypographyMode::Source,
@@ -638,8 +642,13 @@ fn djot_image_label_child_text(
     let native = djot_to_carve_prepared_with_quotes(
         &strip_footnote_definition_attributes(&format!("DJOTALT {} DJOTEND", protected_label)),
         omit_quote_delimiters,
-    )
-    .replace("\0U\0", "\0");
+        nul_shielded,
+    );
+    let native = if nul_shielded {
+        native.replace("\0U\0", "\0")
+    } else {
+        native
+    };
     let native = remove_inherited_attribute_markers(&native, inherited);
     let mut document = crate::parse_with_options(&native, &options);
     use crate::include_walk::SubtreeVisitor;
@@ -7532,6 +7541,7 @@ fn normalize_djot_links(source: &str, inherited: &HashSet<String>) -> String {
                 &strip_footnote_definition_attributes(&format!(
                     "{definitions}DJOTALT {raw} DJOTEND"
                 )),
+                true,
                 true,
             );
             let options = crate::Options {

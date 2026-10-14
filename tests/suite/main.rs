@@ -2110,5 +2110,9 @@ mod precut_writer_bugs;
 
 #[path = "../djot_div_openers.rs"]
 mod djot_div_openers;
+
+#[path = "../djot_image_label_nuls.rs"]
+mod djot_image_label_nuls;
+
 #[path = "../span_marker_continuation_col.rs"]
 mod span_marker_continuation_col;
