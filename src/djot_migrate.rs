@@ -725,6 +725,7 @@ fn simple_nested_image_label(label: &str) -> Option<&str> {
 
 #[cfg(test)]
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static IMAGE_LABEL_FULL_PARSES: std::cell::Cell<usize> = std::cell::Cell::new(0);
 }
 

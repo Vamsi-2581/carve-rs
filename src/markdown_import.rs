@@ -931,11 +931,10 @@ fn markdown_to_ast_with_code_lines(
         }
         let mut range = strikes.original_range(range);
         if let Some(url) = native_urls.get(&range.start) {
-            match &mut event {
-                Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
-                    *dest_url = url.clone().into();
-                }
-                _ => {}
+            if let Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) =
+                &mut event
+            {
+                *dest_url = url.clone().into();
             }
         }
         if let Some(literal) = crate::markdown_strike::literal_underscore(&source, &event, &range) {

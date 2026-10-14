@@ -298,18 +298,18 @@ pub(super) fn prepare(source: &str, options: Options) -> (String, HashMap<usize,
             at += 2;
             continue;
         }
-        if bytes[at] == b'<' {
-            if bytes.get(at + 1).is_some_and(|byte| {
+        if bytes[at] == b'<'
+            && bytes.get(at + 1).is_some_and(|byte| {
                 byte.is_ascii_alphabetic() || matches!(byte, b'!' | b'/' | b'?')
-            }) {
-                if let Some(end) = bytes[at..]
-                    .iter()
-                    .take_while(|byte| **byte != b'\n')
-                    .position(|byte| *byte == b'>')
-                {
-                    at += end + 1;
-                    continue;
-                }
+            })
+        {
+            if let Some(end) = bytes[at..]
+                .iter()
+                .take_while(|byte| **byte != b'\n')
+                .position(|byte| *byte == b'>')
+            {
+                at += end + 1;
+                continue;
             }
         }
         if bytes[at] == b'[' {
