@@ -27317,8 +27317,9 @@ fn followed_by_grapheme_extender(bytes: &[u8], at: usize) -> bool {
         return false;
     }
     static EXTENDER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let pattern = EXTENDER
-        .get_or_init(|| regex::Regex::new(r"\A[\p{Mn}\p{Me}\u{FE00}-\u{FE0F}\u{200D}]").unwrap());
+    let pattern = EXTENDER.get_or_init(|| {
+        regex::Regex::new(r"\A[\p{Mn}\p{Mc}\p{Me}\u{FE00}-\u{FE0F}\u{200D}]").unwrap()
+    });
     let width = match bytes[at] {
         0xC0..=0xDF => 2,
         0xE0..=0xEF => 3,
