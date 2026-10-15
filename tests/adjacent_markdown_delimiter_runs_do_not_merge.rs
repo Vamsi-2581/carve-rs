@@ -142,7 +142,7 @@ fn a_bold_italic_beside_an_emphasis_keeps_both_delimiters() {
 
 #[test]
 fn two_adjacent_bold_italics_keep_their_triples() {
-    assert_eq!(carve::to_markdown("a /*x*//*y*/\n"), "a ***x******y***\n");
+    assert_eq!(carve::to_markdown("a /*x*/{*/y/*}\n"), "a ***x******y***\n");
 }
 
 #[test]

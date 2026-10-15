@@ -778,7 +778,7 @@ fn bold_italic_rejects_empty_and_space_bounded_content() {
     assert_eq!(html("/* x*/"), "<p><em>* x*</em></p>");
     // Genuine bold-italic still produces Strong>Emphasis.
     assert_eq!(html("/*x*/"), "<p><strong><em>x</em></strong></p>");
-    assert_eq!(html("x/*y*/z"), "<p>x<strong><em>y</em></strong>z</p>");
+    assert_eq!(html("x/*y*/z"), "<p>x/<strong>y</strong>/z</p>");
 }
 
 // markup-carve/carve#1442: the doubled run is the canonical arrow, in both

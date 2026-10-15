@@ -24404,6 +24404,7 @@ fn parse_inline_context_with_pairs(
         // already been consumed, and code/raw spans consume their whole run.
         if c == b'{'
             && bytes.get(i + 1) == Some(&b'%')
+            && !decorated_braced_opener(bytes, i)
             && last_delimited_comment_close.is_some_and(|close| close >= i + 2)
         {
             if let Some(close_rel) = bytes[i + 2..].windows(2).position(|w| w == b"%}") {
@@ -25204,6 +25205,9 @@ fn parse_critic_markup(
     // openers. Only the matched inner slice (up to the closing pair) is
     // validated, once a pair is located.
     if bytes.get(start) != Some(&b'{') {
+        return None;
+    }
+    if decorated_braced_opener(bytes, start) {
         return None;
     }
     let content_start = start + 2;
@@ -26808,7 +26812,10 @@ fn read_bracketed(bytes: &[u8], start: usize) -> Option<(String, usize)> {
 /// closer, in which case it is not a comment and the scan continues normally
 /// (carve#403).
 fn skip_editorial_comment(bytes: &[u8], start: usize) -> Option<usize> {
-    if bytes.get(start) != Some(&b'{') || bytes.get(start + 1) != Some(&b'#') {
+    if bytes.get(start) != Some(&b'{')
+        || bytes.get(start + 1) != Some(&b'#')
+        || decorated_braced_opener(bytes, start)
+    {
         return None;
     }
     let mut i = start + 2;
@@ -26870,7 +26877,11 @@ pub(crate) fn structural_bracket_offsets(source: &str) -> Option<Vec<usize>> {
             b'<' if scanned_autolink_end(bytes, i).is_some() => {
                 i = scanned_autolink_end(bytes, i).unwrap() + 1;
             }
-            b'{' if matches!(bytes.get(i + 1), Some(b'#' | b'%')) => return None,
+            b'{' if matches!(bytes.get(i + 1), Some(b'#' | b'%'))
+                && !decorated_braced_opener(bytes, i) =>
+            {
+                return None
+            }
             b'[' | b']' => {
                 offsets.push(i);
                 i += 1;
@@ -27312,7 +27323,7 @@ fn is_carve_ws(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
 }
 
-fn followed_by_grapheme_extender(bytes: &[u8], at: usize) -> bool {
+pub(crate) fn followed_by_grapheme_extender(bytes: &[u8], at: usize) -> bool {
     if !bytes.get(at).is_some_and(|byte| !byte.is_ascii()) {
         return false;
     }
@@ -27330,6 +27341,14 @@ fn followed_by_grapheme_extender(bytes: &[u8], at: usize) -> bool {
         .get(at..at + width)
         .and_then(|first| std::str::from_utf8(first).ok())
         .is_some_and(|first| pattern.is_match(first))
+}
+
+fn decorated_braced_opener(bytes: &[u8], open: usize) -> bool {
+    bytes.get(open) == Some(&b'{')
+        && bytes
+            .get(open + 1)
+            .is_some_and(|marker| b"/*_^,~=+-#%".contains(marker))
+        && followed_by_grapheme_extender(bytes, open + 2)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -27350,8 +27369,15 @@ fn match_emphasis(
     // start with a non-space char and be non-empty; carve-php additionally
     // rejects a closer whose content ends in whitespace, scanning on to a later
     // `*/`. Empty / space-bounded content is NOT bold-italic and falls through
-    // to ordinary `/` emphasis below.
-    if c == b'/' && bytes.get(i + 1) == Some(&b'*') {
+    // to ordinary `/` emphasis below. The outer `/` also takes the bare
+    // opener guard before the token and the bare closer guard after it.
+    if c == b'/'
+        && bytes.get(i + 1) == Some(&b'*')
+        && !i
+            .checked_sub(1)
+            .and_then(|before| bytes.get(before))
+            .is_some_and(|before| before.is_ascii_alphanumeric() || matches!(before, b'_' | b'/'))
+    {
         let start = i + 2;
         // Opener guard: the first content byte must exist and not be whitespace.
         if bytes.get(start).is_some_and(|b| !is_carve_ws(*b))
@@ -29767,6 +29793,7 @@ fn bold_italic_close(
                 && close > 0
                 && !is_carve_ws(bytes[close - 1])
                 && !followed_by_grapheme_extender(bytes, close + 2)
+                && !bytes.get(close + 2).is_some_and(u8::is_ascii_alphanumeric)
             {
                 index
                     .entry(bounds.bracket_run_at(close))
@@ -30001,7 +30028,7 @@ fn find_emphasis_close(
                 continue;
             }
         }
-        if ch == b'{' && bytes.get(j + 1) == Some(&b'%') {
+        if ch == b'{' && bytes.get(j + 1) == Some(&b'%') && !decorated_braced_opener(bytes, j) {
             let last = *memo
                 .last_comment_close
                 .get_or_insert_with(|| bytes.windows(2).rposition(|w| w == b"%}"));
@@ -30208,6 +30235,9 @@ fn braced_inline_scan(
     _scanning: u8,
     bounds: &InlineBounds<'_>,
 ) -> Option<usize> {
+    if decorated_braced_opener(bytes, open) {
+        return None;
+    }
     let delim = bytes.get(open + 1).copied()?;
     let content = open + 2;
     // `{~ ~> ~}` is matched before the forced strike, as the main loop does.

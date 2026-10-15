@@ -54,7 +54,7 @@ fn a_block_that_is_not_the_closers_is_unchanged() {
     );
     row(
         "a/*y*/b{.k} c\n",
-        "<p>a<strong><em>y</em></strong>b{.k} c</p>",
+        "<p>a/<strong>y</strong>/b{.k} c</p>",
         &mut moved,
     );
     row(
