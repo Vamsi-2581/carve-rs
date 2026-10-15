@@ -39,6 +39,10 @@ fn a_variation_selector_after_a_star_keeps_bare_italic() {
 fn a_combined_markdown_run_inside_a_word_keeps_its_stars() {
     assert_eq!(carve::to_markdown("a{/*y*/}b\n"), "a***y***b\n");
     assert_eq!(carve::to_markdown("a{/*.y.*/}b\n"), "a<em>**.y.**</em>b\n");
+    assert_eq!(
+        carve::to_markdown("{/{/{*x*}/}b/}\n"),
+        "*<em>**x**</em>b*\n"
+    );
 }
 
 #[test]

@@ -2402,6 +2402,10 @@ fn reflank_runs(nodes: &[InlineNode], parts: &mut [String], ctx: &MarkdownContex
         // An italic around a single strong node joins into a triple-star run.
         // Check the content beyond all three stars against the neighbours.
         if delimiter == "*"
+            && !ctx
+                .delimiter_ancestors
+                .iter()
+                .any(|run| run.starts_with('*'))
             && matches!(&nodes[i], InlineNode::Emphasis(emphasis)
                 if emphasis.kind == EmphasisKind::Italic
                     && emphasis.children.len() == 1
