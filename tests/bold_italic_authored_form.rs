@@ -27,11 +27,31 @@ fn both_spellings_render_the_same_html() {
 }
 
 #[test]
-fn the_mid_word_form_survives() {
-    // A bare `/` needs a word boundary, so the nested spelling is not the same
-    // document here: the two-char token skips that guard. A writer that
-    // normalized would change what this says.
+fn the_mid_word_form_reads_as_text_and_strong() {
     assert_eq!(carve::to_carve("a/*y*/b\n"), "a/*y*/b\n");
+    assert_eq!(carve::to_html("a/*y*/b\n"), "<p>a/<strong>y</strong>/b</p>");
+}
+
+#[test]
+fn the_combined_token_takes_the_outer_word_boundaries() {
+    for (source, expected) in [
+        ("a /*y*/b", "<p>a /<strong>y</strong>/b</p>"),
+        ("_/*y*/", "<p>_/<strong>y</strong>/</p>"),
+        ("//*y*/", "<p>//<strong>y</strong>/</p>"),
+        (
+            "Run src/*test*/fixtures now",
+            "<p>Run src/<strong>test</strong>/fixtures now</p>",
+        ),
+        ("/*a*/b c*/", "<p><strong><em>a*/b c</em></strong></p>"),
+        ("a{*/y/*}b", "<p>a<strong><em>y</em></strong>b</p>"),
+        ("/*a*/ b", "<p><strong><em>a</em></strong> b</p>"),
+    ] {
+        assert_eq!(carve::to_html(source), expected, "{source}");
+    }
+
+    let source = "a{*/y/*}b\n";
+    let written = carve::to_carve(source);
+    assert_eq!(carve::to_html(&written), carve::to_html(source));
 }
 
 #[test]

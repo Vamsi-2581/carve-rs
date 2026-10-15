@@ -13,6 +13,8 @@ use std::fs;
 use std::path::PathBuf;
 
 const IMPLEMENTED: &[&str] = &[
+    "a-delimiter-that-is-part-of-a-larger-character-is-text",
+    "the-combined-bold-italic-token-does-not-open-or-close-inside-a-word",
     "inside-an-unclosed-fence-only-the-innermost-container-s-closer-is-structural",
     "a-continuation-on-a-span-marker-joins-the-cell-the-marker-resolves-into",
     "a-table-row-ends-a-description-body-and-a-lone-plus-folds-into-a-term",
@@ -856,6 +858,9 @@ const IMPLEMENTED: &[&str] = &[
     // carve#3139, arrived with the bump to carve dc8e6905.
     "a-closed-fence-in-a-nested-child-leaves-no-paragraph-open",
     "a-code-line-left-of-an-authored-base-fence-opener-is-measured-from-that-base",
+    "an-autolink-is-opaque-to-the-bracket-scan",
+    "editorial-markup-closes-outside-a-cross-reference-or-a-bracket-run",
+    "the-combined-bold-italic-token-does-not-open-after-an-underscore-or-a-slash",
 ];
 
 // Spec-main categories tracked by separate implementation work. Keep them

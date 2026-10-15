@@ -56,11 +56,11 @@
     "markdown": "![a](x.png)\n\n<em>*x*</em>\n"
   },
   {
-    "source": "::: note \"/*x*/b\"\nbody\n:::\n",
-    "markdown": "<strong>***x***b</strong>\n\nbody\n"
+    "source": "::: note \"{*/x/*}b\"\nbody\n:::\n",
+    "markdown": "***x*b**\n\nbody\n"
   },
   {
     "source": "::: tip \"a/*x*/\"\nbody\n:::\n",
-    "markdown": "**a<strong><em>x</em></strong>**\n\nbody\n"
+    "markdown": "**a/x/**\n\nbody\n"
   }
 ]

@@ -53,14 +53,8 @@ fn re_spells_strike_in_the_same_seam() {
 }
 
 #[test]
-fn re_spells_bold_italic_in_the_same_seam() {
-    // `/*x!*/` is a BoldItalic NODE, which carve-js and carve-php do not have,
-    // so the `***` run is this engine's own row. `{*/x!/*}` would NOT do: that
-    // is a Strong holding an Italic, and it would pass on the Strong arm alone.
-    assert_eq!(
-        carve::to_markdown("a /*x!*/b\n"),
-        "a <strong><em>x!</em></strong>b\n"
-    );
+fn a_combined_token_cannot_close_before_a_word() {
+    assert_eq!(carve::to_markdown("a /*x!*/b\n"), "a /**x!**/b\n");
 }
 
 #[test]

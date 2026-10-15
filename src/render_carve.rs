@@ -3911,6 +3911,12 @@ fn render_nodes_with_verbatim(
         let prev = idx
             .checked_sub(1)
             .and_then(|i| last_boundary(&nodes[i]))
+            .or_else(|| match node {
+                InlineNode::Emphasis(emphasis) if emphasis.kind == EmphasisKind::BoldItalic => {
+                    out.chars().last()
+                }
+                _ => None,
+            })
             .unwrap_or_default();
         let next = nodes
             .get(idx + 1)
@@ -4275,6 +4281,11 @@ fn render_inline_body(
             ctx.open_kinds.truncate(ctx.open_kinds.len() - kinds.len());
             let content_peak = ctx.emphasis_depth_peak;
             ctx.emphasis_depth_peak = preceding_peak.max(content_peak);
+            if emphasis.kind != EmphasisKind::SmallCaps
+                && unspellable_decorated_braced_content(emphasis_node_type(emphasis.kind), &content)
+            {
+                return String::new();
+            }
             let attributes_conflict = kinds.iter().any(|marker| {
                 ctx.attribute_markers.get(marker).copied().unwrap_or(0)
                     > before_attributes.get(marker).copied().unwrap_or(0)
@@ -4288,7 +4299,16 @@ fn render_inline_body(
                     .unwrap_or(false)
                     || ctx.emphasis_counts[index] > before_emphasis[index]
             };
-            if emphasis.kind == EmphasisKind::BoldItalic && !hugs_its_delimiters(&content) {
+            let combined_needs_nesting = !hugs_its_delimiters(&content)
+                || prev_char.is_ascii_alphanumeric()
+                || matches!(prev_char, '_' | '/')
+                || (render_attrs(&emphasis.attrs).is_empty()
+                    && (next_char.is_ascii_alphanumeric()
+                        || crate::parse::followed_by_grapheme_extender(
+                            next_char.encode_utf8(&mut [0; 4]).as_bytes(),
+                            0,
+                        )));
+            if emphasis.kind == EmphasisKind::BoldItalic && combined_needs_nesting {
                 let split_peak = content_peak + 1;
                 ctx.emphasis_depth_peak = ctx.emphasis_depth_peak.max(split_peak);
                 if split_peak >= crate::parse::MAX_NESTING_DEPTH - 1 {
@@ -4300,9 +4320,9 @@ fn render_inline_body(
                 }
             }
             if (attributes_conflict
-                && (emphasis.kind != EmphasisKind::BoldItalic || !hugs_its_delimiters(&content)))
+                && (emphasis.kind != EmphasisKind::BoldItalic || combined_needs_nesting))
                 || (emphasis.kind == EmphasisKind::BoldItalic
-                    && !hugs_its_delimiters(&content)
+                    && combined_needs_nesting
                     && kinds.iter().any(|marker| repeated(*marker)))
             {
                 let body = if emphasis.kind == EmphasisKind::BoldItalic {
@@ -4391,7 +4411,7 @@ fn render_inline_body(
                 ),
                 // `/*` needs content that hugs it: `/* x*/` reparses as an
                 // emphasis holding literal stars, so nest it instead.
-                EmphasisKind::BoldItalic if !hugs_its_delimiters(&content) => (
+                EmphasisKind::BoldItalic if combined_needs_nesting => (
                     "",
                     render_emphasis(
                         session,
@@ -4690,6 +4710,9 @@ fn render_inline_body(
                 );
                 return String::new();
             }
+            if unspellable_decorated_braced_content("insert", &content) {
+                return String::new();
+            }
             format!("{{+{content}+}}{}", render_inline_attrs(&insert.attrs, ctx))
         }
         InlineNode::CriticDelete(delete) => {
@@ -4703,6 +4726,9 @@ fn render_inline_body(
                 );
                 return String::new();
             }
+            if unspellable_decorated_braced_content("delete", &content) {
+                return String::new();
+            }
             format!("{{-{content}-}}{}", render_inline_attrs(&delete.attrs, ctx))
         }
         InlineNode::CriticSubstitute(sub) => {
@@ -4714,9 +4740,15 @@ fn render_inline_body(
             let old = render_inlines(session, &sub.old, ctx);
             let new = render_inlines(session, &sub.new, ctx);
             ctx.open_kinds.pop();
+            if unspellable_decorated_braced_content("substitution", &old) {
+                return String::new();
+            }
             format!("{{~{old}~>{new}~}}")
         }
         InlineNode::CriticComment(comment) => {
+            if unspellable_decorated_braced_content("critic_comment", &comment.text) {
+                return String::new();
+            }
             format!("{{#{}#}}", escape_critic_text(&comment.text))
         }
         InlineNode::CrossRef(crossref) => {
@@ -5356,6 +5388,17 @@ fn hugs_its_delimiters(content: &str) -> bool {
     }
 }
 
+fn unspellable_decorated_braced_content(kind: &'static str, content: &str) -> bool {
+    if crate::parse::followed_by_grapheme_extender(content.as_bytes(), 0) {
+        crate::render_carve_error::record_unspellable(
+            kind,
+            "content starting with a grapheme extender has no Carve source spelling",
+        );
+        return true;
+    }
+    false
+}
+
 fn emphasis_node_type(kind: EmphasisKind) -> &'static str {
     match kind {
         EmphasisKind::Italic => "emphasis",
@@ -5384,6 +5427,10 @@ fn render_emphasis(
     let reads_as_bold_italic = delim == "/" && content.starts_with('*');
     let needs_forced = is_word_boundary(prev_char)
         || is_word_boundary(next_char)
+        || crate::parse::followed_by_grapheme_extender(
+            next_char.encode_utf8(&mut [0; 4]).as_bytes(),
+            0,
+        )
         || reads_as_bold_italic
         || content.starts_with(delim)
         || content.ends_with(delim)
