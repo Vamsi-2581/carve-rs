@@ -43,6 +43,10 @@ fn a_combined_markdown_run_inside_a_word_keeps_its_stars() {
         carve::to_markdown("{/{/{*x*}/}b/}\n"),
         "*<em>**x**</em>b*\n"
     );
+    assert_eq!(
+        carve::to_markdown("{~{/{*x*}/}b~}\n"),
+        "~~<em>**x**</em>b~~\n"
+    );
 }
 
 #[test]
