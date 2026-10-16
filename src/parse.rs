@@ -18418,6 +18418,7 @@ fn collect_indented_block_mapped_with_columns(
             _ => (sliced, consumed, synthetic),
         };
         let mut sliced = sliced;
+        let mut trimmed_after_slice = 0usize;
         if nested_paragraph_column.is_some_and(|owner| indent < owner)
             && indent != strip_cols
             && !(indent > strip_cols
@@ -18435,10 +18436,14 @@ fn collect_indented_block_mapped_with_columns(
             && fence.is_none()
             && comment_fence.is_none()
         {
-            sliced = format!("{LAZY}{}", trim_ascii_start(&sliced));
+            let trimmed = trim_ascii_start(&sliced);
+            trimmed_after_slice += sliced.len() - trimmed.len();
+            sliced = format!("{LAZY}{trimmed}");
         }
         if marker_colon_retained_para && indent < strip_cols {
-            sliced = trim_ascii_start(&sliced).to_string();
+            let trimmed = trim_ascii_start(&sliced);
+            trimmed_after_slice += sliced.len() - trimmed.len();
+            sliced = trimmed.to_string();
         }
         if (lazy_code_line
             || framed_comment_payload
@@ -18653,10 +18658,9 @@ fn collect_indented_block_mapped_with_columns(
         }
         reached.push(indent >= strip_cols);
         if building_maps {
-            col_map.push(
-                cur.source_col(cur.pos)
-                    .map(|outer| outer + consumed as isize - synthetic as isize),
-            );
+            col_map.push(cur.source_col(cur.pos).map(|outer| {
+                outer + consumed as isize + trimmed_after_slice as isize - synthetic as isize
+            }));
         }
         cur.consume();
     }

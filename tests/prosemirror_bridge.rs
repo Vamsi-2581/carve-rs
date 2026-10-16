@@ -1665,8 +1665,10 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // and 605): 17 round trip strictly and 4 report a degradation.
     // Spec dc3bfaa5 adds sections 606 and 607 (seven documents): six round
     // trip strictly and one reports a degradation.
-    const STRICT: usize = 1964;
-    const LOSSY: usize = 621;
+    // Spec a6318f71 adds 68 documents in sections 608 to 616: 38 strict
+    // round trips and 30 reported losses.
+    const STRICT: usize = 2002;
+    const LOSSY: usize = 651;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in

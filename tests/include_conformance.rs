@@ -624,17 +624,9 @@ fn compare(name: &str, vector: &Value, run: &RunResult) -> Vec<String> {
 #[test]
 fn include_conformance_vectors_match_carve_js_goldens() {
     let dir = vectors_dir();
-    // These eight vectors come from carve spec d79a72ed. Keep the corpus
-    // submodule pin stable until its newer parser rulings are implemented.
-    let additions =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/include-conformance-additions/vectors");
-    let mut entries: Vec<PathBuf> = [&dir, &additions]
-        .into_iter()
-        .flat_map(|source| {
-            fs::read_dir(source)
-                .unwrap_or_else(|e| panic!("read {source:?}: {e}"))
-                .map(|entry| entry.expect("dir entry").path())
-        })
+    let mut entries: Vec<PathBuf> = fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("read {dir:?}: {e}"))
+        .map(|entry| entry.expect("dir entry").path())
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .collect();
     entries.sort();
