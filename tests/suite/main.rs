@@ -12,8 +12,14 @@ mod raw_payload_termination;
 
 #[path = "../a_block_at_an_item_content_column_closes_its_paragraph_before_an_unclosed_fence.rs"]
 mod a_block_at_an_item_content_column_closes_its_paragraph_before_an_unclosed_fence;
+#[path = "../a_comment_retained_body_opens_its_fence.rs"]
+mod a_comment_retained_body_opens_its_fence;
 #[path = "../a_definition_in_a_quote_under_an_item_leaves_no_lazy_paragraph.rs"]
 mod a_definition_in_a_quote_under_an_item_leaves_no_lazy_paragraph;
+#[path = "../a_folded_marker_or_quote_does_not_move_the_base.rs"]
+mod a_folded_marker_or_quote_does_not_move_the_base;
+#[path = "../a_nested_note_on_a_marker_line_keeps_its_column.rs"]
+mod a_nested_note_on_a_marker_line_keeps_its_column;
 #[path = "../a_quote_on_a_container_marker_line_hosts_its_definitions.rs"]
 mod a_quote_on_a_container_marker_line_hosts_its_definitions;
 #[path = "../an_autolink_a_cross_reference_or_a_comment_is_atomic.rs"]
@@ -26,8 +32,16 @@ mod an_explicit_heading_id_carrier_overrides_the_slug_heuristic;
 mod an_item_line_under_a_plain_paragraph_stays_lazy_in_the_closer_scan;
 #[path = "../an_unclosed_fence_ends_only_at_its_own_containers_closer.rs"]
 mod an_unclosed_fence_ends_only_at_its_own_containers_closer;
+#[path = "../colon_body_on_a_marker_line_uses_its_host_base.rs"]
+mod colon_body_on_a_marker_line_uses_its_host_base;
+#[path = "../definitions_close_nested_containers.rs"]
+mod definitions_close_nested_containers;
+#[path = "../definitions_register_only_in_their_host_column.rs"]
+mod definitions_register_only_in_their_host_column;
 #[path = "../footnote_container_paragraph_breaks.rs"]
 mod footnote_container_paragraph_breaks;
+#[path = "../unmarked_lines_follow_their_reachable_container.rs"]
+mod unmarked_lines_follow_their_reachable_container;
 
 #[path = "../verbatim_continuation_guards.rs"]
 mod verbatim_continuation_guards;
@@ -506,6 +520,8 @@ mod a_tab_closer_below_a_raised_fence_closes_it;
 mod an_authored_footnote_reference_id_replaces_the_generated_one;
 #[path = "../empty_destinations.rs"]
 mod empty_destinations;
+#[path = "../nested_paragraph_owner_columns.rs"]
+mod nested_paragraph_owner_columns;
 #[path = "../roundtrip_import_consumes_an_invalid_span_carrier.rs"]
 mod roundtrip_import_consumes_an_invalid_span_carrier;
 #[path = "../table_continuation_lines_are_cell_wrap_markers.rs"]
@@ -2239,3 +2255,6 @@ mod djot_opaque_reference_targets;
 mod markdown_reference_definition_with_wrapped_fields;
 #[path = "../markdown_shortcut_reference_imports_collapsed.rs"]
 mod markdown_shortcut_reference_imports_collapsed;
+
+#[path = "../a_marker_line_footnote_leaves_its_container_open.rs"]
+mod a_marker_line_footnote_leaves_its_container_open;

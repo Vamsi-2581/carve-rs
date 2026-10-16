@@ -893,7 +893,9 @@ fn extract_nested_footnote_defs(
 
         let (body, nested, nested_positions, nested_links) =
             extract_footnote_defs(&parent.source, 1, options.positions, true, options);
-        defs.insert(label, compose_mapped_source(body, &parent));
+        let mut body = compose_mapped_source(body, &parent);
+        rebase_body_blocks(&mut body, true, options, false);
+        defs.insert(label, body);
 
         for (nested_label, nested_source) in nested {
             let nested_source = compose_mapped_source(nested_source, &parent);
@@ -1474,6 +1476,7 @@ fn extract_footnote_defs(
     // line between entries is transparent to a definition list, so the gate
     // reads past one.
     let mut previous_non_blank = "";
+    let mut last_folded_marker = false;
     let mut i = 0;
     while i < lines.len() {
         let folded_fence = detect_fence_open(trim_ascii_start(lines[i])).is_some_and(|open| {
@@ -1490,10 +1493,22 @@ fn extract_footnote_defs(
         // Called for its effect on the column stack, not for its return: every
         // question below asks `reached_by` about a specific column instead of
         // taking the innermost one (carve-rs#1054).
+        let mut marker_probe_unaffordable = false;
+        let folded_marker = marker_line_may_be_lazy(lines[i])
+            && (last_folded_marker || !marker_follows_sibling(&body, lines[i]))
+            && line_folds_into_an_open_paragraph(
+                &body,
+                lines[i],
+                options,
+                &mut probe_budget,
+                &mut marker_probe_unaffordable,
+            );
+        last_folded_marker = folded_marker;
         columns.observe(
             lines[i],
             in_fence.is_some()
                 || folded_fence
+                || folded_marker
                 || verse_lines[i].is_body()
                 || in_comment_fence.is_some()
                 || prepass_quote_line_is_folded(&folded_into_term, i, lines[i]),
@@ -1774,6 +1789,7 @@ fn extract_footnote_defs(
             // whether, not where: a footnote definition registers wherever it
             // lands and is hoisted either way, so no column bound is enforced.
             let mut body_open_below = false;
+            let mut open_term = term_start_column(first).is_some();
             let mut retained_below_comment = false;
             let mut below_comment_span = None;
             // A lone marker-line `+` gives the note its first flush-left block.
@@ -1817,12 +1833,33 @@ fn extract_footnote_defs(
                 while i < lines.len() {
                     let line = lines[i];
                     let column = indent_columns(line);
-                    let below_comment =
-                        column < body_indent && trim_ascii_start(line).starts_with("%%");
+                    if retained_below_comment {
+                        if let Some(open) = note_fence {
+                            def_lines.push(line.to_owned());
+                            def_line_map.push(Some(first_source_line + i));
+                            if positions {
+                                def_col_map.push(Some(0));
+                            }
+                            if is_fence_close(trim_ascii_start(line), open) {
+                                note_fence = None;
+                                retained_below_comment = false;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    let below_comment = column < body_indent
+                        && trim_ascii_start(line).starts_with("%%")
+                        && !is_definition_placeholder(line);
                     if below_comment_span.is_some() || (below_comment && note_fence.is_none()) {
                         if below_comment_span.is_none()
                             && !retained_below_comment
-                            && !body_ends_with_open_paragraph(&def_lines.join("\n"), options)
+                            && ((open_term && column == 0 && def_lines.len() == 1)
+                                || (!open_term
+                                    && !body_ends_with_open_paragraph(
+                                        &def_lines.join("\n"),
+                                        options,
+                                    )))
                         {
                             break;
                         }
@@ -1838,7 +1875,7 @@ fn extract_footnote_defs(
                                 below_comment_span = Some(open.fence_len);
                             }
                         }
-                        let kept = if trim_ascii_start(line).starts_with("%%") {
+                        let kept = if trim_ascii_start(line).starts_with("%%") && !open_term {
                             trim_ascii_start(line).to_owned()
                         } else {
                             line.to_owned()
@@ -1855,9 +1892,23 @@ fn extract_footnote_defs(
                     if retained_below_comment
                         && column < body_indent
                         && !is_blank_line(line)
-                        && (column > 0 || !item_block_opener(trim_ascii_start(line)))
+                        && (column > 0
+                            || !item_block_opener(trim_ascii_start(line))
+                            || (detect_fence_open(trim_ascii_start(line)).is_some()
+                                && def_lines
+                                    .last()
+                                    .is_some_and(|last| is_line_comment_any_column(last))))
                     {
                         let kept = trim_ascii_start(line).to_owned();
+                        if def_lines
+                            .last()
+                            .is_some_and(|last| is_line_comment_any_column(last))
+                        {
+                            if let Some(mut open) = detect_fence_open(&kept) {
+                                open.content_col = 0;
+                                note_fence = Some(open);
+                            }
+                        }
                         def_line_map.push(Some(first_source_line + i));
                         if positions {
                             def_col_map.push(stripped_col(Some(0), line, &kept));
@@ -1987,8 +2038,10 @@ fn extract_footnote_defs(
                         } else if let Some(mut open) = detect_fence_open(trimmed) {
                             open.content_col = indent_columns(line);
                             note_fence = Some(open);
-                        } else if let Some((label_part, target_part, mut def)) =
-                            parse_link_def_line_with_value(trim_ascii_start(trimmed))
+                        } else if let Some((label_part, target_part, mut def)) = (!open_term
+                            || indent_columns(trimmed) == 0)
+                            .then(|| parse_link_def_line_with_value(trim_ascii_start(trimmed)))
+                            .flatten()
                         {
                             // A LINK DEFINITION inside the body is
                             // document-level metadata like any other, so it is
@@ -2050,6 +2103,9 @@ fn extract_footnote_defs(
                         // too hoisted a line every other engine keeps in the body.
                         let residual = indent_columns(trimmed);
                         let flush = trim_ascii_start(trimmed);
+                        if residual == 0 || is_blank_line(trimmed) {
+                            open_term = term_start_column(flush).is_some();
+                        }
                         let is_note_def = parse_footnote_def_line(flush).is_some();
                         // A DEFINITION OPENS THE NESTED BODY; A BLOCK CLOSES IT.
                         // Plain prose is that body's own lazy continuation and
@@ -2225,11 +2281,14 @@ fn extract_footnote_defs(
                 {
                     note_opacity.comment = None;
                 }
-                // Every line at or past the body column is the note's, whatever
-                // a comment above it closed (CARVE-P9-053, CARVE-P0-014).
+                // A marker note admits comments at its host column.
                 let reaches_floor = |at, admitted_fence: Option<(FenceOpen, usize)>| {
                     content(lines[at]).is_some_and(|line| {
-                        admitted_fence.is_some() || indent_columns(line) >= note_floor
+                        admitted_fence.is_some()
+                            || indent_columns(line) >= note_floor
+                            || (marker_note
+                                && indent_columns(line) >= prefix_cols
+                                && is_line_comment_any_column(line))
                     })
                 };
                 let blank = |raw| content(raw).is_some_and(is_blank_line);
@@ -2276,14 +2335,14 @@ fn extract_footnote_defs(
                         if !line_reaches_floor {
                             break;
                         }
-                        if parse_footnote_def_line(trim_ascii_start(line)).is_some() {
+                        if marker_note && parse_footnote_def_line(trim_ascii_start(line)).is_some()
+                        {
                             break;
                         }
                         let dedented = strip_leading_columns(line, note_floor);
                         // A link definition at the note's own column is metadata,
                         // even when an open marker-line paragraph precedes it.
-                        if marker_note
-                            && indent_columns(line) == note_floor
+                        if indent_columns(line) >= note_floor
                             && note_admitted_fence.is_none()
                             && note_opacity.comment.is_none()
                             && note_opacity.code.is_none()
@@ -2387,7 +2446,11 @@ fn extract_footnote_defs(
                 let absorbed_note_marker =
                     detect_list_marker_full(without_blockquote_prefixes(raw_def_line))
                         .is_some_and(|marker| parse_footnote_def_line(marker.content).is_some());
-                rebase_body_blocks(&mut definition_source, true, options, absorbed_note_marker);
+                if absorbed_note_marker
+                    || parse_footnote_def_line(trim_ascii_start(first)).is_none()
+                {
+                    rebase_body_blocks(&mut definition_source, true, options, absorbed_note_marker);
+                }
                 defs.insert(label.to_string(), definition_source);
             }
             // Leave the container's structural prefix (or a blank line at top
@@ -2624,6 +2687,17 @@ fn open_frame(blocks: &[BlockNode]) -> OpenFrame {
 /// get the same answer from the same code.
 fn marker_line_may_be_lazy(line: &str) -> bool {
     detect_list_marker_full(without_blockquote_prefixes(line)).is_some()
+}
+
+fn marker_follows_sibling(body: &[impl AsRef<str>], line: &str) -> bool {
+    body.last().is_some_and(|prior| {
+        let prior = prior.as_ref();
+        let prior_bare = without_blockquote_prefixes(prior);
+        let line_bare = without_blockquote_prefixes(line);
+        indent_columns(prior) == indent_columns(line)
+            && prior[..prior.len() - prior_bare.len()] == line[..line.len() - line_bare.len()]
+            && detect_list_marker_full(prior_bare).is_some()
+    })
 }
 
 /// Does the BLOCK PARSER fold `line` into a paragraph that was already open?
@@ -4021,6 +4095,7 @@ fn extract_link_defs_with_guard_full(
     options: &Options<'_>,
     mut guard: Option<&mut usize>,
 ) -> (String, BTreeMap<String, LinkDef>) {
+    let has_candidate = source_may_contain_link_definition(source);
     let mut body: Vec<std::borrow::Cow<'_, str>> = Vec::new();
     let mut defs = BTreeMap::new();
     let mut in_fence: Option<FenceOpen> = None;
@@ -4074,6 +4149,7 @@ fn extract_link_defs_with_guard_full(
     let mut container_closers: Option<ContainerCommentClosers> = None;
     // See `extract_footnote_defs`: the line the `after_term` gate asks about.
     let mut previous_non_blank = "";
+    let mut last_folded_marker = false;
     for (line_index, line) in all_lines.iter().copied().enumerate() {
         let folded_fence = detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
             !closer_maxima.has_run_after(line_index, open)
@@ -4087,10 +4163,25 @@ fn extract_link_defs_with_guard_full(
         // fence, so `  [r]: /u` after it was stripped to that phantom column and
         // registered, where the block parser sees a top-level line two columns
         // in and reads it as text.
+        let mut marker_probe_unaffordable = false;
+        let folded_marker = has_candidate
+            && marker_line_may_be_lazy(line)
+            && (last_folded_marker || !marker_follows_sibling(&body, line))
+            && guard.as_mut().is_some_and(|budget| {
+                line_folds_into_an_open_paragraph(
+                    &body,
+                    line,
+                    options,
+                    budget,
+                    &mut marker_probe_unaffordable,
+                )
+            });
+        last_folded_marker = folded_marker;
         let content_col = columns.observe(
             line,
             in_fence.is_some()
                 || folded_fence
+                || folded_marker
                 || verse_lines[line_index].is_body()
                 || in_comment_fence.is_some()
                 || prepass_quote_line_is_folded(&folded_into_term, line_index, line),
@@ -4989,10 +5080,10 @@ thread_local! {
 /// `strip_quote_levels` for quotes each written after a fixed indentation.
 fn strip_indented_quote_levels<'a>(mut line: &'a str, indents: &[usize]) -> Option<&'a str> {
     for &indent in indents {
-        if leading_ws(line) != indent {
+        if leading_ws(line) < indent {
             return None;
         }
-        line = strip_blockquote_prefix(&line[indent..])?;
+        line = strip_blockquote_prefix(trim_ascii_start(&line[indent..]))?;
     }
     Some(line)
 }
@@ -7759,6 +7850,8 @@ fn rebase_body_blocks(
     let mut orphaned_code: Option<(FenceOpen, usize)> = None;
     let mut after_blank = false;
     let mut paragraph_open = false;
+    // The open paragraph is the container's own, not a descendant's.
+    let mut own_paragraph = false;
     let mut opaque_quote_tail = false;
     // A code-shaped run outside the preceding verse's bases is inline text.
     // Keep its authored column through repeated rebase passes.
@@ -7812,6 +7905,7 @@ fn rebase_body_blocks(
         {
             orphaned_code = None;
             paragraph_open = true;
+            own_paragraph = false;
             after_blank = false;
             i += 1;
             continue;
@@ -7831,6 +7925,7 @@ fn rebase_body_blocks(
             let open = detect_fence_open(&local_at_base).unwrap();
             i = rebased_code_fence_end(&lines, i, base, open) + 1;
             paragraph_open = true;
+            own_paragraph = false;
             continue;
         }
         if base == 0 {
@@ -7849,6 +7944,7 @@ fn rebase_body_blocks(
                 );
             }
             paragraph_open = !is_line_comment_any_column(&lines[i]);
+            own_paragraph = false;
             block_at_minimum = !paragraph_open && source.reached.get(i).copied().unwrap_or(false);
             i += 1;
             continue;
@@ -7941,6 +8037,17 @@ fn rebase_body_blocks(
             nested_columns.pop();
             nested_list_marker_bases.pop();
         }
+        // §10 I2: a marker under the container's own paragraph folds into it
+        // and opens no item, so it sets no column for the lines below.
+        if include_sublists
+            && own_paragraph
+            && paragraph_open
+            && !after_blank
+            && is_list_marker(&local_at_base)
+        {
+            i += 1;
+            continue;
+        }
         if let Some(column) = marker_content_col_at(&lines[i], base)
             .filter(|_| !(absorbed_note_marker && paragraph_open && !after_blank))
         {
@@ -7954,6 +8061,7 @@ fn rebase_body_blocks(
                 }) && lines
                     .get(i + 1)
                     .is_some_and(|next| !is_blank_line(next) && indent_columns(next) < column);
+                own_paragraph = false;
                 paragraph_open = colon_folds
                     || (include_sublists
                         && marker
@@ -8001,6 +8109,7 @@ fn rebase_body_blocks(
                     || is_definition_list_start(&local_at_base))
             {
                 paragraph_open = true;
+                own_paragraph = false;
             }
             block_at_minimum = false;
             i += 1;
@@ -8097,8 +8206,7 @@ fn rebase_body_blocks(
                 .map(|open| open.fence_len)
                 .or_else(|| detect_quote_block_open(&lines[i]))
             {
-                let marker_body =
-                    source.item_marker_at_start && i == 0 && !source.marker_colon_rebased;
+                let marker_body = i == 0 && !source.marker_colon_rebased;
                 let mut body_paragraph = false;
                 let mut body_code: Option<(FenceOpen, usize)> = None;
                 let mut body_comment: Option<usize> = None;
@@ -8152,7 +8260,7 @@ fn rebase_body_blocks(
                         body_items.pop();
                     }
                     let owned_by_item = body_items.last().is_some_and(|column| base >= *column);
-                    if !include_sublists
+                    if (marker_body || !include_sublists)
                         && base > 0
                         && !owned_by_item
                         && !comment_retains_frame
@@ -8173,15 +8281,18 @@ fn rebase_body_blocks(
                             colon.filter(|_| exact_colon_fence_len(&local).is_none())
                         {
                             Some(rebased_colon_group_end(&lines, i, base, width))
-                        } else if heading_content_starts(&local) || detect_thematic_break(&local) {
+                        } else if heading_content_starts(&local)
+                            || detect_thematic_break(&local)
+                            || is_table_start(&local)
+                            || parse_standalone_attrs(&local).is_some()
+                        {
                             Some(i)
                         } else if !body_paragraph && strip_blockquote_prefix(&local).is_some() {
                             // CARVE-P0-011: past the box's column it opens on
                             // its authored base, as a nested list does.
                             Some(rebased_quote_end(&lines, i, base))
                         } else if !body_paragraph
-                            && (parse_standalone_attrs(&local).is_some()
-                                || parse_link_def_line_with_value(&local).is_some())
+                            && parse_link_def_line_with_value(&local).is_some()
                         {
                             Some(i)
                         } else {
@@ -8377,6 +8488,7 @@ fn rebase_body_blocks(
                 continue;
             }
             paragraph_open = line_starts_paragraph(&lines[i]);
+            own_paragraph = paragraph_open;
             if paragraph_open {
                 term_boundary = false;
             }
@@ -8387,6 +8499,7 @@ fn rebase_body_blocks(
             block_at_minimum = block_at_minimum
                 || reaches_container
                 || (i == 0 && source.item_marker_at_start)
+                || (i == 0 && is_collected_definition_placeholder(&lines[i]))
                 || !is_line_comment_any_column(&lines[i]);
             i += 1;
             continue;
@@ -11035,6 +11148,7 @@ struct QuotedEntryScan {
     scanned: usize,
     half: Option<DefHalf>,
     content_col: Option<usize>,
+    description_col: Option<usize>,
     // A BLOCK closed the innermost entry, so no paragraph is open below it. This
     // is what separates the two `half == None` states: no entry ever opened
     // (a paragraph is still open and a lazy marker folds into it) versus an
@@ -11068,6 +11182,9 @@ impl QuotedEntryScan {
             }
             let column = indent_columns(peeled);
             let rest = trim_ascii_start(peeled);
+            if !line.starts_with(LAZY) && self.description_col.is_some_and(|base| column < base) {
+                self.description_col = None;
+            }
             let ladder = innermost_marker_content_col(rest);
             if ladder > 0 {
                 self.content_col = Some(column + ladder);
@@ -11075,9 +11192,12 @@ impl QuotedEntryScan {
             let content = trim_ascii_start(innermost_marker_content(rest));
             if is_definition_list_start(content) {
                 self.half = Some(DefHalf::Term);
+                self.description_col = None;
                 self.closed_by_block = false;
             } else if strip_definition_marker(content).is_some() {
                 self.half = Some(DefHalf::Description);
+                self.description_col =
+                    definition_body_content_col(content).map(|body_col| column + ladder + body_col);
                 self.closed_by_block = false;
             } else if item_block_opener(content) {
                 // A block written inside the entry closes it, so a lazy line
@@ -12214,6 +12334,8 @@ fn collect_blockquote_body(
     // No replay without a fence to find: every level of a quote ladder would
     // otherwise walk its whole body once.
     let mut may_hold_fence = false;
+    // The last quoted line was read on a description body's base.
+    let mut description_line = false;
     let mut literal_quote_body = None;
     let mut last_quoted_at = None;
     while let Some(line) = cur.peek() {
@@ -12286,11 +12408,12 @@ fn collect_blockquote_body(
                 // Preserve a nested quote marker for its own parse. The
                 // innermost quote consumes the `+` and takes the block.
                 if deepest != stripped {
-                    inner.push_at(
-                        stripped.to_string(),
-                        source_line,
-                        stripped_col(cur.source_col(at), line, stripped),
-                    );
+                    let column = stripped_col(cur.source_col(at), line, stripped);
+                    if cur.carried_reach(at) == Some(true) {
+                        inner.push_reached_at(stripped.to_string(), source_line, column);
+                    } else {
+                        inner.push_at(stripped.to_string(), source_line, column);
+                    }
                 }
                 let attach_col = cur.source_col(cur.pos);
                 let end = attached_block_lines(
@@ -12319,6 +12442,7 @@ fn collect_blockquote_body(
                 continue;
             }
             nested_verdict = None;
+            description_line = false;
             let after_nested = last_nested && may_hold_fence;
             last_nested = in_fence.is_none() && (stripped == ">" || stripped.starts_with("> "));
             may_hold_fence = may_hold_fence
@@ -12426,7 +12550,11 @@ fn collect_blockquote_body(
                 // (markup-carve/carve#1345).
                 if table.observe(stripped) {
                     para_open = ParaOpen::Closed;
-                    inner.push_at(stripped.to_string(), source_line, stripped_at);
+                    if cur.carried_reach(at) == Some(true) {
+                        inner.push_reached_at(stripped.to_string(), source_line, stripped_at);
+                    } else {
+                        inner.push_at(stripped.to_string(), source_line, stripped_at);
+                    }
                     continue;
                 }
                 let nested_item_closes = !stripped.starts_with([' ', '\t'])
@@ -12434,8 +12562,25 @@ fn collect_blockquote_body(
                     && !para_open.get()
                     && detect_fence_open(innermost_marker_content(stripped)).is_none()
                     && !body_ends_with_open_paragraph(stripped, options);
+                // A nested quote can carry the same description body base.
+                let mut description_content = stripped;
+                if may_have_term {
+                    while let Some(next) = strip_blockquote_prefix(description_content) {
+                        description_content = next;
+                    }
+                }
+                let in_description =
+                    may_have_term && description_content.starts_with([' ', '\t']) && {
+                        open_entry.advance(&inner.lines);
+                        open_entry
+                            .description_col
+                            .is_some_and(|base| indent_columns(description_content) >= base)
+                    };
+                description_line = in_description;
                 para_open = if nested_item_closes {
                     ParaOpen::Closed
+                } else if in_description {
+                    ParaOpen::from_line(trim_ascii_start(description_content), inherited_absorption)
                 } else {
                     ParaOpen::from_line(stripped, inherited_absorption)
                 };
@@ -12470,7 +12615,11 @@ fn collect_blockquote_body(
                     }
                 }
             }
-            inner.push_at(stripped.to_string(), source_line, stripped_at);
+            if cur.carried_reach(at) == Some(true) {
+                inner.push_reached_at(stripped.to_string(), source_line, stripped_at);
+            } else {
+                inner.push_at(stripped.to_string(), source_line, stripped_at);
+            }
             continue;
         }
         // Continuation marker (Carve, PART 9 §17): a lone `+` at column 0 after
@@ -12554,14 +12703,22 @@ fn collect_blockquote_body(
             && !is_blank_line(line)
             && !is_definition_list_start(trim_ascii_start(line))
             && strip_description_prefix(trim_ascii_start(line)).is_none()
-            && !item_block_opener(trim_ascii_start(line))
+            && (!item_block_opener(trim_ascii_start(line))
+                || detect_fence_open(trim_ascii_start(line)).is_some())
         {
             open_entry.advance(&inner.lines);
             open_entry.half == Some(DefHalf::Term)
         } else {
             false
         };
-        if !(term_open || fenced_below.unwrap_or_else(|| para_open.get()))
+        // The replay reads a description body as quoted text; its own base
+        // closes the paragraph too.
+        let quoted_open = if description_line {
+            fenced_below.unwrap_or(true) && para_open.get()
+        } else {
+            fenced_below.unwrap_or_else(|| para_open.get())
+        };
+        if !(term_open || quoted_open)
             || is_blank_line(line)
             || (term_open && detect_list_marker_full(line).is_some_and(|marker| marker.indent == 0))
             || caption_content(line).is_some()
@@ -14824,35 +14981,6 @@ fn parse_list(
             }
             continue;
         }
-        // A collected definition written on the marker line is the item's
-        // first (invisible) block, not an empty lead paragraph. With no open
-        // paragraph, a following line below the content column cannot lazily
-        // continue the item (§24 C3); only content that reaches the item's own
-        // column still belongs to it. Sending the placeholder through the lead
-        // paragraph path made `- [r]: /u` / ` :` render the colon inside the
-        // item, unlike the executable spec, carve-js and carve-php.
-        if is_collected_definition_placeholder(marker.content) {
-            let nested =
-                collect_indented_block_mapped(cur, content_col.saturating_sub(1), content_col);
-            let children = item_body(deferred, items.len(), nested, None, true, options);
-            items.push(ListItem {
-                attrs: item_attrs,
-                checked: marker.checked,
-                task_state: marker.task_state,
-                children,
-                pos: span_of(cur, item_at, cur.pos, options),
-            });
-            if cur.peek().is_some_and(|line| {
-                let indent = indent_columns(line);
-                !is_blank_line(line)
-                    && trim_ascii(line) != "+"
-                    && detect_list_marker_full(line).is_none()
-                    && indent < content_col
-            }) {
-                break;
-            }
-            continue;
-        }
         if marker_content_starts_block(marker.content, cur, content_col)
             || marker_content_is_attr_block(marker.content, cur, content_col)
             || marker_content_is_captioned_equation(marker.content, cur, content_col, options)
@@ -15358,7 +15486,8 @@ fn marker_content_starts_block(content: &str, _cur: &LineCursor<'_>, _content_co
     // Reference and footnote definitions are invisible blocks at a container's
     // content column. On a marker line they must enter the nested block parser,
     // not the lead-paragraph scanner (`r. [f]: t` is an empty list item).
-    if parse_footnote_def_line(content).is_some()
+    if is_collected_definition_placeholder(content)
+        || parse_footnote_def_line(content).is_some()
         || parse_link_def_line(content).is_some_and(|(_, target)| !trim_ascii(target).is_empty())
     {
         return true;
@@ -15658,6 +15787,27 @@ fn definition_body_content_col(line: &str) -> Option<usize> {
 /// relative to the first marker's content.
 fn innermost_marker_content_col(line: &str) -> usize {
     innermost_marker_tail(line).0
+}
+
+fn paragraph_owner_column(line: &str, base: usize) -> Option<usize> {
+    if let Some(marker) = detect_list_marker_full(line) {
+        let column = base + marker_content_col(line)?;
+        return paragraph_owner_column(marker.content, column);
+    }
+    if let Some(column) = definition_body_content_col(line) {
+        let body = strip_definition_marker(trim_ascii_start(line))?.0;
+        return paragraph_owner_column(body, base + column);
+    }
+    (detect_fence_open(trim_ascii_start(line)).is_none()
+        && !is_definition_list_start(trim_ascii_start(line))
+        && ParaOpen::from_line(line, false).get())
+    .then_some(base)
+}
+
+fn is_reference_definition(line: &str) -> bool {
+    parse_link_def_line(line).is_some()
+        || parse_footnote_def_line(line).is_some()
+        || is_definition_placeholder(line)
 }
 
 fn innermost_marker_tail(mut line: &str) -> (usize, &str) {
@@ -16001,13 +16151,42 @@ fn quoted_body_ends_with_an_invisible_line(body: &str) -> bool {
     if strip_blockquote_prefix(trim_ascii_start(last)).is_none() {
         return false;
     }
-    let dequote = |line: &str| -> String {
+    // The innermost quote's residue, with its depth.
+    let residue = |line: &str| -> (usize, String) {
         let mut local = trim_ascii_start(line);
+        let mut depth = 0;
         while let Some(rest) = strip_blockquote_prefix(local) {
+            depth += 1;
+            local = rest;
+            if !trim_ascii_start(rest).starts_with('>') {
+                break;
+            }
             local = trim_ascii_start(rest);
         }
-        local.to_string()
+        (depth, local.to_string())
     };
+    let (depth, last_residue) = residue(last);
+    let past = indent_columns(&last_residue);
+    // A quote does not rebase (CARVE-P0-004): past its column the line is
+    // paragraph text unless a container inside the quote owns that column.
+    if past > 0 {
+        let owned = body
+            .lines()
+            .rev()
+            .skip_while(|line| *line != last)
+            .skip(1)
+            .any(|line| {
+                let (at, local) = residue(line);
+                at == depth
+                    && indent_columns(&local) < past
+                    && (marker_content_col(&local).is_some()
+                        || definition_body_content_col(&local).is_some())
+            });
+        if !owned {
+            return false;
+        }
+    }
+    let dequote = |line: &str| trim_ascii_start(&residue(line).1).to_string();
     if is_definition_placeholder(&dequote(last)) {
         return true;
     }
@@ -16088,10 +16267,7 @@ fn nested_ends_with_open_paragraph(
                 .lines()
                 .rev()
                 .find(|line| !is_blank_line(line))
-                .is_some_and(|line| {
-                    is_collected_definition_placeholder(trim_ascii_start(line))
-                        || parse_standalone_attrs(trim_ascii_start(line)).is_some()
-                }))
+                .is_some_and(|line| is_collected_definition_placeholder(trim_ascii_start(line))))
     {
         return false;
     }
@@ -16665,7 +16841,7 @@ fn label_without_trailing_comment<'a>(label: &'a str, options: &Options<'_>) -> 
 /// THE CLOSER IS LOOKED FOR AHEAD, not on the next line: `- x` / `%%%` / `y` /
 /// `%%%` / `z` opens a real block that hides `y` and ends the item.
 fn flush_comment_keeps_the_item_open(cur: &mut LineCursor<'_>, line: &str) -> bool {
-    if is_flush_line_comment(line) {
+    if is_flush_line_comment(line) && !is_definition_placeholder(line) {
         return true;
     }
     detect_comment_fence_line(line)
@@ -16680,7 +16856,9 @@ fn flush_comment_keeps_the_item_open(cur: &mut LineCursor<'_>, line: &str) -> bo
 /// (markup-carve/carve-rs#1516).
 fn is_line_comment_any_column(line: &str) -> bool {
     let trimmed = trim_ascii_start(line);
-    trimmed.starts_with("%%") && detect_comment_fence_line(trimmed).is_none()
+    trimmed.starts_with("%%")
+        && !is_document_definition_placeholder(trimmed)
+        && detect_comment_fence_line(trimmed).is_none()
 }
 
 /// `is_line_comment_any_column`, over BOTH spellings §28 gives a comment.
@@ -17229,6 +17407,7 @@ fn collect_indented_block_mapped_with_columns(
     let marker_base = marker_lead
         .as_ref()
         .map_or(parent_indent, |marker| marker.indent);
+    let marker_ordered = marker_lead.as_ref().is_some_and(|marker| marker.ordered);
     let marker_content = marker_lead.map(|marker| marker.content);
     let marker_is_definition_lead = marker_content.is_some_and(|content| {
         let content = trim_ascii_start(content);
@@ -17244,6 +17423,7 @@ fn collect_indented_block_mapped_with_columns(
     let mut definition_band_inline_run = None;
     let mut marker_description_has_lazy_tail = false;
     let mut marker_description_is_paragraph = false;
+    let mut nested_paragraph_column = None;
     // A quote between the item's content column and the marker note's body
     // column belongs to the item and can take a flush-left lazy line.
     let mut marker_note_intermediate_quote_open = false;
@@ -17328,8 +17508,12 @@ fn collect_indented_block_mapped_with_columns(
     }
     let mut nested_fence: Option<FenceOpen> = None;
     while let Some(line) = cur.peek() {
+        if is_definition_placeholder(line) && indent_columns(line) < strip_cols {
+            break;
+        }
         if is_blank_line(line) {
             marker_note_intermediate_quote_open = false;
+            nested_paragraph_column = None;
             definition_band_inline_run = None;
             marker_colon_retained_para = false;
             if comment_fence.is_none() && fence.is_none() {
@@ -17439,6 +17623,31 @@ fn collect_indented_block_mapped_with_columns(
             continue;
         }
         let indent = indent_columns(line);
+        if indent == strip_cols
+            && (item_block_opener(trim_ascii_start(line))
+                || detect_comment_fence_line_any_column(line).is_some())
+        {
+            nested_paragraph_column = None;
+        }
+        if nested_paragraph_column.is_some_and(|owner| indent < owner)
+            && indent >= strip_cols
+            && is_reference_definition(trim_ascii_start(line))
+        {
+            nested_paragraph_column = None;
+        }
+        if nested_paragraph_column.is_some_and(|owner| indent >= owner)
+            && item_block_opener_with_invisible_arms(trim_ascii_start(line), true)
+        {
+            nested_paragraph_column = None;
+        }
+        if nested_paragraph_column.is_some_and(|owner| indent < owner)
+            && indent >= strip_cols
+            && detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
+                list_code_fence_closer_ahead(cur, open, strip_cols, parent_indent)
+            })
+        {
+            nested_paragraph_column = None;
+        }
         if marker_note_intermediate_quote_open
             && indent >= strip_cols
             && item_block_opener(trim_ascii_start(line))
@@ -17478,9 +17687,12 @@ fn collect_indented_block_mapped_with_columns(
             }
             reached.push(false);
             cur.consume();
-            if cur
-                .peek()
-                .is_some_and(|next| is_blank_line(next) || indent_columns(next) > marker_base)
+            if marker_description_is_paragraph
+                || cur.peek().is_some_and(|next| {
+                    is_blank_line(next)
+                        || indent_columns(next) > marker_base
+                        || detect_fence_open(trim_ascii_start(next)).is_some()
+                })
             {
                 continue;
             }
@@ -17657,7 +17869,7 @@ fn collect_indented_block_mapped_with_columns(
             && marker_definition_has_description
             && fence.is_none()
             && comment_fence.is_none()
-            && indent > marker_base
+            && (indent > marker_base || detect_fence_open(trim_ascii_start(line)).is_some())
             && indent < strip_cols
             && lines
                 .last()
@@ -17685,7 +17897,37 @@ fn collect_indented_block_mapped_with_columns(
         // A CLOSER IS PART OF THE SPAN, NOT A DEDENT. See
         // `body_open_comment_run`: this dedent ends the container, and a comment
         // delimiter closing a span these lines already hold is not one.
+        let comment_boundary = indent < strip_cols
+            && (marker_colon.is_some()
+                || (marker_is_definition_term && marker_definition_has_description))
+            && (marker_ordered
+                || cur.pos.checked_sub(1).is_some_and(|at| {
+                    let previous = cur.lines.at(at);
+                    indent_columns(previous) > marker_base && is_line_comment_any_column(previous)
+                }))
+            && (cur.pos.checked_sub(1).is_some_and(|at| {
+                let previous = cur.lines.at(at);
+                indent_columns(previous) < strip_cols && is_line_comment_any_column(previous)
+            }) || cur
+                .closed_comment_location
+                .is_some_and(|(at, _)| at + 1 == cur.pos));
+        let paragraph_before_comment = comment_boundary
+            && lines
+                .iter()
+                .rposition(|line| !is_blank_line(line) && !is_line_comment_any_column(line))
+                .is_some_and(|end| {
+                    let mut body = marker_content.unwrap_or_default().to_owned();
+                    body.push('\n');
+                    body.push_str(&lines[..=end].join("\n"));
+                    body_ends_with_open_paragraph(&body, &Options::default())
+                });
+        let comment_retains_owner = comment_boundary
+            && paragraph_before_comment
+            && line_starts_paragraph(line)
+            && !item_block_opener(line)
+            && !interrupts_lazy_continuation_as_container(cur, line);
         if indent <= parent_indent
+            && !comment_retains_owner
             && !(marker_note_intermediate_quote_open
                 && line_starts_paragraph(line)
                 && !item_block_opener(line))
@@ -17740,7 +17982,7 @@ fn collect_indented_block_mapped_with_columns(
         if marker_colon.is_some()
             && !literal_marker_body
             && indent < strip_cols
-            && indent > parent_indent
+            && indent >= parent_indent
             && !marker_colon_retained_para
         {
             let after_comment = cur.pos.checked_sub(1).is_some_and(|at| {
@@ -17751,9 +17993,7 @@ fn collect_indented_block_mapped_with_columns(
                 .closed_comment_location
                 .is_some_and(|(at, _)| at + 1 == cur.pos);
             if (after_comment || after_span)
-                && lines
-                    .iter()
-                    .any(|line| line_starts_paragraph(line) && !is_line_comment_any_column(line))
+                && paragraph_before_comment
                 && !interrupts_lazy_continuation_as_container(cur, line)
             {
                 marker_colon_retained_para = true;
@@ -18000,6 +18240,7 @@ fn collect_indented_block_mapped_with_columns(
             && indent <= strip_cols
         {
             if is_definition_list_start(trim_ascii_start(line)) {
+                nested_paragraph_column = None;
                 marker_definition_has_description = false;
                 marker_description_code_admitted = false;
                 marker_description_has_inline_code = false;
@@ -18013,6 +18254,8 @@ fn collect_indented_block_mapped_with_columns(
                 marker_description_has_inline_code = trim_ascii_start(line).contains('`');
                 marker_description_has_lazy_tail = false;
                 marker_description_is_paragraph = ParaOpen::from_line(body, false).get();
+                nested_paragraph_column = paragraph_owner_column(trim_ascii_start(line), indent)
+                    .filter(|owner| *owner > strip_cols);
                 marker_term_paragraph_open = false;
                 marker_term_open = false;
             } else if marker_definition_has_description
@@ -18175,6 +18418,25 @@ fn collect_indented_block_mapped_with_columns(
             _ => (sliced, consumed, synthetic),
         };
         let mut sliced = sliced;
+        if nested_paragraph_column.is_some_and(|owner| indent < owner)
+            && indent != strip_cols
+            && !(indent > strip_cols
+                && item_block_opener_with_invisible_arms(trim_ascii_start(line), true)
+                && detect_fence_open(trim_ascii_start(line)).is_none())
+            && !is_blank_line(line)
+            && !is_line_comment_any_column(line)
+            && detect_comment_fence_line_any_column(line).is_none()
+            && exact_colon_fence_len(trim_ascii_start(line)).is_none()
+            && !(detect_fence_open(trim_ascii_start(line)).is_some()
+                && lines
+                    .last()
+                    .is_some_and(|line| is_line_comment_any_column(line)))
+            && strip_definition_marker(trim_ascii_start(line)).is_none()
+            && fence.is_none()
+            && comment_fence.is_none()
+        {
+            sliced = format!("{LAZY}{}", trim_ascii_start(&sliced));
+        }
         if marker_colon_retained_para && indent < strip_cols {
             sliced = trim_ascii_start(&sliced).to_string();
         }
@@ -18183,6 +18445,7 @@ fn collect_indented_block_mapped_with_columns(
             || lazy_list_marker
             || definition_band_inline_closer
             || (definition_comment_band
+                && detect_fence_open(trim_ascii_start(line)).is_none()
                 && !is_definition_list_start(trim_ascii_start(line))
                 && strip_description_prefix(trim_ascii_start(line)).is_none())
             || (marker_colon_retained_para && indent < strip_cols))
@@ -19489,10 +19752,21 @@ fn body_ends_with_an_unnoded_interrupter(source: &str) -> bool {
 }
 
 fn body_ends_with_an_attribute_line(source: &str) -> bool {
-    let lines: Vec<&str> = source.lines().collect();
+    let raw_lines: Vec<&str> = source.lines().collect();
+    let lines: Vec<&str> = raw_lines
+        .iter()
+        .map(|line| trim_ascii_start(line))
+        .collect();
     let Some(end) = lines.iter().rposition(|line| !is_blank_line(line)) else {
         return false;
     };
+    let start = lines[..end]
+        .iter()
+        .rposition(|line| is_blank_line(line))
+        .map_or(0, |index| index + 1);
+    if leading_ws(raw_lines[end]) > 0 && lines[start].starts_with('>') {
+        return false;
+    }
     if !trim_ascii_end(lines[end]).ends_with('}') {
         return false;
     }
@@ -19578,6 +19852,20 @@ fn collect_definition_body(
 ) -> MappedSource {
     let mut lines: Vec<String> = Vec::new();
     let mut nested_definition_open = seed.lines().any(is_definition_list_start);
+    let mut paragraph_column = seed
+        .lines()
+        .last()
+        .and_then(|line| paragraph_owner_column(line, content_column))
+        .filter(|column| *column > content_column);
+    let mut paragraph_marker_column = seed
+        .lines()
+        .last()
+        .filter(|line| is_list_marker(trim_ascii_start(line)))
+        .map(|_| content_column);
+    let mut paragraph_owner_is_item = seed
+        .lines()
+        .last()
+        .is_some_and(|line| is_list_marker(trim_ascii_start(line)));
     let mut descendant_marker_fence: Option<(FenceOpen, usize)> = None;
     let mut descendant_block_ended = false;
     // A lazy fold leaves a paragraph open. Rechecking by parsing all collected
@@ -19586,6 +19874,8 @@ fn collect_definition_body(
     let mut folded_a_lazy_line = false;
     let mut folded_into_quote = false;
     let mut retained_below_comment = false;
+    let mut retained_comment_column = 0;
+    let mut retained_fence: Option<(FenceOpen, bool)> = None;
     let mut below_comment_span = None;
     // Seeded from the marker line's own content: does the body's LEAD open a
     // code fence NESTED past a list marker? Its verbatim body is the flush-left
@@ -19612,13 +19902,89 @@ fn collect_definition_body(
     // (markup-carve/carve#1911, corpus 444-7 against 430-3).
     let mut reached: Vec<bool> = Vec::new();
     while let Some(line) = cur.peek() {
-        if is_document_definition_placeholder(line) {
+        if let Some((open, has_closer)) = retained_fence {
+            let payload_floor = if open.content_col == 0 {
+                content_column
+            } else {
+                open.content_col
+            };
+            if !has_closer && !line.starts_with(LAZY) && indent_columns(line) < payload_floor {
+                break;
+            }
+            let (kept, consumed, synthetic) = slice_columns_mapped(line, open.content_col, true);
+            lines.push(kept);
+            line_map.push(cur.source_line(cur.pos));
+            col_map.push(
+                cur.source_col(cur.pos)
+                    .map(|col| col + consumed as isize - synthetic as isize),
+            );
+            reached.push(false);
+            if is_fence_close(trim_ascii_start(line), open) {
+                retained_fence = None;
+                fence.closed_last = true;
+            }
+            cur.consume();
+            continue;
+        }
+        if is_definition_placeholder(line) && indent_columns(line) < content_column {
             break;
         }
         if is_blank_line(line) {
             retained_below_comment = false;
+            paragraph_column = None;
+            paragraph_marker_column = None;
         }
         let column = indent_columns(line);
+        let mut opens_descendant_here = false;
+        if !is_blank_line(line)
+            && fence.open.is_none()
+            && nested_lead_fence.is_none()
+            && descendant_marker_fence.is_none()
+        {
+            if paragraph_column.is_some_and(|owner| column < owner)
+                && column >= content_column
+                && is_reference_definition(trim_ascii_start(line))
+            {
+                paragraph_column = None;
+                paragraph_marker_column = None;
+                descendant_block_ended = true;
+            } else if paragraph_column.is_some_and(|owner| column < owner)
+                && column >= content_column
+                && (column == content_column || !paragraph_owner_is_item)
+                && (is_list_marker(trim_ascii_start(line))
+                    || item_block_opener_with_invisible_arms(trim_ascii_start(line), true))
+            {
+                paragraph_owner_is_item = is_list_marker(trim_ascii_start(line));
+                paragraph_column = paragraph_owner_column(trim_ascii_start(line), column)
+                    .filter(|owner| *owner > content_column);
+                paragraph_marker_column = is_list_marker(trim_ascii_start(line)).then_some(column);
+                opens_descendant_here = true;
+            } else if paragraph_marker_column == Some(column)
+                && is_list_marker(trim_ascii_start(line))
+            {
+                paragraph_owner_is_item = true;
+                paragraph_column = paragraph_owner_column(trim_ascii_start(line), column)
+                    .filter(|owner| *owner > content_column);
+                opens_descendant_here = paragraph_column.is_some();
+            } else if column >= content_column
+                && paragraph_column.map_or(true, |owner| column >= owner)
+                && (is_list_marker(trim_ascii_start(line))
+                    || strip_definition_marker(trim_ascii_start(line)).is_some())
+            {
+                paragraph_owner_is_item = is_list_marker(trim_ascii_start(line));
+                paragraph_column = paragraph_owner_column(trim_ascii_start(line), column)
+                    .filter(|owner| *owner > content_column);
+                paragraph_marker_column = is_list_marker(trim_ascii_start(line)).then_some(column);
+                opens_descendant_here = paragraph_column.is_some();
+            } else if paragraph_column.is_some_and(|owner| column >= owner)
+                && (item_block_opener_with_invisible_arms(trim_ascii_start(line), true)
+                    || is_line_comment_any_column(line))
+            {
+                paragraph_column = None;
+                paragraph_marker_column = None;
+                descendant_block_ended = true;
+            }
+        }
         let below_comment = column < content_column && trim_ascii_start(line).starts_with("%%");
         if column == 0
             && below_comment_span.is_none()
@@ -19660,6 +20026,7 @@ fn collect_definition_body(
             reached.push(false);
             lines.push(kept);
             retained_below_comment = true;
+            retained_comment_column = column;
             folded_a_lazy_line = false;
             cur.consume();
             continue;
@@ -19737,6 +20104,17 @@ fn collect_definition_body(
                 // The residual is written back as the spaces the tab bought past
                 // the margin, which is what makes the two spellings agree.
                 let mut sliced = slice_columns(line, content_column.min(indent), true);
+                if !opens_descendant_here
+                    && !is_line_comment_any_column(line)
+                    && detect_comment_fence_line_any_column(line).is_none()
+                    && detect_fence_open(trim_ascii_start(line)).is_none()
+                    && paragraph_column.is_some_and(|owner| indent < owner)
+                    && indent != content_column
+                    && (paragraph_owner_is_item
+                        || !item_block_opener_with_invisible_arms(trim_ascii_start(line), true))
+                {
+                    sliced = format!("{LAZY}{}", trim_ascii_start(&sliced));
+                }
                 // Count what was actually removed rather than assuming three:
                 // `slice_columns` works in COLUMNS, and a tab is one codepoint
                 // spanning several of them. The difference in LENGTH is the
@@ -19744,7 +20122,11 @@ fn collect_definition_body(
                 // `consumed - synthetic`, which is exactly the base the mapping
                 // in `slice_columns_mapped` documents.
                 let sliced_col = cur.source_col(cur.pos).map(|c| {
-                    c + line.chars().count().saturating_sub(sliced.chars().count()) as isize
+                    c + line
+                        .chars()
+                        .count()
+                        .saturating_sub(strip_lazy(&sliced).chars().count())
+                        as isize
                 });
                 // As in a list item, an unterminated fence at the definition
                 // body's content column stays in its open paragraph (§10 I4).
@@ -19854,6 +20236,7 @@ fn collect_definition_body(
                     }
                     if indent == content_column
                         && detect_fence_open(local).is_none()
+                        && !is_reference_definition(local)
                         && line_starts_paragraph(local)
                     {
                         descendant_block_ended = false;
@@ -19932,8 +20315,7 @@ fn collect_definition_body(
                 }
                 folded_into_quote = quoted;
             }
-            // A surviving quote owns the unmarked line before the definition
-            // body's column can classify its residue (CARVE-P0-004).
+            // A surviving quote owns this line before the definition column (CARVE-P0-004).
             if indent > 0 && folded_into_quote && !trim_ascii_start(line).starts_with("%%") {
                 folded_a_lazy_line = true;
                 lines.push(line.to_string());
@@ -19954,7 +20336,27 @@ fn collect_definition_body(
             // (markup-carve/carve#1809, corpus 430-2 and 430-3). This guard is
             // the one that ejected them: the interrupt test below never got the
             // line.
-            if indent > 0 && item_block_opener_with_invisible_arms(trim_ascii_start(line), false) {
+            if indent > 0
+                && (indent < content_column
+                    || paragraph_column.map_or(true, |owner| indent >= owner))
+                && item_block_opener_with_invisible_arms(trim_ascii_start(line), false)
+                && !(retained_below_comment
+                    && lines
+                        .last()
+                        .is_some_and(|line| is_line_comment_any_column(line))
+                    && (indent <= retained_comment_column || retained_comment_column == 0)
+                    && detect_fence_open(trim_ascii_start(line)).is_some())
+            {
+                break;
+            }
+            if retained_below_comment
+                && cur.reached.and_then(|r| r.get(cur.pos)).copied() == Some(true)
+                && detect_fence_open(trim_ascii_start(line)).is_some_and(|open| {
+                    cur.lines
+                        .range(cur.pos + 1..cur.lines.len())
+                        .any(|next| is_fence_close(trim_ascii_start(next), open))
+                })
+            {
                 break;
             }
             // Lazy continuation: a flush-left line with no blank before it that
@@ -19989,14 +20391,38 @@ fn collect_definition_body(
             });
             if !below_the_column
                 && cur.at_document_level
-                && (fence_interrupts || caption_content(&owned).is_some())
+                && ((fence_interrupts && !retained_below_comment)
+                    || caption_content(&owned).is_some())
             {
                 break;
             }
-            if !interrupts_paragraph_in_band(cur, &owned, !below_the_column) {
-                let keep = if below_the_column {
+            let opens_retained_fence = retained_below_comment
+                && lines
+                    .last()
+                    .is_some_and(|line| is_line_comment_any_column(line))
+                && indent <= retained_comment_column
+                && !(cur.in_item_body
+                    && cur.reached.and_then(|r| r.get(cur.pos)).copied() == Some(false)
+                    && detect_fence_open(&owned).is_some_and(|open| open.fence_len > 3))
+                && detect_fence_open(&owned).is_some();
+            if opens_retained_fence
+                || indent > 0
+                    && indent != content_column
+                    && detect_fence_open(&owned).is_none()
+                    && paragraph_column.is_some_and(|owner| indent < owner)
+                || !interrupts_paragraph_in_band(cur, &owned, !below_the_column)
+            {
+                let keep = if opens_retained_fence {
+                    owned.clone()
+                } else if indent > 0
+                    && indent != content_column
+                    && detect_fence_open(&owned).is_none()
+                    && paragraph_column.is_some_and(|owner| indent < owner)
+                {
+                    format!("{LAZY}{}", trim_ascii_start(line))
+                } else if below_the_column {
                     line.to_string()
-                } else if detect_fence_open(&owned).is_some() {
+                } else if detect_fence_open(&owned).is_some() && !opens_retained_fence {
                     // ONE COLUMN, AS THE LIST TWIN KEEPS IT. The body dedents
                     // its own lines by the content margin, so a line pushed at
                     // column 0 arrives AT that column on the reparse and the
@@ -20009,9 +20435,30 @@ fn collect_definition_body(
                     owned
                 };
                 folded_a_lazy_line = true;
+                if opens_retained_fence {
+                    retained_fence = detect_fence_open(&keep).map(|mut open| {
+                        open.content_col = indent;
+                        let has_closer =
+                            cur.lines.range(cur.pos + 1..cur.lines.len()).any(|next| {
+                                indent_columns(next) >= indent
+                                    && is_fence_close(trim_ascii_start(next), open)
+                            });
+                        (open, has_closer)
+                    });
+                    folded_a_lazy_line = false;
+                }
+                retained_below_comment = false;
+                let kept_col = if opens_retained_fence {
+                    cur.source_col(cur.pos)
+                        .map(|col| col + (line.len() - keep.len()) as isize)
+                } else if keep.starts_with(LAZY) && indent > 0 {
+                    cur.source_col(cur.pos).map(|col| col + indent as isize)
+                } else {
+                    cur.source_col(cur.pos)
+                };
                 lines.push(keep);
                 line_map.push(cur.source_line(cur.pos));
-                col_map.push(cur.source_col(cur.pos));
+                col_map.push(kept_col);
                 reached.push(false);
                 cur.consume();
                 continue;
