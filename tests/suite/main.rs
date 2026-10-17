@@ -2287,3 +2287,51 @@ mod a_marker_line_footnote_leaves_its_container_open;
 
 #[path = "../matched_comment_fences_follow_line_comment_container_ownership.rs"]
 mod matched_comment_fences_follow_line_comment_container_ownership;
+
+#[path = "../a_caption_below_a_marker_line_quote_is_lazy_text.rs"]
+mod a_caption_below_a_marker_line_quote_is_lazy_text;
+
+#[path = "../an_indented_quote_marker_opens_in_a_colon_body.rs"]
+mod an_indented_quote_marker_opens_in_a_colon_body;
+
+#[path = "../a_retained_footnote_follower_does_not_extend_the_note.rs"]
+mod a_retained_footnote_follower_does_not_extend_the_note;
+
+#[path = "../a_marker_line_colon_body_keeps_a_matched_comment_span.rs"]
+mod a_marker_line_colon_body_keeps_a_matched_comment_span;
+
+#[path = "../a_marker_line_quote_caption_keeps_its_lazy_tail.rs"]
+mod a_marker_line_quote_caption_keeps_its_lazy_tail;
+
+#[path = "../a_matched_fence_between_nested_item_columns_ends_the_inner_item.rs"]
+mod a_matched_fence_between_nested_item_columns_ends_the_inner_item;
+
+#[path = "../a_matched_comment_below_a_child_column_keeps_the_child.rs"]
+mod a_matched_comment_below_a_child_column_keeps_the_child;
+
+#[path = "../a_code_fence_after_a_matched_comment_opens_in_the_description.rs"]
+mod a_code_fence_after_a_matched_comment_opens_in_the_description;
+
+#[path = "../a_lazy_colon_body_keeps_a_comment_and_follower.rs"]
+mod a_lazy_colon_body_keeps_a_comment_and_follower;
+
+#[path = "../a_comment_at_the_description_column_keeps_its_follower.rs"]
+mod a_comment_at_the_description_column_keeps_its_follower;
+
+#[path = "../an_authored_indented_comment_keeps_the_nested_description.rs"]
+mod an_authored_indented_comment_keeps_the_nested_description;
+
+#[path = "../a_terminal_code_fence_after_a_quoted_item_comment.rs"]
+mod a_terminal_code_fence_after_a_quoted_item_comment;
+
+#[path = "../a_matched_comment_at_a_nested_description_opener_ends_it.rs"]
+mod a_matched_comment_at_a_nested_description_opener_ends_it;
+
+#[path = "../a_matched_comment_keeps_marker_line_block_followers.rs"]
+mod a_matched_comment_keeps_marker_line_block_followers;
+
+#[path = "../a_matched_comment_keeps_a_footnote_list_fence.rs"]
+mod a_matched_comment_keeps_a_footnote_list_fence;
+
+#[path = "../a_matched_comment_keeps_a_fence_after_an_item_quote.rs"]
+mod a_matched_comment_keeps_a_fence_after_an_item_quote;
