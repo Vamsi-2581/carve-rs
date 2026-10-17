@@ -14,20 +14,32 @@ mod raw_payload_termination;
 mod a_block_at_an_item_content_column_closes_its_paragraph_before_an_unclosed_fence;
 #[path = "../a_caption_below_a_description_column_folds_into_its_body.rs"]
 mod a_caption_below_a_description_column_folds_into_its_body;
+#[path = "../a_comment_below_a_quoted_note_column_keeps_its_body.rs"]
+mod a_comment_below_a_quoted_note_column_keeps_its_body;
 #[path = "../a_comment_retained_body_opens_its_fence.rs"]
 mod a_comment_retained_body_opens_its_fence;
 #[path = "../a_comment_retained_item_opens_its_fence.rs"]
 mod a_comment_retained_item_opens_its_fence;
 #[path = "../a_definition_in_a_quote_under_an_item_leaves_no_lazy_paragraph.rs"]
 mod a_definition_in_a_quote_under_an_item_leaves_no_lazy_paragraph;
+#[path = "../a_flush_comment_after_a_nested_note_marker_leaves_no_body_open.rs"]
+mod a_flush_comment_after_a_nested_note_marker_leaves_no_body_open;
 #[path = "../a_folded_marker_or_quote_does_not_move_the_base.rs"]
 mod a_folded_marker_or_quote_does_not_move_the_base;
+#[path = "../a_matched_comment_fence_ends_or_keeps_a_note_by_column.rs"]
+mod a_matched_comment_fence_ends_or_keeps_a_note_by_column;
+#[path = "../a_matched_comment_keeps_its_payload_in_a_list_description.rs"]
+mod a_matched_comment_keeps_its_payload_in_a_list_description;
 #[path = "../a_nested_note_on_a_marker_line_keeps_its_column.rs"]
 mod a_nested_note_on_a_marker_line_keeps_its_column;
 #[path = "../a_quote_on_a_container_marker_line_hosts_its_definitions.rs"]
 mod a_quote_on_a_container_marker_line_hosts_its_definitions;
 #[path = "../a_quote_past_an_item_column_opens_after_its_paragraph.rs"]
 mod a_quote_past_an_item_column_opens_after_its_paragraph;
+#[path = "../a_quoted_note_paragraph_keeps_its_definition_shaped_line.rs"]
+mod a_quoted_note_paragraph_keeps_its_definition_shaped_line;
+#[path = "../a_retained_comment_after_a_list_term_keeps_its_code_block.rs"]
+mod a_retained_comment_after_a_list_term_keeps_its_code_block;
 #[path = "../a_term_has_no_content_column_for_a_nested_quote.rs"]
 mod a_term_has_no_content_column_for_a_nested_quote;
 #[path = "../an_autolink_a_cross_reference_or_a_comment_is_atomic.rs"]
@@ -38,6 +50,8 @@ mod an_autolink_or_cross_reference_is_atomic_to_brackets_and_braces;
 mod an_explicit_heading_id_carrier_overrides_the_slug_heuristic;
 #[path = "../an_item_line_under_a_plain_paragraph_stays_lazy_in_the_closer_scan.rs"]
 mod an_item_line_under_a_plain_paragraph_stays_lazy_in_the_closer_scan;
+#[path = "../an_unclosed_comment_fence_keeps_a_note_fence.rs"]
+mod an_unclosed_comment_fence_keeps_a_note_fence;
 #[path = "../an_unclosed_fence_after_a_retained_comment_stays_in_its_body.rs"]
 mod an_unclosed_fence_after_a_retained_comment_stays_in_its_body;
 #[path = "../an_unclosed_fence_ends_only_at_its_own_containers_closer.rs"]

@@ -1724,6 +1724,13 @@ fn extract_footnote_defs(
         // ahead of a real definition exhausted it and the definition was
         // declined.
         if let Some((label, first)) = parse_footnote_def_line(def_line).filter(|_| {
+            let quoted_note_paragraph = nested
+                && stripped.structural.contains('>')
+                && body.last().is_some_and(|previous: &String| {
+                    strip_blockquote_prefix(trim_ascii_start(previous)).is_some_and(|content| {
+                        !is_blank_line(content) && !item_block_opener(trim_ascii_start(content))
+                    })
+                });
             let folds = marker_line_may_be_lazy(lines[i])
                 && line_folds_into_an_open_paragraph(
                     &body,
@@ -1732,7 +1739,10 @@ fn extract_footnote_defs(
                     &mut probe_budget,
                     &mut unaffordable,
                 );
-            !(folds || unaffordable || folded_into_term.folded.contains(&i))
+            !(folds
+                || quoted_note_paragraph
+                || unaffordable
+                || folded_into_term.folded.contains(&i))
         }) {
             let normalized_label = label_key(label);
             let first_for_label = !definition_keys.contains_key(&normalized_label);
@@ -1860,6 +1870,17 @@ fn extract_footnote_defs(
                     let below_comment = column < body_indent
                         && trim_ascii_start(line).starts_with("%%")
                         && !is_definition_placeholder(line);
+                    if below_comment
+                        && column == 0
+                        && below_comment_span.is_none()
+                        && detect_comment_fence_line_any_column(line).is_some_and(|open| {
+                            comment_fence_closers
+                                .get(&open.fence_len)
+                                .is_some_and(|&last| last > i)
+                        })
+                    {
+                        break;
+                    }
                     let empty_fence =
                         detect_comment_fence_line_any_column(line).is_some_and(|open| {
                             lines.get(i + 1).is_some_and(|next| {
@@ -1869,6 +1890,7 @@ fn extract_footnote_defs(
                     let after_comment = i + 1 + usize::from(empty_fence);
                     if below_comment
                         && column == 0
+                        && !open_term
                         && (!nested || def_lines.len() == 1)
                         && (is_line_comment_any_column(line) || empty_fence)
                         && body.iter().all(|line| is_blank_line(line))
@@ -1884,7 +1906,9 @@ fn extract_footnote_defs(
                     if below_comment_span.is_some() || (below_comment && note_fence.is_none()) {
                         if below_comment_span.is_none()
                             && !retained_below_comment
-                            && ((open_term && column == 0 && def_lines.len() == 1)
+                            && ((parse_footnote_def_line(first).is_some()
+                                && column == 0
+                                && def_lines.len() == 1)
                                 || (!open_term
                                     && !body_ends_with_open_paragraph(
                                         &def_lines.join("\n"),
@@ -1925,16 +1949,29 @@ fn extract_footnote_defs(
                         && (column > 0
                             || !item_block_opener(trim_ascii_start(line))
                             || (detect_fence_open(trim_ascii_start(line)).is_some()
-                                && (def_lines
-                                    .last()
-                                    .is_some_and(|last| is_line_comment_any_column(last))
-                                    || ends_with_empty_comment_fence(&def_lines))))
+                                && (def_lines.last().is_some_and(|last| {
+                                    is_line_comment_any_column(last)
+                                        || detect_comment_fence_line_any_column(last).is_some_and(
+                                            |open| {
+                                                !lines[i..].iter().any(|next| {
+                                                    is_comment_fence_close_any_column(
+                                                        next,
+                                                        open.fence_len,
+                                                    )
+                                                })
+                                            },
+                                        )
+                                }) || ends_with_empty_comment_fence(&def_lines))))
                     {
                         let kept = trim_ascii_start(line).to_owned();
-                        if def_lines
-                            .last()
-                            .is_some_and(|last| is_line_comment_any_column(last))
-                            || ends_with_empty_comment_fence(&def_lines)
+                        if def_lines.last().is_some_and(|last| {
+                            is_line_comment_any_column(last)
+                                || detect_comment_fence_line_any_column(last).is_some_and(|open| {
+                                    !lines[i..].iter().any(|next| {
+                                        is_comment_fence_close_any_column(next, open.fence_len)
+                                    })
+                                })
+                        }) || ends_with_empty_comment_fence(&def_lines)
                         {
                             if let Some(mut open) = detect_fence_open(&kept) {
                                 open.content_col = 0;
@@ -2279,14 +2316,16 @@ fn extract_footnote_defs(
                 let content = |raw| strip_indented_quote_levels(raw, &quote_indents);
                 let marker_note = detect_list_marker_full(inside)
                     .is_some_and(|marker| parse_footnote_def_line(marker.content).is_some());
-                let track_note_opacity = marker_note
-                    && *body_opacity_candidates
-                        .get_or_insert_with(|| source.contains("%%%") || source.contains("~~~"));
+                let track_note_opacity = *body_opacity_candidates
+                    .get_or_insert_with(|| source.contains("%%%") || source.contains("~~~"));
                 let mut note_opacity = BodyCommentState::new();
                 let mut note_admitted_fence: Option<(FenceOpen, usize)> = None;
                 let comment_closes = |at, width, cache: &mut Option<ContainerCommentClosers>| {
                     let index = cache.get_or_insert_with(|| ContainerCommentClosers::build(&lines));
-                    index.closes_in_note(&lines, at, quote_depth, note_floor, width)
+                    let floor = content(lines[at])
+                        .map(|line| indent_columns(line).min(note_floor))
+                        .unwrap_or(note_floor);
+                    index.closes_in_note(&lines, at, quote_depth, floor, width)
                 };
                 // A matched fence at or past a marker-line note's body column
                 // opens in the note. The closer may return to the body column
@@ -2314,22 +2353,28 @@ fn extract_footnote_defs(
                     note_opacity.comment = None;
                 }
                 // A marker note admits comments at its host column.
-                let reaches_floor = |at, admitted_fence: Option<(FenceOpen, usize)>| {
-                    content(lines[at]).is_some_and(|line| {
-                        admitted_fence.is_some()
-                            || indent_columns(line) >= note_floor
-                            || (marker_note
-                                && indent_columns(line) >= prefix_cols
-                                && is_line_comment_any_column(line))
-                    })
-                };
+                let reaches_floor =
+                    |at, admitted_fence: Option<(FenceOpen, usize)>, comment_open| {
+                        content(lines[at]).is_some_and(|line| {
+                            admitted_fence.is_some()
+                                || comment_open
+                                || indent_columns(line) >= note_floor
+                                || (quote_depth > 0
+                                    && indent_columns(line) > 0
+                                    && trim_ascii_start(line).starts_with("%%"))
+                                || (marker_note
+                                    && indent_columns(line) >= prefix_cols
+                                    && is_line_comment_any_column(line))
+                        })
+                    };
                 let blank = |raw| content(raw).is_some_and(is_blank_line);
                 let body_resumes = {
                     let mut at = i;
                     while at < lines.len() && blank(lines[at]) {
                         at += 1;
                     }
-                    at < lines.len() && reaches_floor(at, note_admitted_fence)
+                    at < lines.len()
+                        && reaches_floor(at, note_admitted_fence, note_opacity.comment.is_some())
                 };
                 if body_resumes {
                     while i < lines.len() {
@@ -2340,7 +2385,13 @@ fn extract_footnote_defs(
                             while after < lines.len() && blank(lines[after]) {
                                 after += 1;
                             }
-                            if after < lines.len() && reaches_floor(after, note_admitted_fence) {
+                            if after < lines.len()
+                                && reaches_floor(
+                                    after,
+                                    note_admitted_fence,
+                                    note_opacity.comment.is_some(),
+                                )
+                            {
                                 while i < after {
                                     let raw = lines[i];
                                     let line = content(raw).expect("checked quote prefix");
@@ -2363,7 +2414,8 @@ fn extract_footnote_defs(
                             }
                             break;
                         }
-                        let line_reaches_floor = reaches_floor(i, note_admitted_fence);
+                        let line_reaches_floor =
+                            reaches_floor(i, note_admitted_fence, note_opacity.comment.is_some());
                         if !line_reaches_floor {
                             break;
                         }
@@ -17359,10 +17411,6 @@ fn collect_trailing_lazy_through_framed(
             if after_comment
                 && !matched_comment_before(cur)
                     .is_some_and(|at| marked_quote_before_comment(cur, at))
-                && !nested.source.lines().any(|line| {
-                    let line = trim_ascii_start(line);
-                    is_definition_list_start(line) || strip_description_prefix(line).is_some()
-                })
             {
                 nested.push_newline_at(
                     trim_ascii_start(line).to_owned(),
@@ -18575,6 +18623,7 @@ fn collect_indented_block_mapped_with_columns(
             line
         };
         let framed_comment_payload = comment_payload
+            && !(marker_is_definition_term && marker_definition_has_description)
             && (line.starts_with(LAZY)
                 || comment_fence_strip.is_some_and(|strip| strip < strip_cols));
         if marker_is_definition_term
@@ -18750,6 +18799,13 @@ fn collect_indented_block_mapped_with_columns(
                 || definition_band_inline_closer =>
             {
                 indent
+            }
+            (true, Some(_))
+                if comment_payload
+                    && marker_is_definition_term
+                    && marker_definition_has_description =>
+            {
+                0
             }
             (true, Some(_)) if comment_payload => strip_cols.min(indent_columns(payload_line)),
             (true, Some(span_strip)) => span_strip.min(indent),
