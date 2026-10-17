@@ -1669,8 +1669,12 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // round trips and 30 reported losses.
     // Spec c841b089 adds 616 rows 15 to 17, and under carve#3295 422-7 and
     // 426-2/3 fold into the description paragraph as lazy text.
-    const STRICT: usize = 1999;
-    const LOSSY: usize = 657;
+    // Spec 43f69bff adds 616 rows 18 to 20. All three report existing losses.
+    // The refused continuation in 616-18 moves that row into the strict set.
+    // Spec b9965c1b adds corpus 616 rows 21 to 24: 21, 22, and 24 are strict;
+    // the quoted soft break in 23 reports an existing loss.
+    const STRICT: usize = 2003;
+    const LOSSY: usize = 660;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in
