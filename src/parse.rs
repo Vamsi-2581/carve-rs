@@ -3,6 +3,7 @@
 //! Block-level reads line by line; inline does a single linear scan
 //! over each block's text. No backtracking.
 
+pub(crate) mod delimited_table;
 mod inline_positions;
 mod quote_state;
 mod reference_resolution;
@@ -7106,6 +7107,31 @@ fn append_parsed_block(
             apply_attrs_to_block(&mut node, attrs);
             *pending_attrs_pos = None;
         }
+    }
+    match &node {
+        BlockNode::CodeBlock(code) => {
+            if let Some(table) = delimited_table::from_code(code) {
+                node = BlockNode::Table(table);
+            }
+        }
+        BlockNode::Figure(figure) => {
+            if let FigureTarget::CodeBlock(code) = &*figure.target {
+                let mut code = code.clone();
+                if let Some(attrs) = &figure.attrs {
+                    let mut block = BlockNode::CodeBlock(code.clone());
+                    apply_attrs_to_block(&mut block, attrs.clone());
+                    if let BlockNode::CodeBlock(with_attrs) = block {
+                        code = with_attrs;
+                    }
+                }
+                if let Some(mut table) = delimited_table::from_code(&code) {
+                    table.caption = Some(figure.caption.clone());
+                    table.pos = figure.pos.clone();
+                    node = BlockNode::Table(table);
+                }
+            }
+        }
+        _ => {}
     }
     resolve_code_title(&mut node);
     if options.source_lines {
@@ -21380,6 +21406,7 @@ fn parse_table(cur: &mut LineCursor, options: &Options<'_>) -> BlockNode {
     // fail. Removed rather than corrected, since the two are now genuinely the
     // same.
     let mut table = Table {
+        source_format: None,
         pos: span_of(cur, span_start, cur.pos, options),
         attrs: None,
         caption,

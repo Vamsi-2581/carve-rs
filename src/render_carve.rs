@@ -2378,6 +2378,15 @@ fn render_block_body(session: &RenderSession, node: &BlockNode, ctx: &mut CarveC
             with_block_attrs(&rule.attrs, &marker.to_string().repeat(3))
         }
         BlockNode::Table(table) => {
+            if let Some(source) = render_delimited_table(table, session, ctx) {
+                return with_block_attrs(&table.attrs, &format!("{{table}}\n{source}"));
+            }
+            if table.source_format.is_some() {
+                crate::render_carve_error::record_unspellable(
+                    "table",
+                    "the table cannot be written as delimited text",
+                );
+            }
             let mut attrs = table.attrs.clone();
             if let Some(attrs) = &mut attrs {
                 if attrs.order.is_empty() {
@@ -2963,6 +2972,90 @@ fn render_definition_list(
 
 fn colon_fence_for(ctx: &CarveContext) -> String {
     ":".repeat(3 + ctx.colon_fence_depth)
+}
+
+fn render_delimited_table(
+    table: &Table,
+    session: &RenderSession,
+    ctx: &mut CarveContext,
+) -> Option<String> {
+    let format = table.source_format?;
+    let separator = format.separator();
+    if table.short_caption.is_some()
+        || table.separator_widths.is_some()
+        || table
+            .rows
+            .iter()
+            .any(|row| row.continuation_lines.is_some())
+    {
+        return None;
+    }
+    let foot = crate::parse::delimited_table::count(
+        table
+            .attrs
+            .as_ref()
+            .and_then(|attrs| attrs.key_values.get("footer-rows")),
+        0,
+    );
+    let head = crate::parse::delimited_table::count(
+        table
+            .attrs
+            .as_ref()
+            .and_then(|attrs| attrs.key_values.get("header-rows")),
+        table.rows.len().saturating_sub(foot).min(1),
+    );
+    let mut lines = Vec::new();
+    for (index, row) in table.rows.iter().enumerate() {
+        if row.attrs.is_some() {
+            return None;
+        }
+        let mut fields = Vec::new();
+        for cell in &row.cells {
+            if cell.header != (index < head)
+                || cell.attrs.is_some()
+                || cell.blocks.is_some()
+                || cell.span.is_some()
+                || cell.colspan.is_some()
+                || cell.rowspan.is_some()
+                || cell.align.is_some()
+                || cell.valign.is_some()
+            {
+                return None;
+            }
+            let mut value = String::new();
+            for child in &cell.children {
+                if let InlineNode::Text(text) = child {
+                    value.push_str(&text.value);
+                } else {
+                    return None;
+                }
+            }
+            if value.contains('\r') {
+                return None;
+            }
+            if value.contains([separator, '"', '\n']) {
+                fields.push(format!("\"{}\"", value.replace('"', "\"\"")));
+            } else {
+                fields.push(value);
+            }
+        }
+        lines.push(fields.join(&separator.to_string()));
+    }
+    let mut payload = lines.join("\n");
+    if !lines.is_empty() && payload.is_empty() {
+        payload = "\"\"".to_owned();
+    }
+    let fence = safe_fence(&payload, 3);
+    let mut source = format!(
+        "{fence}{}\n{payload}{}{fence}",
+        format.as_str(),
+        if payload.is_empty() { "" } else { "\n" }
+    );
+    if let Some(caption) = &table.caption {
+        source.push_str("\n^ ");
+        source.push_str(&render_inlines(session, caption, ctx));
+    }
+    Some(source)
 }
 
 /// Tables prefer the NATIVE header form: an `=` on each header cell, plus the

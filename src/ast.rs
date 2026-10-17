@@ -645,6 +645,7 @@ pub struct BlockQuote {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Table {
     pub attrs: Option<Attrs>,
+    pub source_format: Option<TableSourceFormat>,
     pub caption: Option<Vec<InlineNode>>,
     /// Structured publishing/navigation label; Carve 0.1 source has no spelling.
     pub short_caption: Option<Vec<InlineNode>>,
@@ -663,6 +664,39 @@ pub struct Table {
     pub separator_widths: Option<Vec<u64>>,
     /// Span in the original source, when the parser could determine it.
     pub pos: Option<Pos>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TableSourceFormat {
+    Csv,
+    Tsv,
+}
+
+impl TableSourceFormat {
+    /// Returns the name used in fences and AST JSON.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Tsv => "tsv",
+        }
+    }
+
+    /// Parses a CSV or TSV source format name.
+    pub fn from_name(value: &str) -> Option<Self> {
+        match value {
+            "csv" => Some(Self::Csv),
+            "tsv" => Some(Self::Tsv),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn separator(self) -> char {
+        match self {
+            Self::Csv => ',',
+            Self::Tsv => '\t',
+        }
+    }
 }
 
 /// An explicit head/body/foot partition of a table's rows (PART 12 §15).
