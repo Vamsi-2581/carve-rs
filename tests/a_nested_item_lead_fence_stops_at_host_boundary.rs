@@ -1,21 +1,9 @@
-//! An unfinished code fence, or a colon container, opened on a NESTED list
-//! item's marker lead line and its flush-left body (markup-carve/carve#1900,
-//! carve-rs#1547 and #1548).
+//! A fence on a nested marker line owns only lines that reach its host.
 //!
-//! A fence's content is not re-scanned for structure, so the flush-left lines
-//! below a fence opened on a nested item's lead - including a flush-left closing
-//! fence - are its verbatim body. And a colon container opened on such a lead,
-//! whose body sits flush-left below its content column, is ITEM TEXT: the
-//! opener does not open a container, the flush-left line folds in with it, and a
-//! flush-left closing run publishes a separate document-level div.
-//!
-//! The single-level spellings (`- ``` x`, `- ::: d`) already answered
-//! correctly - the outer item collector sees the following line there. Once the
-//! item is nested, the inner re-parse used to see no following line at all, so
-//! neither arm could fold or own it (carve-rs#1547/#1548).
-//!
-//! ORACLE: the executable spec (`scripts/spec/layout.mjs` + `html.mjs`) at spec
-//! main (`1b27b68a`).
+//! A flush-left line supplies no nested item prefix (CARVE-P0-013). Earlier
+//! tests here pinned a Rust-only reading that framed such a line as code
+//! payload. The container differential found the disagreement on `- - ``` `
+//! followed by `tail`; the spec, JS and PHP place `tail` outside the list.
 
 use carve::{to_html, to_html_with_options, to_json_with_options, Options};
 
@@ -26,33 +14,55 @@ fn flat(source: &str) -> String {
     facade.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-// ---- #1547: the nested-item lead fence owns its flush-left body ----
+// ---- The nested item's code block ends at its host boundary ----
 
 #[test]
-fn a_nested_lead_fence_owns_its_flush_left_body_and_closer() {
+fn a_nested_lead_fence_does_not_own_a_flush_left_body_or_closer() {
     assert_eq!(
         flat("- - ``` x\ncode\n```\n"),
         "<ul> <li> <ul> <li> \
-         <pre><code class=\"language-x\">code ``` </code></pre> </li> </ul> </li> </ul>",
+         <pre><code class=\"language-x\"></code></pre> </li> </ul> </li> </ul> <p>code <code></code></p>",
     );
 }
 
 #[test]
-fn a_below_column_body_is_still_the_fences() {
+fn a_below_column_body_is_outside_the_fence() {
     assert_eq!(
         flat("- - ``` x\n code\n ```\n"),
         "<ul> <li> <ul> <li> \
-         <pre><code class=\"language-x\">code ``` </code></pre> </li> </ul> </li> </ul>",
+         <pre><code class=\"language-x\"></code></pre> </li> </ul> </li> </ul> <p>code <code></code></p>",
     );
 }
 
 #[test]
-fn a_three_deep_ladder_owns_the_body_at_the_innermost_item() {
+fn a_three_deep_ladder_releases_the_body_from_the_innermost_item() {
     assert_eq!(
         flat("- - - ``` x\ncode\n```\n"),
         "<ul> <li> <ul> <li> <ul> <li> \
-         <pre><code class=\"language-x\">code ``` </code></pre> </li> </ul> </li> </ul> </li> </ul>",
+         <pre><code class=\"language-x\"></code></pre> </li> </ul> </li> </ul> </li> </ul> <p>code <code></code></p>",
     );
+}
+
+#[test]
+fn an_outer_paragraph_after_the_nested_fence_takes_a_lazy_line() {
+    assert_eq!(
+        flat("- - - ```\n  tail\ntail\n"),
+        "<ul> <li> <ul> <li> <ul> <li> <pre><code></code></pre> </li> </ul> </li> </ul> tail tail </li> </ul>",
+    );
+}
+
+#[test]
+fn a_quoted_outer_paragraph_after_the_nested_fence_takes_a_lazy_line() {
+    let html = to_html("> - - - ```\n>   tail\n> tail\n");
+    assert!(html.contains("      tail\ntail\n    </li>"));
+    assert!(!html.contains("<p>tail</p>"));
+}
+
+#[test]
+fn a_padded_quote_keeps_the_outer_paragraph_claim() {
+    let html = to_html(">  - - - ```\n>    tail\n>  tail\n");
+    assert!(html.contains("      tail\ntail\n    </li>"));
+    assert!(!html.contains("<p>tail</p>"));
 }
 
 #[test]
@@ -64,11 +74,11 @@ fn a_quoted_item_fence_requires_marked_body_lines() {
 }
 
 #[test]
-fn an_ordered_ladder_owns_the_body() {
+fn an_ordered_ladder_releases_the_body() {
     assert_eq!(
         flat("1. 1. ``` x\ncode\n```\n"),
         "<ol> <li> <ol> <li> \
-         <pre><code class=\"language-x\">code ``` </code></pre> </li> </ol> </li> </ol>",
+         <pre><code class=\"language-x\"></code></pre> </li> </ol> </li> </ol> <p>code <code></code></p>",
     );
 }
 
@@ -77,43 +87,43 @@ fn a_tilde_fence_answers_the_same_way() {
     assert_eq!(
         flat("- - ~~~ x\ncode\n~~~\n"),
         "<ul> <li> <ul> <li> \
-         <pre><code class=\"language-x\">code ~~~ </code></pre> </li> </ul> </li> </ul>",
+         <pre><code class=\"language-x\"></code></pre> </li> </ul> </li> </ul> <p>code ~~~</p>",
     );
 }
 
 #[test]
-fn a_fence_with_no_info_string_owns_its_body() {
+fn a_fence_with_no_info_string_releases_a_below_column_body() {
     assert_eq!(
         flat("- - ```\ncode\n```\n"),
-        "<ul> <li> <ul> <li> <pre><code>code ``` </code></pre> </li> </ul> </li> </ul>",
+        "<ul> <li> <ul> <li> <pre><code></code></pre> </li> </ul> </li> </ul> <p>code <code></code></p>",
     );
 }
 
 #[test]
-fn an_unterminated_fence_with_no_closer_runs_to_the_end() {
+fn an_unterminated_fence_ends_with_its_nested_host() {
     assert_eq!(
         flat("- - ``` x\ncode\n"),
         "<ul> <li> <ul> <li> \
-         <pre><code class=\"language-x\">code </code></pre> </li> </ul> </li> </ul>",
+         <pre><code class=\"language-x\"></code></pre> </li> </ul> </li> </ul> <p>code</p>",
     );
 }
 
 #[test]
-fn a_lone_flush_left_closer_is_the_fences_body() {
+fn a_lone_flush_left_run_opens_a_document_block() {
     assert_eq!(
         flat("- - ``` x\n```\n"),
         "<ul> <li> <ul> <li> \
-         <pre><code class=\"language-x\">``` </code></pre> </li> </ul> </li> </ul>",
+         <pre><code class=\"language-x\"></code></pre> </li> </ul> </li> </ul> <pre><code></code></pre>",
     );
 }
 
 #[test]
-fn a_trailing_sibling_marker_ends_the_fence_and_opens_an_outer_item() {
+fn a_trailing_marker_is_text_in_the_document_paragraph() {
     assert_eq!(
         flat("- - ``` x\ncode\n```\n- lazy\n"),
         "<ul> <li> <ul> <li> \
-         <pre><code class=\"language-x\">code ``` </code></pre> </li> </ul> </li> \
-         <li>lazy</li> </ul>",
+         <pre><code class=\"language-x\"></code></pre> </li> </ul> </li> </ul> \
+         <p>code <code> - lazy</code></p>",
     );
 }
 
