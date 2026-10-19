@@ -15325,6 +15325,11 @@ fn parse_list(
                 pending_blank = true;
             }
             if detect_fence_open(innermost_content).is_some()
+                && cur.pos > before_block
+                && innermost_marker_column(marker.content).is_some_and(|marker_col| {
+                    indent_columns(cur.lines.at(before_block)) == content_col + marker_col
+                })
+                && trim_ascii(cur.lines.at(before_block)) == "+"
                 && stream.source.lines().skip(1).all(is_blank_line)
             {
                 if let Some(end) = stream.source.find('\n') {
@@ -16232,6 +16237,17 @@ fn innermost_marker_tail(mut line: &str) -> (usize, &str) {
         line = marker.content;
     }
     (column, line)
+}
+
+fn innermost_marker_column(mut line: &str) -> Option<usize> {
+    let mut content_column = 0;
+    let mut marker_column = None;
+    while let Some(marker) = detect_list_marker_full(line) {
+        marker_column = Some(content_column + marker.indent);
+        content_column += marker_content_col(line)?;
+        line = marker.content;
+    }
+    marker_column
 }
 
 fn innermost_marker_content(mut line: &str) -> &str {
