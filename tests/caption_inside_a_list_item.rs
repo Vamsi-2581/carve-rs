@@ -59,6 +59,86 @@ fn two_blanks_after_code_block_detach_caption() {
 }
 
 #[test]
+fn one_blank_keeps_each_captionable_host_tight() {
+    for host in [
+        "![a](b.png)",
+        "> q",
+        "$$`x`",
+        "::: figure\n  ![a](b.png)\n  :::",
+    ] {
+        let html = to_html(&format!("- {host}\n\n  ^ cap\n- c\n"));
+        assert!(html.contains(">cap</"), "{host}: {html}");
+        assert!(html.contains("<li>c</li>"), "{host}: {html}");
+    }
+}
+
+#[test]
+fn a_blank_before_a_captioned_equation_loosens_the_list() {
+    for gap in ["", "\n"] {
+        let html = to_html(&format!("- a\n\n  $$`x`\n{gap}  ^ cap\n- c\n"));
+        assert!(html.contains("<li><p>a</p>"), "{html}");
+        assert!(html.contains("<li><p>c</p></li>"), "{html}");
+    }
+}
+
+#[test]
+fn a_lazy_quote_line_before_its_caption_keeps_the_list_tight() {
+    let html = to_html("- > q\n  text\n\n  ^ cap\n- c\n");
+    assert!(html.contains("<figcaption>cap</figcaption>"), "{html}");
+    assert!(html.contains("<li>c</li>"), "{html}");
+}
+
+#[test]
+fn an_image_or_equation_after_attributes_keeps_its_caption_tight() {
+    for host in ["![a](b.png)", "$$`x`"] {
+        let html = to_html(&format!("- {{.x}}\n  {host}\n\n  ^ cap\n- c\n"));
+        assert!(
+            html.contains("<figcaption>cap</figcaption>"),
+            "{host}: {html}"
+        );
+        assert!(html.contains("<li>c</li>"), "{host}: {html}");
+    }
+}
+
+#[test]
+fn an_image_after_a_heading_keeps_its_caption_tight() {
+    let html = to_html("- # h\n  ![a](b.png)\n\n  ^ cap\n- c\n");
+    assert!(html.contains("<figcaption>cap</figcaption>"), "{html}");
+    assert!(html.contains("<li>c</li>"), "{html}");
+}
+
+#[test]
+fn an_adjacent_image_caption_does_not_absorb_the_following_fence() {
+    let html = to_html("- ![a](i)\n  ^ cap\n  ```\n  b\n y\n  ```\n");
+    assert!(html.contains("<figcaption>cap</figcaption>"), "{html}");
+    assert!(html.contains("<pre><code>b\n</code></pre>"), "{html}");
+}
+
+#[test]
+fn two_blanks_detach_figure_group_caption() {
+    let html = to_html("- ::: figure\n  ![a](b.png)\n  :::\n\n\n  ^ cap\n- c\n");
+    assert!(!html.contains("<figcaption>"), "{html}");
+    assert!(html.contains("<p>^ cap</p>"), "{html}");
+    assert!(html.contains("<li><p>c</p></li>"), "{html}");
+}
+
+#[test]
+fn a_blank_after_an_empty_quote_does_not_attach_a_caption() {
+    let html = to_html("- >\n\n  ^ cap\n- c\n");
+    assert!(!html.contains("<figcaption>"), "{html}");
+    assert!(html.contains("<p>^ cap</p>"), "{html}");
+    assert!(html.contains("<li><p>c</p></li>"), "{html}");
+}
+
+#[test]
+fn an_image_line_inside_a_paragraph_does_not_attach_a_caption() {
+    let html = to_html("- para\n  ![a](b.png)\n\n  ^ cap\n- c\n");
+    assert!(!html.contains("<figcaption>"), "{html}");
+    assert!(html.contains("<p>^ cap</p>"), "{html}");
+    assert!(html.contains("<li><p>c</p></li>"), "{html}");
+}
+
+#[test]
 fn blank_before_orphan_caption_loosens_list() {
     let html = to_html("- text\n\n  ^ cap\n- c\n");
     assert!(html.contains("<p>^ cap</p>"), "{html}");
