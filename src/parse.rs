@@ -14438,6 +14438,7 @@ fn parse_list(
     // floating attribute block: it has no paragraph for a below-column line to
     // continue, and the pending attribute cannot pull that line into its scope.
     let mut last_item_marker_attr_only = false;
+    let mut last_fence_marker_col = None;
     while let Some(line) = cur.peek() {
         if is_blank_line(line) {
             // A blank alone does not loosen the list; it loosens only when the
@@ -14475,6 +14476,7 @@ fn parse_list(
                 pending_attrs_pos.take().filter(|_| pending_attrs.is_some()),
             );
             pending_attrs = None;
+            let attached_comment = cur.peek().is_some_and(is_line_comment_any_column);
             if let Some(block) =
                 parse_continuation_block(cur, options, base_indent, Some(content_col))
             {
@@ -14500,6 +14502,21 @@ fn parse_list(
                     // of it.
                     let last_item = items.len() - 1;
                     place_item_chunk(deferred, last_item, vec![block], Vec::new());
+                }
+            }
+            if attached_comment
+                && cur.peek().is_some_and(|next| {
+                    indent_columns(next) == base_indent
+                        && line_starts_paragraph(next)
+                        && !item_block_opener(next)
+                })
+            {
+                if let Some(block) =
+                    parse_continuation_block(cur, options, base_indent, Some(content_col))
+                {
+                    if let Some(last_item) = items.len().checked_sub(1) {
+                        place_item_chunk(deferred, last_item, vec![block], Vec::new());
+                    }
                 }
             }
             if options.extensions.is_empty()
@@ -15058,7 +15075,28 @@ fn parse_list(
         // continuation at the item's content column still continues the item at
         // any run length, which is why this sits on the SIBLING MARKER path and
         // nowhere else.
-        if blank_run_before >= 3 {
+        let mut effective_blank_run = blank_run_before;
+        if let Some(marker_col) = last_fence_marker_col {
+            let mut at = cur.pos;
+            let mut blanks = 0;
+            while at > 0 && blanks < 3 {
+                at -= 1;
+                let prior = cur.lines.at(at);
+                if is_blank_line(prior) {
+                    blanks += 1;
+                } else if !(indent_columns(prior) == marker_col
+                    && trim_ascii(prior) == "+"
+                    && cur.lines.line(at + 1).is_some_and(|next| {
+                        is_blank_line(next)
+                            || !attaches_flush_left(cur.source_col(at + 1), Some(&next))
+                    }))
+                {
+                    break;
+                }
+            }
+            effective_blank_run = effective_blank_run.max(blanks);
+        }
+        if effective_blank_run >= 3 {
             break;
         }
         if pending_blank
@@ -15093,6 +15131,22 @@ fn parse_list(
         item_rejected_fence_owner = false;
         let item_source_line = cur.source_line(cur.pos);
         let item_at = cur.pos;
+        last_fence_marker_col = None;
+        if marker.content.contains(['`', '~'])
+            && detect_fence_open(innermost_marker_content(marker.content)).is_some()
+        {
+            let mut marker_col = marker.indent;
+            let mut lead = cur.lines.at(item_at);
+            while let Some(nested) = detect_list_marker_full_at(lead, indent_columns(lead)) {
+                if detect_list_marker_full(nested.content).is_none() {
+                    break;
+                }
+                marker_col +=
+                    (nested.content.as_ptr() as usize).saturating_sub(lead.as_ptr() as usize);
+                lead = nested.content;
+            }
+            last_fence_marker_col = Some(marker_col);
+        }
         cur.consume();
         // Every item answers this for itself; only a bare-`+` lead sets it.
         last_item_bare_continuation = false;
@@ -15739,13 +15793,24 @@ fn parse_list(
             // double-loosen.
             if swallowed_blank_separator {
                 pending_blank = true;
-                blank_run = cur
-                    .lines
-                    .range(0..cur.pos)
-                    .rev()
-                    .take(3)
-                    .take_while(|line| is_blank_line(line))
-                    .count();
+                let mut at = cur.pos;
+                blank_run = 0;
+                while at > item_at + 1 && blank_run < 3 {
+                    at -= 1;
+                    let line = cur.lines.at(at);
+                    if is_blank_line(line) {
+                        blank_run += 1;
+                    } else if !last_fence_marker_col.is_some_and(|marker_col| {
+                        indent_columns(line) == marker_col
+                            && trim_ascii(line) == "+"
+                            && cur.lines.line(at + 1).is_some_and(|next| {
+                                is_blank_line(next)
+                                    || !attaches_flush_left(cur.source_col(at + 1), Some(&next))
+                            })
+                    }) {
+                        break;
+                    }
+                }
             }
             // The fold above had its chance: it takes the band line back when
             // the body does hold an open paragraph. Left behind, the line
@@ -15860,6 +15925,16 @@ fn parse_list(
                     break;
                 }
                 let inline_line = trim_ascii_start(next);
+                // CARVE-P0-015: a lazy fold closes no item, so a later blank separates its paragraphs.
+                if item_unopened_fence_span && {
+                    let lazy = trim_ascii_start(strip_lazy(inline_line));
+                    detect_fence_open(lazy).is_some()
+                        || lazy
+                            .strip_prefix('>')
+                            .is_some_and(|rest| detect_fence_open(rest).is_some())
+                } {
+                    item_unopened_fence_span = false;
+                }
                 caption_below_content_column |= caption_content(inline_line).is_some();
                 if let Some(anchors) = &mut anchors {
                     anchors.push(inline_anchor_for_line(cur, cur.pos, inline_line));
@@ -18543,10 +18618,7 @@ fn collect_indented_block_mapped_with_columns(
         let mut lead = cur.lines.at(previous);
         let mut offset = 0;
         while let Some(marker) = detect_list_marker_full_at(lead, indent_columns(lead)) {
-            let lead_indent = marker.indent;
-            let Some(width) = marker_content_col_at(lead, lead_indent) else {
-                break;
-            };
+            let width = (marker.content.as_ptr() as usize).saturating_sub(lead.as_ptr() as usize);
             let column = offset + width;
             if column > strip_cols {
                 marker_line_columns.push(column);
@@ -18562,13 +18634,26 @@ fn collect_indented_block_mapped_with_columns(
         .nth(1)
         .copied()
         .unwrap_or(strip_cols);
+    let mut nested_frame_indent = 0;
+    let mut nested_lead = marker_content.unwrap_or_default();
+    while let Some(marker) = detect_list_marker_full(nested_lead) {
+        if detect_list_marker_full(marker.content).is_some() {
+            nested_frame_indent +=
+                marker_content_col_at(nested_lead, marker.indent).unwrap_or_default();
+        }
+        nested_lead = marker.content;
+    }
     // Each ancestor must carry the attached flush-left block to the child.
     let mut nested_fence_attachment = 0;
+    let mut nested_attachment_lazy_first = false;
+    let mut nested_refused_fence = false;
+    let mut nested_folded_fence = false;
     while let Some(line) = cur.peek() {
         if nested_fence_attachment > 0 {
             let (mut kept, consumed, synthetic) = slice_columns_mapped(line, 0, true);
-            if nested_fence_attachment == 2 && trim_ascii_start(line) == "~~~" {
+            if nested_attachment_lazy_first {
                 kept.insert_str(0, LAZY);
+                nested_attachment_lazy_first = false;
             }
             lines.push(kept);
             reached.push(false);
@@ -18606,6 +18691,32 @@ fn collect_indented_block_mapped_with_columns(
             break;
         }
         if is_blank_line(line) {
+            if nested_refused_fence {
+                let mut next = cur.pos + 1;
+                while next < cur.lines.len() && is_blank_line(cur.lines.at(next)) {
+                    next += 1;
+                }
+                if next == cur.lines.len() || indent_columns(cur.lines.at(next)) < strip_cols {
+                    // Carry the blank to the deepest fence through its marker ladder.
+                    lines.push(format!("{}{LAZY}", " ".repeat(nested_frame_indent)));
+                    reached.push(false);
+                    if building_maps {
+                        line_map.push(None);
+                        col_map.push(None);
+                    }
+                    for at in cur.pos + 1..next {
+                        lines.push(String::new());
+                        reached.push(false);
+                        if building_maps {
+                            line_map.push(cur.source_line(at));
+                            col_map.push(cur.source_col(at));
+                        }
+                    }
+                    break;
+                }
+                nested_refused_fence = false;
+            }
+            nested_folded_fence = false;
             marker_note_intermediate_quote_open = false;
             nested_paragraph_column = None;
             definition_band_inline_run = None;
@@ -18716,6 +18827,7 @@ fn collect_indented_block_mapped_with_columns(
             cur.consume();
             continue;
         }
+        nested_refused_fence = false;
         let indent = indent_columns(line);
         if indent == strip_cols
             && (item_block_opener(trim_ascii_start(line))
@@ -18909,14 +19021,25 @@ fn collect_indented_block_mapped_with_columns(
         // rather than handed to the nested parse, where it would end the item
         // and cost the lazy fold the same document without it still has.
         // A fence in the marker-line ladder keeps a valid `+` for its child.
-        let attaches_nested_fence = indent == nested_fence_marker_col
+        let nested_host = indent == nested_fence_marker_col
             && marker_content.is_some_and(|content| {
-                detect_fence_open(innermost_marker_content(content)).is_some()
-            })
+                let content = innermost_marker_content(content);
+                detect_fence_open(content).is_some() || detect_container_open(content).is_some()
+            });
+        let attaches_nested_fence = nested_host
             && cur.lines.line(cur.pos + 1).is_some_and(|next| {
                 attaches_flush_left(cur.source_col(cur.pos + 1), Some(&next))
                     && !is_blank_line(next)
             });
+        if trim_ascii(line) == "+" && nested_host && !attaches_nested_fence {
+            nested_refused_fence = marker_content.is_some_and(|content| {
+                detect_fence_open(innermost_marker_content(content)).is_some()
+            });
+            if nested_refused_fence {
+                cur.consume();
+                continue;
+            }
+        }
         if strip_cols > 0
             && indent == strip_cols
             && trim_ascii(line) == "+"
@@ -18937,15 +19060,51 @@ fn collect_indented_block_mapped_with_columns(
             continue;
         }
         if trim_ascii(line) == "+" && attaches_nested_fence {
-            nested_fence_attachment = cur.lines.line(cur.pos + 1).map_or(0, |next| {
-                if trim_ascii_start(next) == "~~~" {
-                    2
-                } else if line_starts_paragraph(next) && !item_block_opener(next) {
-                    1
-                } else {
-                    0
+            let start = cur.pos + 1;
+            if cur
+                .lines
+                .line(start)
+                .is_some_and(is_line_comment_any_column)
+            {
+                let mut block = start;
+                while cur
+                    .lines
+                    .line(block)
+                    .is_some_and(is_line_comment_any_column)
+                {
+                    block += 1;
                 }
-            });
+                let source_col = cur.source_col(block);
+                let end = attached_block_lines(
+                    cur.lines,
+                    block,
+                    &mut cur.comment_closer_last_index,
+                    &mut cur.code_closer_last_index,
+                    &Options::default(),
+                    source_col,
+                    &mut |next, at| {
+                        at > block
+                            && trim_ascii(next) == "+"
+                            && indent_columns(next) == nested_fence_marker_col
+                    },
+                );
+                nested_fence_attachment = end - start;
+            } else if let Some(next) = cur.lines.line(start) {
+                let next = trim_ascii_start(next);
+                let host = marker_content
+                    .and_then(|content| detect_fence_open(innermost_marker_content(content)));
+                if let Some(open) = detect_fence_open(next) {
+                    let after_blank = cur.pos > 0 && is_blank_line(cur.lines.at(cur.pos - 1));
+                    if (!host.is_some_and(|host| is_fence_close(next, host)) || after_blank)
+                        && !cur.has_list_fence_closer_after(start + 1, open)
+                    {
+                        nested_fence_attachment = 2;
+                        nested_attachment_lazy_first = true;
+                    }
+                } else if line_starts_paragraph(next) && !item_block_opener(next) {
+                    nested_fence_attachment = 1;
+                }
+            }
         }
         // A marker that attaches no block leaves the open fence unchanged.
         // Its following blank or indented lines remain fence payload (SS17 L3).
@@ -19230,6 +19389,7 @@ fn collect_indented_block_mapped_with_columns(
             }
         } else if fence.is_none() && comment_fence.is_none() && colon_open.is_empty() {
             if let Some(marker) = detect_list_marker_full_at(line, indent) {
+                nested_folded_fence = false;
                 while nested_item_columns
                     .last()
                     .is_some_and(|&(base, _)| base >= marker.indent)
@@ -19249,6 +19409,27 @@ fn collect_indented_block_mapped_with_columns(
                     }
                 }
                 if let Some(mut open) = detect_fence_open(trim_ascii_start(line)) {
+                    if let Some(&(base, column)) = nested_item_columns.last() {
+                        if column > strip_cols
+                            && indent >= column
+                            && lines.last().is_some_and(|line| {
+                                line_starts_paragraph(innermost_marker_content(trim_ascii_start(
+                                    line,
+                                )))
+                            })
+                        {
+                            // CARVE-P0-014: only an in-child closer lets this run interrupt its paragraph.
+                            nested_folded_fence = !item_body_fence_has_closer(
+                                cur.lines.range(cur.pos + 1..cur.lines.len()),
+                                open,
+                                column,
+                                |line, _| {
+                                    detect_list_marker_full(line)
+                                        .is_some_and(|marker| marker.indent <= base)
+                                },
+                            );
+                        }
+                    }
                     if let Some(&(base, column)) = nested_item_columns
                         .iter()
                         .rev()
@@ -19622,7 +19803,21 @@ fn collect_indented_block_mapped_with_columns(
         };
         let mut sliced = sliced;
         let mut trimmed_after_slice = 0usize;
+        // CARVE-P0-015: a below-child run is a lazy fold even when the outer item reaches its column.
+        if nested_folded_fence
+            && fence.is_none()
+            && nested_item_columns
+                .last()
+                .is_some_and(|&(_, column)| indent < column && indent >= strip_cols)
+            && detect_fence_open(trim_ascii_start(line)).is_some()
+        {
+            let trimmed = trim_ascii_start(line);
+            trimmed_after_slice += line.len() - trimmed.len();
+            sliced = format!("{LAZY}{trimmed}");
+            nested_folded_fence = false;
+        }
         if nested_paragraph_column.is_some_and(|owner| indent < owner)
+            && !sliced.starts_with(LAZY)
             && indent != strip_cols
             && !(indent > strip_cols
                 && item_block_opener_with_invisible_arms(trim_ascii_start(line), true)
