@@ -14679,6 +14679,97 @@ fn definition_body_fold(source: &str, options: &Options<'_>) -> (bool, bool) {
 /// content (or, for the `:  +` form, the attached flush-left block), because the
 /// paragraph test below needs the WHOLE body and this collector only ever sees
 /// the lines after it.
+/// Index closer runs that can reach this description body. Build it once for
+/// the current entry so several fence-shaped paragraph lines do not each scan
+/// the same remaining suffix.
+struct DefinitionBodyCloserIndex {
+    start: usize,
+    end: usize,
+    in_body: ScopedFenceClosers,
+    below_body: ScopedFenceClosers,
+}
+
+fn definition_body_closer_index(
+    cur: &LineCursor<'_>,
+    start: usize,
+    content_column: usize,
+) -> DefinitionBodyCloserIndex {
+    let mut in_body = Vec::new();
+    let mut below_body = Vec::new();
+    let mut pending_blank = false;
+    for line in cur.lines.range(start..cur.lines.len()) {
+        #[cfg(test)]
+        DEFINITION_PAST_FENCE_SCAN_LINES.with(|work| work.set(work.get() + 1));
+        if is_blank_line(line) {
+            pending_blank = true;
+            in_body.push("");
+            below_body.push("");
+            continue;
+        }
+        let indent = indent_columns(line);
+        if indent < content_column
+            && (pending_blank
+                || is_definition_list_start(strip_lazy(line))
+                || strip_definition_marker(strip_lazy(line)).is_some())
+        {
+            break;
+        }
+        pending_blank = false;
+        in_body.push(if indent >= content_column {
+            trim_ascii_start(line)
+        } else {
+            ""
+        });
+        below_body.push(if indent < content_column {
+            trim_ascii_start(line)
+        } else {
+            ""
+        });
+    }
+    DefinitionBodyCloserIndex {
+        start,
+        end: start + in_body.len(),
+        in_body: ScopedFenceClosers::new(in_body.into_iter()),
+        below_body: ScopedFenceClosers::new(below_body.into_iter()),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static DEFINITION_PAST_FENCE_SCAN_LINES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+mod definition_past_fence_work {
+    use super::DEFINITION_PAST_FENCE_SCAN_LINES;
+
+    fn scanned_for(count: usize) -> (usize, usize) {
+        let mut source = String::from(":: t\n: a\n");
+        for _ in 0..count {
+            source.push_str("     ```\n");
+        }
+        source.push_str(" ```\n");
+        DEFINITION_PAST_FENCE_SCAN_LINES.with(|work| work.set(0));
+        let _ = crate::to_html(&source);
+        let scanned = DEFINITION_PAST_FENCE_SCAN_LINES.with(|work| work.get());
+        (source.len(), scanned)
+    }
+
+    #[test]
+    fn below_column_fence_probes_have_bounded_work() {
+        let small = scanned_for(32);
+        let large = scanned_for(128);
+        assert!(
+            small.1 <= small.0 * 8 && large.1 <= large.0 * 8,
+            "scanned source lines exceed eight times input bytes: {small:?}, {large:?}"
+        );
+        assert!(
+            large.1 <= small.1 * 6,
+            "four times the source used more than six times the scan work: {small:?}, {large:?}"
+        );
+    }
+}
+
 fn collect_definition_body(
     cur: &mut LineCursor,
     fence: &mut DefinitionBodyFence,
@@ -14712,6 +14803,8 @@ fn collect_definition_body(
     let mut retained_below_comment = false;
     let mut retained_comment_column = 0;
     let mut retained_fence: Option<(FenceOpen, bool)> = None;
+    let mut past_body_closers: Option<DefinitionBodyCloserIndex> = None;
+    let mut unopened_past_fence: Option<FenceOpen> = None;
     let mut below_comment_span = None;
     // Seeded from the marker line's own content: does the body's LEAD open a
     // code fence NESTED past a list marker? Its verbatim body is the flush-left
@@ -14769,6 +14862,7 @@ fn collect_definition_body(
             retained_below_comment = false;
             paragraph_column = None;
             paragraph_marker_column = None;
+            unopened_past_fence = None;
         }
         let column = indent_columns(line);
         let mut opens_descendant_here = false;
@@ -14968,13 +15062,6 @@ fn collect_definition_body(
                 // right quantity for both cases: with a residual it is
                 // `consumed - synthetic`, which is exactly the base the mapping
                 // in `slice_columns_mapped` documents.
-                let sliced_col = cur.source_col(cur.pos).map(|c| {
-                    c + line
-                        .chars()
-                        .count()
-                        .saturating_sub(strip_lazy(&sliced).chars().count())
-                        as isize
-                });
                 // As in a list item, an unterminated fence at the definition
                 // body's content column stays in its open paragraph (§10 I4).
                 // Tracking one as a real fence would eject the next lazy line
@@ -15032,13 +15119,45 @@ fn collect_definition_body(
                     col_map.push(None);
                     reached.push(true);
                 }
-                col_map.push(sliced_col);
-                if !accept_fence_opener
+                let past_body_fence_without_closer = paragraph_open
+                    && fence.open.is_none()
+                    && nested_lead_fence.is_none()
+                    && descendant_marker_fence.is_none()
+                    && detect_fence_open(&sliced).is_none()
+                    && detect_fence_open(trim_ascii_start(&sliced)).is_some_and(|open| {
+                        let closers = past_body_closers.get_or_insert_with(|| {
+                            definition_body_closer_index(cur, cur.pos + 1, content_column)
+                        });
+                        let next = cur.pos + 1;
+                        let range = next.saturating_sub(closers.start)
+                            ..closers.end.saturating_sub(closers.start);
+                        next < closers.end
+                            && !closers.in_body.code_in(
+                                range.clone(),
+                                open.fence_char,
+                                open.fence_len,
+                            )
+                            && closers
+                                .below_body
+                                .code_in(range, open.fence_char, open.fence_len)
+                    });
+                if past_body_fence_without_closer {
+                    unopened_past_fence = detect_fence_open(trim_ascii_start(&sliced));
+                    sliced = format!("{LAZY}{}", trim_ascii_start(&sliced));
+                } else if !accept_fence_opener
                     && fence.open.is_none()
                     && detect_fence_open(&sliced).is_some()
                 {
                     sliced.insert_str(0, LAZY);
                 }
+                let sliced_col = cur.source_col(cur.pos).map(|c| {
+                    c + line
+                        .chars()
+                        .count()
+                        .saturating_sub(strip_lazy(&sliced).chars().count())
+                        as isize
+                });
+                col_map.push(sliced_col);
                 if fence.open.is_some()
                     || !paragraph_open
                     || detect_fence_open(trim_ascii_start(&sliced)).is_none()
@@ -15207,10 +15326,13 @@ fn collect_definition_body(
             // the one that ejected them: the interrupt test below never got the
             // line.
             let opener = trim_ascii_start(line);
+            let closes_unopened_past_fence =
+                unopened_past_fence.is_some_and(|open| is_fence_close(opener, open));
             let fold_below_column_opener = indent > 0
                 && indent < content_column
                 && (detect_heading(opener).is_some()
                     || thematic_break_marker(opener).is_some()
+                    || closes_unopened_past_fence
                     || is_table_start(opener)
                     || strip_blockquote_prefix(opener).is_some()
                     || caption_content(opener).is_some());
@@ -15343,6 +15465,9 @@ fn collect_definition_body(
                     cur.source_col(cur.pos)
                 };
                 lines.push(keep);
+                if closes_unopened_past_fence {
+                    unopened_past_fence = None;
+                }
                 line_map.push(cur.source_line(cur.pos));
                 col_map.push(kept_col);
                 reached.push(false);
