@@ -29,10 +29,10 @@ fn separator_at_the_list_column_opens_a_description() {
 }
 
 #[test]
-fn marker_line_term_uses_the_marker_column() {
+fn marker_line_term_uses_the_item_content_column() {
     assert_eq!(
         html("- :: t\n: - a\n"),
-        "<ul>\n  <li>\n    <dl>\n      <dt>t</dt>\n      <dd>\n        <ul>\n          <li>a</li>\n        </ul>\n      </dd>\n    </dl>\n  </li>\n</ul>"
+        "<ul>\n  <li>\n    <dl>\n      <dt>t</dt>\n    </dl>\n  </li>\n</ul>\n<p>: - a</p>"
     );
 }
 

@@ -1,21 +1,6 @@
-//! A DESCRIPTION BODY UNDER A QUOTED ITEM IS THE BODY, NOT THE TERM
-//! (markup-carve/carve-rs#1526; carve-js landed the same fix as
-//! markup-carve/carve-js#1608).
-//!
-//! PART 0 LAZY CONTINUATION: a line carrying no `>` still continues the quote by
-//! folding into the innermost open paragraph, and it is NOT the quote's content
-//! at any column - the quote is reached by its marker and never by a column, so
-//! the line's indentation inside the quote body means nothing. The collectors
-//! below read the quote's inner lines BY COLUMN anyway: `> - :: t` puts the
-//! item's content column at 4, a `:  a` written there reached it, and the
-//! content-column arm dedented by the item's own column and left the rest as
-//! leading indent. An indented `:` is no longer a description marker, so the
-//! body folded into the TERM - while the same document WITHOUT the quote read
-//! the body. The quote prefix was the whole difference.
-//!
-//! The quote collector now hands such a line down flush, which is PART 9 §24
-//! C3's LENIENT def-list entry: a `:` attaches a fresh description to an open
-//! term from at or below column 0.
+//! A marked description reaches a term in a quoted item. An unmarked lazy
+//! `:` has no column inside the quote and folds into the open term as text
+//! (CARVE-P2-028, markup-carve/carve#3451).
 //!
 //! THREE STATES ARE EXCLUDED, and each has its own row below. A description
 //! body already OPEN takes the line as its own lazy continuation rather than a
@@ -64,13 +49,12 @@ fn assert_html(src: &str, expected: &str) {
 // THE BAND: a `:`-shaped lazy line under a quoted item is the description.
 // ---------------------------------------------------------------------------
 
-/// The reported document. `> - :: t` puts the item's content column at 4 and
-/// `:  a` is written there.
+/// The reported unmarked line folds into the term.
 #[test]
 fn the_reported_document_reads_the_body() {
     assert_html(
         "> - :: t\n    :  a\ntail\n",
-        "<blockquote><ul><li><dl><dt>t</dt><dd>a tail</dd></dl></li></ul></blockquote>",
+        "<blockquote><ul><li><dl><dt>t : a tail</dt></dl></li></ul></blockquote>",
     );
 }
 
@@ -84,8 +68,7 @@ fn the_unquoted_control_is_unchanged() {
     );
 }
 
-/// A line that carries its OWN `>` is the quote's content and was never in this
-/// band. It answers the same way, which is what says the two spellings agree.
+/// A line carrying `>` has a quoted column and opens the description.
 #[test]
 fn a_line_carrying_its_own_marker_answers_the_same_way() {
     assert_html(
@@ -94,25 +77,21 @@ fn a_line_carrying_its_own_marker_answers_the_same_way() {
     );
 }
 
-/// Two quote markers. The OUTER quote folds the line and hands it down flush,
-/// and to the INNER quote a flush-left `: ` ends the open term (CARVE-P2-028),
-/// so the line stays in the outer quote as text. The layout checker at carve
-/// `ab887d86` reads it this way.
+/// Two quote markers keep the same unmarked term fold.
 #[test]
 fn a_deeper_quote_answers_the_same_way() {
     assert_html(
         "> > - :: t\n      :  a\ntail\n",
-        "<blockquote><blockquote><ul><li><dl><dt>t</dt></dl></li>\
-         </ul></blockquote><p>: a tail</p></blockquote>",
+        "<blockquote><blockquote><ul><li><dl><dt>t : a tail</dt></dl></li></ul></blockquote></blockquote>",
     );
 }
 
-/// A WIDER separator moves the body's column without moving the rule.
+/// Widening the unmarked separator preserves its term owner.
 #[test]
 fn a_wide_separator_answers_the_same_way() {
     assert_html(
         "> - :: t\n    :   a\ntail\n",
-        "<blockquote><ul><li><dl><dt>t</dt><dd>a tail</dd></dl></li></ul></blockquote>",
+        "<blockquote><ul><li><dl><dt>t : a tail</dt></dl></li></ul></blockquote>",
     );
 }
 
@@ -224,19 +203,16 @@ fn a_paragraph_reopened_at_the_item_column_leaves_the_entry() {
     );
 }
 
-/// THE STRIPPED COLUMNS STAY IN THE POSITION MAP. Dedenting the line moves its
-/// text, so the columns removed have to be added back to what the container
-/// recorded as stripped - and NO HTML COMPARISON CAN SEE THIS. Without it the
-/// description's text reports column 4 of line 2, four columns early, which is
-/// where the `:` sits rather than the body (the #908 shape).
+/// The folded term text keeps the unmarked line's source column.
 #[test]
 fn the_stripped_columns_stay_in_the_position_map() {
     let src = "> - :: t\n    :  a\ntail\n";
     let json = carve::to_json_with_options(src, &Options::default().with_positions(true));
-    let flat: String = json.split_whitespace().collect::<Vec<_>>().join("");
     assert!(
-        flat.contains("\"value\":\"a\",\"pos\":{\"startLine\":2,\"endLine\":2,\"startColumn\":8"),
-        "the description text must report the column it was written at; got {json}"
+        json.contains(
+            "\"value\":\":  a\",\"pos\":{\"startLine\":2,\"endLine\":2,\"startColumn\":5"
+        ),
+        "the folded term text must retain the authored source column; got {json}"
     );
 }
 

@@ -60,17 +60,17 @@ fn formatting_stays_idempotent() {
 fn a_comment_in_a_definition_list_item_stays_idempotent() {
     let cases = [
         (
-            "- :: t\n:  - a\n     %%%\n     [r]: /url\n     %%%\n",
+            "- :: t\n  :  - a\n     %%%\n     [r]: /url\n     %%%\n",
             "- :: t\n  : - a\n\n    %%%\n    [r]: /url\n    %%%\n",
             "[r]: /url",
         ),
         (
-            "- :: t\n:  - a\n     %%%\n       [r]: /url\n     %%%\n",
+            "- :: t\n  :  - a\n     %%%\n       [r]: /url\n     %%%\n",
             "- :: t\n  : - a\n\n    %%%\n      [r]: /url\n    %%%\n",
             "  [r]: /url",
         ),
         (
-            "- :: t\n:  - a\n\n     %%%\n     x\n       y\n     %%%\n",
+            "- :: t\n  :  - a\n\n     %%%\n     x\n       y\n     %%%\n",
             "- :: t\n  : - a\n\n    %%%\n    x\n      y\n    %%%\n",
             "x\n  y",
         ),
