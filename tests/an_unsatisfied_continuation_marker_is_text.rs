@@ -53,12 +53,10 @@ fn a_wide_outer_marker_widens_the_band() {
 
 /// The band's edges, and the columns that are marker columns.
 ///
-/// Columns 0 and 2 ARE marker columns here - the outer list's and the
-/// sub-list's - so the marker is satisfied, attaches nothing and renders
-/// nothing. Column 1 reaches neither; columns 3 and 4 were already text.
+/// No follower remains at any of these columns, so each `+` stays as text.
 #[test]
-fn only_column_zero_consumes_the_marker() {
-    for (column, keeps) in [(0, false), (1, true), (2, true), (3, true), (4, true)] {
+fn a_dangling_plus_stays_text_at_every_column() {
+    for (column, keeps) in [(0, true), (1, true), (2, true), (3, true), (4, true)] {
         let source = format!("- x\n  - L\n{}+\n", " ".repeat(column));
         let html = to_html(&source);
         assert_eq!(html.contains("\n+</li>"), keeps, "column {column}: {html}");

@@ -48,7 +48,11 @@ pub(crate) fn fold_lazy_run_and_resume_in_band(
             // could not tell the two apart, so `- # h` / `%% c` / `tail` revived
             // an item its own heading had closed, and the same over a fence, a
             // table and an indented comment (markup-carve/carve-rs#2109).
-            if !open(nested, last_consumed_line_below_column(cur, content_col)) {
+            if !open_after_refused_marker(
+                nested,
+                last_consumed_line_below_column(cur, content_col),
+                &mut open,
+            ) {
                 break;
             }
             let line = cur.peek().unwrap();
@@ -131,7 +135,7 @@ pub(crate) fn fold_lazy_run_and_resume_in_band(
         }
         // The column the run ended at, taken before the fold consumes anything.
         let below = last_consumed_line_below_column(cur, content_col);
-        if !open(nested, below) {
+        if !open_after_refused_marker(nested, below, &mut open) {
             break;
         }
         let before = cur.pos;
@@ -149,6 +153,20 @@ pub(crate) fn fold_lazy_run_and_resume_in_band(
         );
         if cur.pos == before {
             break;
+        }
+        while cur.peek().is_some_and(|line| {
+            indent_columns(line) > list_base
+                && indent_columns(line) <= content_col
+                && is_list_marker(line)
+        }) && quote_fold_at_end(nested.source.rsplit('\n'), &nested.line_map)
+        {
+            let line = cur.peek().unwrap();
+            nested.push_newline_at(
+                format!("{LAZY}{}", trim_ascii_start(line)),
+                cur.source_line(cur.pos),
+                cur.source_col(cur.pos),
+            );
+            cur.consume();
         }
         let before_resume = cur.pos;
         let resumed = resume(cur);
@@ -279,7 +297,12 @@ pub(crate) fn collect_trailing_lazy_through_framed(
         if is_blank_line(line)
             || indent_columns(line) > base_indent
             || (is_list_marker(line) && indent_columns(line) <= list_base)
-            || (is_plus_marker(line) && list_base == 0 && !cur.in_item_body)
+            || (is_plus_marker(line)
+                && cur
+                    .continuation_decision(cur.pos)
+                    .map_or(list_base == 0 && !cur.in_item_body, |decision| {
+                        decision.refusal.is_none()
+                    }))
             || {
                 // AS A CONTAINER: this collector runs only for a line folding
                 // into a container's open paragraph, and §7 recognizes an
@@ -383,9 +406,13 @@ pub(crate) fn a_band_line_ends_the_chunk(
 pub(crate) fn chunk_keeps_its_band_line(cur: &LineCursor, content_col: usize) -> bool {
     let mut open: Option<FenceOpen> = None;
     let mut closed_last = false;
-    for line in cur.lines.range(cur.pos..cur.lines.len()) {
+    for (offset, line) in cur.lines.range(cur.pos..cur.lines.len()).enumerate() {
         if is_blank_line(line) || indent_columns(line) < content_col {
-            return closed_last || trim_ascii(line) == "+";
+            return closed_last
+                || trim_ascii(line) == "+"
+                    && cur
+                        .continuation_decision(cur.pos + offset)
+                        .is_some_and(|decision| decision.refusal.is_none());
         }
         let local = trim_ascii_start(line);
         closed_last = open.is_some_and(|fence| is_fence_close(local, fence));
@@ -445,8 +472,17 @@ pub(crate) fn collect_item_continuation_block_mapped(
     parent_indent: usize,
     content_col: usize,
     open_fence: &mut Option<FenceOpen>,
+    options: &Options<'_>,
 ) -> MappedSource {
-    collect_indented_block_mapped_with(cur, parent_indent, content_col, true, open_fence, false)
+    collect_indented_block_mapped_with(
+        cur,
+        parent_indent,
+        content_col,
+        true,
+        open_fence,
+        false,
+        options,
+    )
 }
 
 pub(crate) fn nested_bare_marker_then_plain(cur: &LineCursor<'_>, content_col: usize) -> bool {
@@ -469,6 +505,16 @@ pub(crate) fn nested_bare_marker_then_plain(cur: &LineCursor<'_>, content_col: u
         && line_starts_paragraph(outer.content)
         && inner.indent == content_col
         && is_plus_marker(inner.content)
+}
+
+pub(crate) fn refused_first_block_below_column(cur: &LineCursor<'_>, content_col: usize) -> bool {
+    cur.pos > 0
+        && cur.peek().is_some_and(|line| {
+            indent_columns(line) < content_col && detect_list_marker_full(line).is_none()
+        })
+        && cur
+            .continuation_decision(cur.pos - 1)
+            .is_some_and(|decision| decision.first_block && decision.refusal.is_some())
 }
 
 /// How far to dedent a collected line, given the container's content column.
@@ -527,18 +573,20 @@ pub(crate) fn collect_indented_block_mapped(
     cur: &mut LineCursor,
     parent_indent: usize,
     strip_cols: usize,
+    options: &Options<'_>,
 ) -> MappedSource {
-    collect_indented_block_mapped_with(cur, parent_indent, strip_cols, false, &mut None, false)
+    collect_indented_block_mapped_with(
+        cur,
+        parent_indent,
+        strip_cols,
+        false,
+        &mut None,
+        false,
+        options,
+    )
 }
 
-/// The same collection for an item whose marker-line content ENDS IN A BARE
-/// `+`, the continuation marker (§17 L3).
-///
-/// The marker names a block at DOCUMENT COLUMN 0 and nothing else
-/// (markup-carve/carve#1436), and this collector is where both halves of that
-/// can be answered: a column-0 line is normally a dedent that ENDS the item, and
-/// here it is the one line the marker reached for; a line at any other column is
-/// normally collected as the item's own, and here it was never the marker's.
+/// Collect the block named by a first-block continuation marker.
 pub(crate) fn collect_indented_block_mapped_after_continuation(
     cur: &mut LineCursor,
     parent_indent: usize,
@@ -551,14 +599,12 @@ pub(crate) fn collect_indented_block_mapped_after_continuation(
         })
     {
         let start = cur.pos;
-        let source_col = cur.attachment_col(start);
-        let mut end = attached_block_lines(
+        let mut end = attached_block_lines_classified(
             cur.lines,
             start,
             &mut cur.comment_closer_last_index,
             &mut cur.code_closer_last_index,
             options,
-            source_col,
             &mut |line, at| {
                 at > start && (is_plus_marker(line) || detect_list_marker_full(line).is_some())
             },
@@ -569,14 +615,12 @@ pub(crate) fn collect_indented_block_mapped_after_continuation(
                 .line(end)
                 .is_some_and(|line| indent_columns(line) == 0 && line_starts_paragraph(line))
         {
-            let next_source_col = cur.attachment_col(end);
-            end = attached_block_lines(
+            end = attached_block_lines_classified(
                 cur.lines,
                 end,
                 &mut cur.comment_closer_last_index,
                 &mut cur.code_closer_last_index,
                 options,
-                next_source_col,
                 &mut |line, _| is_plus_marker(line) || detect_list_marker_full(line).is_some(),
             );
         }
@@ -591,7 +635,15 @@ pub(crate) fn collect_indented_block_mapped_after_continuation(
         }
         return block.into_source();
     }
-    collect_indented_block_mapped_with(cur, parent_indent, strip_cols, false, &mut None, true)
+    collect_indented_block_mapped_with(
+        cur,
+        parent_indent,
+        strip_cols,
+        false,
+        &mut None,
+        true,
+        options,
+    )
 }
 
 /// The same collection, told that a fenced code block is ALREADY OPEN because
@@ -603,8 +655,17 @@ pub(crate) fn collect_indented_block_mapped_after_fence(
     parent_indent: usize,
     strip_cols: usize,
     open_fence: &mut Option<FenceOpen>,
+    options: &Options<'_>,
 ) -> MappedSource {
-    collect_indented_block_mapped_with(cur, parent_indent, strip_cols, false, open_fence, false)
+    collect_indented_block_mapped_with(
+        cur,
+        parent_indent,
+        strip_cols,
+        false,
+        open_fence,
+        false,
+        options,
+    )
 }
 
 pub(crate) fn recent_nested_fence_lead(lines: &[String]) -> bool {

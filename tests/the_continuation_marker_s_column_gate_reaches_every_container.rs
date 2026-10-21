@@ -1,24 +1,6 @@
-//! THE COLUMN GATE IS ONE OPERATION IN EVERY CONTAINER (PART 9 §17 L3,
-//! markup-carve/carve#1814, markup-carve/carve-rs#1446).
-//!
-//! `AND FLUSH-LEFT MEANS COLUMN 0` (§17 L3, markup-carve/carve#1436) says the
-//! `+` marker attaches a block that begins at DOCUMENT column 0 and nothing
-//! else. A line at any other column is not attached at all: it falls through to
-//! the ordinary column rules, which give it to whichever container its own
-//! column names, "exactly as if the `+` line had been a comment".
-//!
-//! That question was asked in the LIST ITEM and nowhere else, so a footnote
-//! body, a definition description and a block quote each reached out for a line
-//! the clause leaves where the author wrote it.
-//!
-//! Comments now retain a following line only below the content column.
-//! Marker and comment spellings have independent reference expectations.
-//!
-//! The QUOTE row uses the blank-line control as well. A comment line at column
-//! 0 under an OPEN quoted paragraph is folded into it as lazy text rather than
-//! being skipped - a defect of the quote's invisible-line handling and not of
-//! the marker, deliberately left by markup-carve/carve#1817 - so the row closes
-//! the quoted paragraph with a bare `>` first and asks about the column alone.
+//! Continuation markers attach at their open container's marker column.
+//! A refused `+` remains text in a list, quote, description, or footnote.
+//! The quote control checks the ordinary text path after a bare `>` line.
 
 /// Whitespace before a closing tag is dropped as well as collapsed: a comment
 /// line inside a list item leaves a trailing space in the item's text where the
@@ -41,9 +23,16 @@ fn marker(src: &str) -> String {
 }
 
 #[test]
-fn the_quote_agrees_with_its_blank_line_control_too() {
+fn the_quote_keeps_a_refused_plus_as_text() {
     let src = "> intro\n>\n@\n  more\n";
-    assert_eq!(html(&marker(src)), html(&src.replacen("@\n", "", 1)));
+    assert_eq!(
+        html(&marker(src)),
+        "<blockquote><p>intro</p></blockquote><p>+ more</p>"
+    );
+    assert_eq!(
+        html(&src.replacen("@\n", "", 1)),
+        "<blockquote><p>intro</p></blockquote><p>more</p>"
+    );
 }
 
 /// The positive half. A gate that refused everything would satisfy every

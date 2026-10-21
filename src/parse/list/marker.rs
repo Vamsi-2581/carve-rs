@@ -555,61 +555,14 @@ pub(crate) fn attached_block_end(
     end
 }
 
-/// PART 9 §17 L3: does the marker's candidate block begin at DOCUMENT column 0?
-///
-/// `AND FLUSH-LEFT MEANS COLUMN 0` (markup-carve/carve#1436) makes "flush-left"
-/// the marker's REACH rather than a description of the usual case: a line at any
-/// other column is not attached at all and falls through to the ordinary column
-/// rules, which give it to whichever container its own column names, exactly as
-/// if the `+` line had been a comment.
-///
-/// THE SOURCE COLUMN, NOT THE FRAME COLUMN. `outer` is what the enclosing
-/// container's strip already took off the front, so the document column is that
-/// plus what the line still carries. Reading the frame column alone answers a
-/// different question - inside a container it is what the strip left, not what
-/// the author wrote - and the corpus rows that catch the difference are the
-/// nested ones in category 384, not the ones this gate was added for
-/// (markup-carve/carve#1814).
-///
-/// `None` means the offset could not be recovered, and the answer is then TRUE:
-/// a reassembled line keeps the behavior it had rather than silently losing its
-/// attachment (PART 12 §4 rates an absent adjustment above a guessed one).
-pub(crate) fn attaches_flush_left(outer: Option<isize>, line: Option<&&str>) -> bool {
-    let Some(line) = line else {
-        return true;
-    };
-    // A STRIP ONLY EVER ADDS, so a line still carrying indentation in its own
-    // frame is below document column 0 whatever the frame is, and that half of
-    // the answer needs no map at all. It is the half every row this gate was
-    // added for turns on.
-    if indent_columns(line) != 0 {
-        return false;
-    }
-    // The other half: a frame-column-0 line is at DOCUMENT column 0 only when
-    // the enclosing strip took nothing. `col_map` is only built when positions
-    // are tracked, so an unknown offset keeps the behavior the line had rather
-    // than silently losing its attachment - the same choice carve-js and
-    // carve-php make for a reassembled line (PART 12 §4).
-    match outer {
-        None => true,
-        Some(outer) => outer == 0,
-    }
-}
-
-/// One past the last line the `+` marker at `start - 1` attaches: the container's
-/// own boundary, narrowed to the ONE block PART 9 §17 L3 counts.
-pub(crate) fn attached_block_lines(
+pub(crate) fn attached_block_lines_classified(
     lines: CursorLines<'_>,
     start: usize,
     comment_closers: &mut Option<HashMap<usize, usize>>,
     closer_index: &mut Option<HashMap<u8, Vec<usize>>>,
     options: &Options<'_>,
-    first_source_col: Option<isize>,
     is_boundary: &mut dyn FnMut(&str, usize) -> bool,
 ) -> usize {
-    if !attaches_flush_left(first_source_col, lines.line(start).as_ref()) {
-        return start;
-    }
     let end = attached_block_end(lines, start, comment_closers, closer_index, is_boundary);
     if measuring_attached_block() {
         return end;
@@ -618,38 +571,15 @@ pub(crate) fn attached_block_lines(
     start + attached_one_block_lines(lines.window(start..end, &materialized), options)
 }
 
-/// Parse ONE block attached by a list `+` continuation marker, bounded to the
-/// lines before the next lone `+` marker at the item's base indent. The scan is
-/// fence-aware -- a `+` inside a nested fenced code block is content, not a
-/// boundary -- so a greedy block (e.g. a block quote's lazy continuation)
-/// cannot swallow the following `+` and its block. `- a / + / >q1 / + / >q2`
-/// then yields two separate quotes. Advances `cur` by the lines consumed.
+/// Parse one attached block, stopping at the host's next marker or sibling item.
 pub(crate) fn parse_continuation_block(
     cur: &mut LineCursor,
     options: &Options<'_>,
     base_indent: usize,
     content_col: Option<usize>,
+    pull_indent: usize,
 ) -> Option<BlockNode> {
-    // A nested list manages its OWN `+` continuations -- the boundary scan
-    // cannot tell a child list's `+` from the parent's, so a list is parsed
-    // unbounded. (Code / colon fences are handled INSIDE the scan: code fences
-    // with matching closers are skipped, and colon fences close at their closer
-    // or EOF, so inner `+` lines are content rather than parent boundaries.)
-    // A DEFINITION AT THE BLOCK'S OWN COLUMN 0 IS THE BLOCK'S, however many of
-    // them there are. `+` attaches ONE flush-left block, and §10 I5 spends the
-    // lazy fold first, so a definition the block registers was never a boundary
-    // - the extent runs past it to the content it introduces
-    // (markup-carve/carve#1918 row 24, markup-carve/carve-rs#1532).
-    //
-    // Consumed BEFORE the sibling-marker test below, so that test reads the line
-    // the definitions INTRODUCE. Leaving them for the caller ends the list on
-    // them instead (they are document-column definitions, which are I5
-    // interrupters there), and `- a` / `+` / `[r]: /a` / `- z` came out as two
-    // lists rather than one.
-    // No `&& indent_columns(line) == 0` here: the DOCUMENT placeholder is only
-    // ever emitted where the container prefix is empty AND the line has no
-    // leading whitespace, so the column test could never disagree with the
-    // predicate.
+    // Definitions belong to the attached block. Nested lists manage their own markers.
     while cur.peek().is_some_and(is_document_definition_placeholder) {
         cur.consume();
     }
@@ -663,9 +593,6 @@ pub(crate) fn parse_continuation_block(
             // item rather than nesting it (matches carve-php for `+`-then-
             // marker, e.g. `- a / + / text / + / - b`).
             if nm.indent > base_indent {
-                // A `+`-attached list holds its own node, so its chunks are
-                // resolved here rather than handed to a level that could
-                // rebase them.
                 let mut item_bodies = Vec::new();
                 return parse_block(cur, options, &mut item_bodies)
                     .map(|block| *drained_list_bodies(block, item_bodies, options));
@@ -684,29 +611,40 @@ pub(crate) fn parse_continuation_block(
             if trim_ascii(line) == "+" && indent_columns(line) == base_indent {
                 return true;
             }
-            // A list marker at (or below) the base column is a SIBLING item of the
-            // outer list, not part of this `+`-attached block. Bound the block here
-            // so it is not absorbed -- now that a bullet does not interrupt, a
-            // `> quote` (or other) block would otherwise swallow a following
-            // `- next` as lazy continuation. Matches carve-js.
+            // A sibling item ends the attachment before lazy continuation can claim it.
             end > start
                 && indent_columns(line) <= base_indent
                 && detect_list_marker_full(line).is_some()
         },
     );
-    let slice: Vec<&str> = cur.lines.range(cur.pos..end).collect();
+    let stripped = (pull_indent > 0).then(|| {
+        cur.lines
+            .range(cur.pos..end)
+            .map(|line| slice_columns_mapped(line, pull_indent, false).0)
+            .collect::<Vec<_>>()
+    });
+    let slice: Vec<&str> = stripped.as_ref().map_or_else(
+        || cur.lines.range(cur.pos..end).collect(),
+        |lines| lines.iter().map(String::as_str).collect(),
+    );
     let line_map: Vec<Option<usize>> = if cur.line_map.is_some() {
         (cur.pos..end).map(|pos| cur.source_line(pos)).collect()
     } else {
         Vec::new()
     };
-    // The attached lines are taken VERBATIM - nothing is stripped from them -
-    // so the parent's column widths apply unchanged. Without this the sub-cursor
-    // had no column map at all, and every block a `+` attached came out
-    // unplaced: the code block, quote or table after the marker, and everything
-    // inside it.
+    // Keep the authored column when rebasing a block attached at an indented
+    // marker column.
     let col_map: Vec<Option<isize>> = if cur.col_map.is_some() {
-        (cur.pos..end).map(|pos| cur.source_col(pos)).collect()
+        (cur.pos..end)
+            .map(|pos| {
+                let consumed = if pull_indent > 0 {
+                    slice_columns_mapped(cur.lines.at(pos), pull_indent, false).1
+                } else {
+                    0
+                };
+                cur.source_col(pos).map(|col| col + consumed as isize)
+            })
+            .collect()
     } else {
         Vec::new()
     };
@@ -719,7 +657,7 @@ pub(crate) fn parse_continuation_block(
     let mut floating_attr_slots = None;
     let mut floating_attrs_pos: Option<Pos> = None;
     while let Some(line) = sub.peek() {
-        if indent_columns(line) != base_indent || !trim_ascii_start(line).starts_with('{') {
+        if indent_columns(line) != 0 || !trim_ascii_start(line).starts_with('{') {
             break;
         }
         let attrs_start = sub.pos;

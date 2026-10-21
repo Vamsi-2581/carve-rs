@@ -3,10 +3,7 @@ fn an_empty_nested_item_leaves_following_markers_to_their_list() {
     let cases: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/nested-empty-list-tail.json")).unwrap();
     let source_line_attrs = regex::Regex::new(r#" data-source-line="\d+""#).unwrap();
-    for (index, case) in cases.into_iter().enumerate() {
-        if matches!(index, 21 | 22) {
-            continue; // pending markup-carve/carve#3421 relative rule
-        }
+    for case in cases {
         let source = case["source"].as_str().unwrap();
         let html = case["html"].as_str().unwrap();
         assert_eq!(carve::to_html(source).trim(), html.trim(), "{source}");

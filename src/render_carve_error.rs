@@ -140,6 +140,11 @@ pub(crate) fn record_unspellable(node_type: &'static str, reason: &'static str) 
     });
 }
 
+pub(crate) fn record_unspellable_list_nesting(reason: &'static str) {
+    // The parse cap is the document-level refusal even if a child failed first.
+    UNSPELLABLE.with(|cell| cell.set(Some(("document", reason))));
+}
+
 pub(crate) struct SourceSpellWatch {
     previous: Option<(&'static str, &'static str)>,
 }

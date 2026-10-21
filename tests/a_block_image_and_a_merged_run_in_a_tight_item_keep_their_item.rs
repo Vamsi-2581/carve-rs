@@ -98,12 +98,9 @@ fn a_block_image_below_any_open_paragraph_keeps_its_item() {
 fn a_merging_run_that_opens_an_item_spells_no_literal_marker() {
     assert_eq!(fmt("- > p\n\n  > z\n"), "- > p\n+\n> z\n");
     assert_eq!(fmt("- | a |\n\n  | z |\n"), "- | a |\n+\n| z |\n");
-    // THE BLOCKQUOTE HOST IS WHAT PICKS THIS SPELLING over carve-js's, which
-    // strips the tag off the item's first line and opens the item with `- +`
-    // (carve-js#1681). Measured on this row: `> - +` / `> > p` re-parses as an
-    // EMPTY item with the quote hoisted out beside the list. Reading UP puts the
-    // marker on a line of its own inside the quote, where it holds.
-    assert_eq!(fmt("> - > p\n>\n>   > z\n"), "> - > p\n> +\n> > z\n");
+    // Inside a quote the blank-line spelling keeps both quotes in the item;
+    // `> +` would now attach `> z` outside it (markup-carve/carve#3421).
+    assert_eq!(fmt("> - > p\n>\n>   > z\n"), "> - > p\n>\n>   > z\n");
     for src in ["- > p\n\n  > z\n", "- | a |\n\n  | z |\n"] {
         assert!(
             !fmt(src).contains("<li>+"),

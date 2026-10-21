@@ -14,7 +14,7 @@ fn lazy_after_sublist_folds_into_deepest() {
 fn inert_plus_before_indented_text_keeps_the_deepest_item_open() {
     assert_eq!(
         carve::to_html("- x\n  - L\n+\n  p\n"),
-        "<ul>\n  <li>x\n    <ul>\n      <li>L\np</li>\n    </ul>\n  </li>\n</ul>"
+        "<ul>\n  <li>x\n    <ul>\n      <li>L\n+\np</li>\n    </ul>\n  </li>\n</ul>"
     );
 }
 

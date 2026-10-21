@@ -98,23 +98,12 @@ fn the_first_block_form_takes_them() {
 }
 
 #[test]
-fn a_marker_inside_a_nested_list_attaches_nothing() {
-    // THIS CASE INVERTED with markup-carve/carve#1436, and the comment it used
-    // to carry - "flush has to be measured against the marker's own column
-    // rather than against column 0" - is the loose reading the clause names and
-    // rejects. §17 L3 says the marker attaches a block beginning at DOCUMENT
-    // COLUMN 0 and nothing else.
-    //
-    // So the `+` at column 2 attaches nothing: no column-0 block follows it.
-    // The attribute line and the quote below are at the OUTER item's content
-    // column, which is where the ordinary column rules put them - after the
-    // nested list, as blocks of the outer item.
-    //
-    // carve-js and carve-php both produce exactly this, independently, since
-    // they took the same ruling.
+fn a_marker_inside_a_nested_list_attaches_to_its_item() {
+    // The marker and its follower share the nested item's marker column.
+    // The attribute line applies to the quote attached to that item.
     assert_eq!(
         carve::to_html("- a\n  - b\n  +\n  {.x}\n  > q\n"),
-        "<ul>\n  <li>a\n    <ul>\n      <li>b\n+</li>\n    </ul>\n    <blockquote class=\"x\"><p>q</p></blockquote>\n  </li>\n</ul>"
+        "<ul>\n  <li>a\n    <ul>\n      <li>b\n        <blockquote class=\"x\"><p>q</p></blockquote>\n      </li>\n    </ul>\n  </li>\n</ul>"
     );
 }
 
@@ -175,19 +164,12 @@ fn attributes_that_reach_nothing_are_dropped() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn control_an_indented_line_after_the_marker_is_not_the_marker_s() {
-    // The marker reaches column 0 and nothing else (§17 L3), so it attaches
-    // nothing here and the indented line is left to its own column - the item's
-    // content column, where a brace line is the attribute line for a block this
-    // item does not have. It attaches to nothing and renders nothing; `> q` is
-    // the quote's own, not the attribute's.
-    //
-    // This control used to read the line as TEXT inside a block the marker had
-    // attached, which is the attachment the clause refuses. carve-js and the
-    // executable spec both produce what is asserted here (corpus 435-13).
+fn control_an_indented_line_after_the_marker_refuses_attachment() {
+    // The attribute line is right of the marker's column. The refused `+`
+    // stays in the item, while the quote starts outside it.
     assert_eq!(
         carve::to_html("- a\n+\n  {.x}\n> q\n"),
-        "<ul>\n  <li>a</li>\n</ul>\n<blockquote><p>q</p></blockquote>"
+        "<ul>\n  <li>a\n+</li>\n</ul>\n<blockquote><p>q</p></blockquote>"
     );
 }
 
@@ -205,7 +187,7 @@ fn control_the_marker_with_no_attribute_line_is_unchanged() {
     );
     assert_eq!(
         carve::to_html("- a\n+\n  - b\n"),
-        "<ul>\n  <li>a\n    <ul>\n      <li>b</li>\n    </ul>\n  </li>\n</ul>"
+        "<ul>\n  <li>a\n+\n    <ul>\n      <li>b</li>\n    </ul>\n  </li>\n</ul>"
     );
 }
 

@@ -15,6 +15,7 @@ mod list;
 use list::*;
 
 mod braced_closers;
+mod continuation_marker;
 mod substitution_scanner;
 use braced_closers::{BracedClosers, NativeBracedView};
 pub(crate) use inline_positions::InlineAnchor;
@@ -117,6 +118,8 @@ pub(crate) enum LintEvent {
         line: usize,
         column: usize,
         host: &'static str,
+        reason: &'static str,
+        first_block: bool,
     },
 }
 
@@ -140,28 +143,6 @@ fn note_lint_event(event: LintEvent) {
             events.push(event);
         }
     });
-}
-
-fn note_refused_marker(cur: &LineCursor<'_>, at: usize, offset: usize, host: &'static str) {
-    let Some(next) = cur.lines.line(at + 1) else {
-        if let (Some(line), Some(col)) = (cur.source_line(at), cur.source_col(at)) {
-            note_lint_event(LintEvent::Marker {
-                line,
-                column: document_column(col, offset),
-                host,
-            });
-        }
-        return;
-    };
-    if is_blank_line(next) {
-        if let (Some(line), Some(col)) = (cur.source_line(at), cur.source_col(at)) {
-            note_lint_event(LintEvent::Marker {
-                line,
-                column: document_column(col, offset),
-                host,
-            });
-        }
-    }
 }
 
 /// Retain the physical EOF through container collection and nested parses.
@@ -700,6 +681,7 @@ fn parse_with_options_mode_and_index(
     let original = source;
     let normalized = normalize_source(source);
     let source = normalized.as_ref();
+    let _continuation_markers = continuation_marker::Guard::install(source);
     let _source_ending = SourceEndingGuard::install(source);
     // PICK THE DEFINITION PLACEHOLDERS FOR THIS DOCUMENT before anything reads
     // them. Every entry point funnels through here, and the guard restores the
@@ -716,7 +698,14 @@ fn parse_with_options_mode_and_index(
         + 1;
     let (body, mut footnote_defs_src, mut footnote_def_pos, mut note_link_defs) =
         if body.contains("[^") {
-            extract_footnote_defs(body, body_start_line, options.positions, false, options)
+            extract_footnote_defs(
+                body,
+                body_start_line,
+                options.positions,
+                false,
+                None,
+                options,
+            )
         } else {
             let body_line_count = body.lines().count();
             (
@@ -988,8 +977,14 @@ fn extract_nested_footnote_defs(
             continue;
         }
 
-        let (body, nested, nested_positions, nested_links) =
-            extract_footnote_defs(&parent.source, 1, options.positions, true, options);
+        let (body, nested, nested_positions, nested_links) = extract_footnote_defs(
+            &parent.source,
+            1,
+            options.positions,
+            true,
+            Some(&parent.line_map),
+            options,
+        );
         let mut body = compose_mapped_source(body, &parent);
         rebase_body_blocks(&mut body, true, options, false);
         defs.insert(label, body);
@@ -1526,9 +1521,20 @@ fn extract_footnote_defs(
     // per-level content column the top level uses, so a definition one column
     // deeper than its parent is still hoisted (carve-rs#1560).
     nested: bool,
+    source_line_map: Option<&[Option<usize>]>,
     options: &Options<'_>,
 ) -> FootnoteExtraction {
     let lines: Vec<&str> = source.lines().collect();
+    let decision_at = |line: usize| {
+        let physical = match source_line_map {
+            Some(map) => map
+                .get(line.checked_sub(first_source_line)?)
+                .copied()
+                .flatten()?,
+            None => line,
+        };
+        continuation_marker::decision(physical)
+    };
     // See `probe_budget_for`: spent by `line_folds_into_an_open_paragraph`, and
     // running out only ever collects a definition this guard would have left as
     // text.
@@ -1926,16 +1932,18 @@ fn extract_footnote_defs(
             // The same block bound is used by a later standalone `+` in a note.
             if trim_ascii(first) == "+"
                 && !in_container
-                && attaches_flush_left(Some(0), lines.get(i))
+                && decision_at(def_start_line).is_some_and(|decision| {
+                    decision.owner == Some(continuation_marker::Kind::Footnote)
+                        && decision.refusal.is_none()
+                })
                 && lines.get(i).is_some_and(|line| !is_blank_line(line))
             {
-                let end = attached_block_lines(
+                let end = attached_block_lines_classified(
                     CursorLines::Slice(&lines),
                     i,
                     &mut comment_closers,
                     &mut closer_index,
                     options,
-                    Some(0),
                     &mut |line, _| is_blank_line(line) || is_plus_marker(line),
                 );
                 if end > i {
@@ -2146,7 +2154,14 @@ fn extract_footnote_defs(
                         }
                         if after_run < lines.len()
                             && (indent_columns(lines[after_run]) >= body_indent
-                                || is_plus_marker(lines[after_run]))
+                                || (is_plus_marker(lines[after_run])
+                                    && decision_at(first_source_line + after_run).is_some_and(
+                                        |decision| {
+                                            decision.owner
+                                                == Some(continuation_marker::Kind::Footnote)
+                                                && decision.refusal.is_none()
+                                        },
+                                    )))
                         {
                             while i < after_run {
                                 let (residue, consumed, synthetic) =
@@ -2167,20 +2182,22 @@ fn extract_footnote_defs(
                     // marker lists, block quotes and definition bodies use); the
                     // attached block ends at a blank line, another `+`, or the
                     // next footnote definition.
-                    if is_plus_marker(line) {
+                    if is_plus_marker(trim_ascii_start(line))
+                        && column < body_indent
+                        && decision_at(first_source_line + i).is_some_and(|decision| {
+                            decision.owner == Some(continuation_marker::Kind::Footnote)
+                                && decision.refusal.is_none()
+                        })
+                    {
                         i += 1;
-                        if !attaches_flush_left(Some(0), lines.get(i)) {
-                            break;
-                        }
                         let mut attached: Vec<String> = Vec::new();
                         let attached_start = i;
-                        let end = attached_block_lines(
+                        let end = attached_block_lines_classified(
                             CursorLines::Slice(&lines),
                             i,
                             &mut comment_closers,
                             &mut closer_index,
                             options,
-                            Some(0),
                             &mut |a, _| {
                                 is_blank_line(a)
                                     || is_plus_marker(a)
@@ -2189,7 +2206,7 @@ fn extract_footnote_defs(
                         );
                         while i < end {
                             let a = lines[i];
-                            attached.push(a.to_string());
+                            attached.push(slice_columns(a, column, true));
                             i += 1;
                         }
                         if !attached.is_empty() {
@@ -2205,7 +2222,8 @@ fn extract_footnote_defs(
                                     .map(|line_idx| Some(first_source_line + line_idx)),
                             );
                             if positions {
-                                def_col_map.extend((0..attached_len).map(|_| Some(0)));
+                                def_col_map
+                                    .extend((0..attached_len).map(|_| Some(column as isize)));
                             }
                         }
                         continue;
@@ -2455,6 +2473,10 @@ fn extract_footnote_defs(
                     && quote_indents.iter().all(|&indent| indent == 0)
                     && lines.get(i).is_some_and(|raw| raw.starts_with('>'))
                     && lines.get(i).and_then(|raw| content(raw)) == Some("+")
+                    && decision_at(first_source_line + i).is_some_and(|decision| {
+                        decision.owner == Some(continuation_marker::Kind::Footnote)
+                            && decision.refusal.is_none()
+                    })
                 {
                     let start = i + 1;
                     let attached: Vec<&str> = lines[start..]
@@ -3082,7 +3104,7 @@ fn paragraph_continuation_probe_with_start(
     let _term_probe = ProbeGuard::enter();
     let reduce = |source: String| {
         let source = if collect_notes && source.contains("[^") {
-            extract_footnote_defs(&source, 1, false, false, options)
+            extract_footnote_defs(&source, 1, false, false, Some(&[]), options)
                 .0
                 .source
         } else {
@@ -4011,7 +4033,7 @@ fn remember_prepass_paragraph_line(
         })
         .unwrap_or(prefix.bare);
     if is_blank_line(raw)
-        || (trim_ascii(raw) == "+" && attaches_flush_left(Some(0), Some(&raw)))
+        || is_plus_marker(raw)
         || is_definition_placeholder(raw)
         || prepass_definition_line(rest)
         || trim_ascii_start(rest).starts_with("%%")
@@ -5502,7 +5524,10 @@ fn parse_blocks_with_options_at_level_into_reached_with_start(
     let _ = &mut lines;
 
     // Physical EOF needs line origins even when positions are not requested.
-    let want_lines = options.source_lines || options.positions || needs_source_ending_map();
+    let want_lines = options.source_lines
+        || options.positions
+        || needs_source_ending_map()
+        || needs_quote_marker_line_map(source);
     let line_map: Vec<Option<usize>> = if want_lines {
         (1..=lines.len()).map(Some).collect()
     } else {
@@ -5532,6 +5557,22 @@ fn parse_blocks_with_options_at_level_into_reached_with_start(
             closed_initial_container_end: cursor.closed_initial_container_end,
         },
     )
+}
+
+fn needs_quote_marker_line_map(source: &str) -> bool {
+    if !source.contains('+') {
+        return false;
+    }
+    let mut previous_quote = false;
+    for line in source.lines() {
+        if previous_quote && is_plus_marker(trim_ascii_start(line)) {
+            return true;
+        }
+        previous_quote = strip_blockquote_prefix(trim_ascii_start(line)).is_some()
+            || detect_list_marker_full(line)
+                .is_some_and(|marker| strip_blockquote_prefix(marker.content).is_some());
+    }
+    false
 }
 
 /// Where the block parser starts DOCUMENT-LEVEL blocks in `lines`, with no
@@ -5826,20 +5867,17 @@ impl<'a> LineCursor<'a> {
             .and_then(|map| map.get(pos).copied().flatten())
     }
 
+    fn continuation_decision(&self, pos: usize) -> Option<continuation_marker::Decision> {
+        self.source_line(pos)
+            .and_then(continuation_marker::decision)
+    }
+
     /// Columns stripped from the front of the line at `pos`, when known.
     fn source_col(&self, pos: usize) -> Option<isize> {
         if let Some(lines) = self.colon_geometry.filter(|_| self.col_map.is_some()) {
             return lines.get(pos).and_then(|line| line.stripped);
         }
         self.col_map.and_then(|map| map.get(pos).copied().flatten())
-    }
-
-    fn attachment_col(&self, pos: usize) -> Option<isize> {
-        if self.in_quoted_body {
-            Some(0)
-        } else {
-            self.source_col(pos)
-        }
     }
 
     /// Did the line at `pos` reach the content column of the container that
@@ -6716,6 +6754,7 @@ fn parse_mapped_source_at_level_into(
         && !options.positions
         && !needs_source_ending_map()
         && !source.col_map.iter().any(Option::is_some)
+        && !source.source.contains('+')
     {
         return parse_unpositioned_mapped_source(
             source,
@@ -8497,6 +8536,26 @@ fn rebase_body_blocks(
                     }
                 }
             }
+        }
+        let refused_lazy_plus = is_plus_marker(trim_ascii_start(&lines[i]))
+            && source
+                .line_map
+                .get(i)
+                .copied()
+                .flatten()
+                .and_then(continuation_marker::decision)
+                .is_some_and(|decision| decision.refusal.is_some())
+            && nested_columns.last().is_some_and(|column| base < *column)
+            && (paragraph_open
+                || i > 0
+                    && detect_list_marker_full(&lines[i - 1])
+                        .is_some_and(|marker| line_starts_paragraph(marker.content)));
+        if refused_lazy_plus {
+            paragraph_open = true;
+            own_paragraph = false;
+            after_blank = false;
+            i += 1;
+            continue;
         }
         while nested_columns.last().is_some_and(|column| base < *column) {
             nested_columns.pop();
@@ -12814,23 +12873,6 @@ impl QuotedFenceClosers {
     }
 }
 
-// A quote's own prefix is transparent to its nested marker's column-zero
-// attachment check. Keep the source column on the line for AST positions.
-fn quote_attachment_column(cur: &LineCursor<'_>, start: usize, at: usize) -> Option<isize> {
-    if cur.in_quoted_body {
-        return cur.attachment_col(at);
-    }
-    let column = cur.source_col(at);
-    if cur.carried_reach(at).is_none()
-        && column == cur.source_col(start)
-        && cur.lines.at(start).starts_with('>')
-    {
-        Some(0)
-    } else {
-        column
-    }
-}
-
 #[inline(never)]
 fn collect_blockquote_body(
     cur: &mut LineCursor,
@@ -12941,11 +12983,12 @@ fn collect_blockquote_body(
             {
                 inner.push_synthetic_blank();
             }
-            // A line carried by an item or note body is below document column 0.
-            // Its marker is consumed by that host; the following line remains
-            // available for the nested quote's ordinary lazy continuation.
+            // The enclosing host already consumed an accepted carried marker.
             if cur.carried_reach(at) == Some(true)
                 && is_plus_marker(stripped)
+                && cur
+                    .continuation_decision(at)
+                    .is_some_and(|decision| decision.refusal.is_none())
                 && inner
                     .lines
                     .last()
@@ -12958,6 +13001,10 @@ fn collect_blockquote_body(
             if cur.carried_reach(at).is_none()
                 && !cur.in_item_body
                 && is_plus_marker(stripped)
+                && cur.continuation_decision(at).is_some_and(|decision| {
+                    decision.owner == Some(continuation_marker::Kind::Quote)
+                        && decision.refusal.is_none()
+                })
                 && prior_quoted_at.is_some()
                 && inner.lines.last().is_some_and(|last| {
                     strip_blockquote_prefix(&last.text).is_some()
@@ -12975,23 +13022,16 @@ fn collect_blockquote_body(
                     cur.consume();
                     continue;
                 }
-                if cur.peek().map_or(true, is_blank_line) {
-                    continue;
-                }
                 inner.push_at("+".to_string(), source_line, Some(0));
                 para_open = ParaOpen::Closed;
                 continue;
             }
-            let first_block = stripped.trim_end_matches([' ', '\t']).ends_with('+')
-                && cur.peek().is_some_and(|next| {
-                    !is_blank_line(next) && strip_blockquote_prefix(next).is_none()
-                })
-                && attaches_flush_left(
-                    quote_attachment_column(cur, span_start, cur.pos),
-                    cur.lines.line(cur.pos).as_ref(),
-                );
+            let first_block = cur.continuation_decision(at).is_some_and(|decision| {
+                decision.owner == Some(continuation_marker::Kind::Quote)
+                    && decision.refusal.is_none()
+            });
             let mut deepest = stripped;
-            let mut levels = 0;
+            let mut levels: usize = 0;
             if first_block {
                 while let Some(next) = strip_blockquote_prefix(deepest) {
                     deepest = next;
@@ -13017,26 +13057,42 @@ fn collect_blockquote_body(
             {
                 // Preserve a nested quote marker for its own parse. The
                 // innermost quote consumes the `+` and takes the block.
-                if deepest != stripped {
-                    let column = stripped_col(cur.source_col(at), line, stripped);
+                let follower_nested_levels = cur.peek().map_or(0, |next| {
+                    let mut rest = strip_blockquote_prefix(next).unwrap_or(next);
+                    let mut levels = 0;
+                    while let Some(inner) = strip_blockquote_prefix(rest) {
+                        rest = inner;
+                        levels += 1;
+                    }
+                    levels
+                });
+                let quoted_follower = cur
+                    .peek()
+                    .is_some_and(|next| strip_blockquote_prefix(next).is_some());
+                let keep_levels = if quoted_follower {
+                    levels.saturating_sub(follower_nested_levels + 1)
+                } else {
+                    levels
+                };
+                if deepest != stripped && keep_levels > 0 {
+                    let mut kept = stripped;
+                    for _ in keep_levels..levels {
+                        kept = strip_blockquote_prefix(kept).unwrap_or(kept);
+                    }
+                    let column = stripped_col(cur.source_col(at), line, kept);
                     if cur.carried_reach(at) == Some(true) {
-                        inner.push_reached_at(stripped.to_string(), source_line, column);
+                        inner.push_reached_at(kept.to_string(), source_line, column);
                     } else {
-                        inner.push_at(stripped.to_string(), source_line, column);
+                        inner.push_at(kept.to_string(), source_line, column);
                     }
                 }
-                let attach_col = quote_attachment_column(cur, span_start, cur.pos);
-                let end = attached_block_lines(
+                let end = attached_block_lines_classified(
                     cur.lines,
                     cur.pos,
                     &mut cur.comment_closer_last_index,
                     &mut cur.code_closer_last_index,
                     options,
-                    attach_col,
-                    &mut |next, _| {
-                        is_blank_line(next)
-                            || (trim_ascii(next) == "+" && indent_columns(next) == 0)
-                    },
+                    &mut |next, _| is_blank_line(next) || is_plus_marker(next),
                 );
                 while cur.pos < end {
                     let next = cur.lines.at(cur.pos);
@@ -13239,19 +13295,19 @@ fn collect_blockquote_body(
         }
         if cur.carried_reach(cur.pos).is_none()
             && inner.lines.last().is_some_and(|last| last.text == "+")
-            && attaches_flush_left(
-                quote_attachment_column(cur, span_start, cur.pos),
-                cur.lines.line(cur.pos).as_ref(),
-            )
+            && inner
+                .lines
+                .last()
+                .and_then(|last| last.source_line())
+                .and_then(continuation_marker::decision)
+                .is_some_and(|decision| decision.refusal.is_none())
         {
-            let attach_col = quote_attachment_column(cur, span_start, cur.pos);
-            let end = attached_block_lines(
+            let end = attached_block_lines_classified(
                 cur.lines,
                 cur.pos,
                 &mut cur.comment_closer_last_index,
                 &mut cur.code_closer_last_index,
                 options,
-                attach_col,
                 &mut |next, _| is_blank_line(next),
             );
             let start = cur.pos;
@@ -13268,38 +13324,29 @@ fn collect_blockquote_body(
                 continue;
             }
         }
-        // Continuation marker (Carve, PART 9 §17): a lone `+` at column 0 after
-        // a quoted line attaches the FOLLOWING flush-left block to the quote --
-        // the un-prefixed analogue of the list-item form, so a real block (list,
-        // fenced code, table, ...) joins the quote without repeating `>`. Collect
-        // the block's lines (up to a blank line, a `>` line, or a further `+`)
-        // and splice them into the quote body behind a blank-line separator, so
-        // they parse as their own block instead of folding into the quoted
-        // paragraph. The marker only attaches; a blank line still ends the quote
-        // and a `+` outside a container stays literal.
-        // The body arrives stripped of any enclosing item's indentation, so a
-        // `+` written one column LEFT of the quote's marker is spelled exactly
-        // like one written at it and the column test above cannot tell them
-        // apart. `CARVE-P9-031` puts the marker at its container's marker
-        // column and nowhere else, and the collector's carried reach is what
-        // survives the dedent (markup-carve/carve-php#2470).
+        // An accepted physical marker attaches one block to the surviving quote.
         if trim_ascii(line) == "+"
             && indent_columns(line) == 0
-            && !cur.in_item_body
-            && cur.carried_reach(cur.pos) != Some(false)
+            && (!cur.in_item_body || cur.continuation_decision(cur.pos).is_some())
+            && (cur.continuation_decision(cur.pos).is_some()
+                || cur.carried_reach(cur.pos) != Some(false))
+            && cur.continuation_decision(cur.pos).is_some_and(|decision| {
+                matches!(
+                    decision.owner,
+                    Some(continuation_marker::Kind::Quote | continuation_marker::Kind::List)
+                ) && decision.refusal.is_none()
+            })
         {
             opaque_tail = false;
             cur.consume();
             let mut attached = LineBuffer::default();
             let cursor_lines = cur.lines;
-            let attach_first_col = quote_attachment_column(cur, span_start, cur.pos);
-            let mut attach_end = attached_block_lines(
+            let mut attach_end = attached_block_lines_classified(
                 cursor_lines,
                 cur.pos,
                 &mut cur.comment_closer_last_index,
                 &mut cur.code_closer_last_index,
                 options,
-                attach_first_col,
                 &mut |next, _| {
                     is_blank_line(next) || (trim_ascii(next) == "+" && indent_columns(next) == 0)
                 },
@@ -13311,14 +13358,12 @@ fn collect_blockquote_body(
                     .line(attach_end)
                     .is_some_and(|next| indent_columns(next) == 0 && line_starts_paragraph(next))
             {
-                let next_source_col = quote_attachment_column(cur, span_start, attach_end);
-                attach_end = attached_block_lines(
+                attach_end = attached_block_lines_classified(
                     cursor_lines,
                     attach_end,
                     &mut cur.comment_closer_last_index,
                     &mut cur.code_closer_last_index,
                     options,
-                    next_source_col,
                     &mut |next, _| is_blank_line(next) || is_plus_marker(next),
                 );
             }
@@ -13627,6 +13672,16 @@ fn detect_block_image(line: &str) -> Option<Image> {
 
 fn parse_paragraph(cur: &mut LineCursor, options: &Options<'_>) -> BlockNode {
     let span_start = cur.pos;
+    let refused_plus = cur
+        .peek()
+        .is_some_and(|line| is_plus_marker(trim_ascii_start(line)))
+        && cur
+            .continuation_decision(span_start)
+            .is_some_and(|decision| {
+                decision.refusal.is_some()
+                    && decision.owner != Some(continuation_marker::Kind::Footnote)
+                    && !decision.after_quote_blank
+            });
     // Whether the first line sits at the container's content column (flush-left
     // here, since the caller has dedented to that column). Only a content-column
     // image + `^ caption` promotes to a `<figure>` later; an indented one stays
@@ -13641,8 +13696,29 @@ fn parse_paragraph(cur: &mut LineCursor, options: &Options<'_>) -> BlockNode {
         // First line is always part of the paragraph; from the second on, a
         // visible block opener interrupts (§10).
         let line_owned = line.to_string();
+        let same_authored_column = cur
+            .source_line(span_start)
+            .zip(cur.source_line(cur.pos))
+            .map(|(first, next)| {
+                continuation_marker::document_column(first)
+                    == continuation_marker::document_column(next)
+            })
+            .unwrap_or(true);
         if !lines.is_empty()
-            && (interrupts_paragraph(cur, &line_owned)
+            && ((!refused_plus || !is_list_marker(&line_owned) || same_authored_column)
+                && interrupts_paragraph(cur, &line_owned)
+                || (refused_plus
+                    && lines.len() == 1
+                    && cur.lines.at(span_start).starts_with('+')
+                    && cur
+                        .continuation_decision(span_start)
+                        .is_some_and(|decision| {
+                            (decision.owner.is_some() || span_start > 0)
+                                && decision.sibling_interrupt
+                        })
+                    && is_list_marker(line)
+                    && indent_columns(line) == 0
+                    && same_authored_column)
                 || (cur.colon_view.is_some_and(|view| view.marker_hosted)
                     && strip_blockquote_prefix(trim_ascii_start(line)).is_some()))
             && !(suppress_colon_interrupt && is_suppressed_colon_fence_line(&line_owned))
@@ -13851,7 +13927,11 @@ fn interrupts_paragraph(cur: &mut LineCursor<'_>, line: &str) -> bool {
     // folds as lazy item text", and the collector forwards such a line with its
     // residual indent intact. `is_list_marker` trims, so without the guard the
     // two bands would answer the same.
-    if cur.in_item_body && !line.starts_with([' ', '\t']) && is_list_marker(line) {
+    if cur.in_item_body
+        && cur.carried_reach(cur.pos) != Some(false)
+        && !line.starts_with([' ', '\t'])
+        && is_list_marker(line)
+    {
         return true;
     }
     // Symmetric §10: a list marker (bullet OR task OR ordered) does NOT
@@ -14283,31 +14363,31 @@ fn parse_definition_list(cur: &mut LineCursor, options: &Options<'_>) -> BlockNo
             // content is a lone `+`, seed the body with the FOLLOWING flush-left
             // block (no `+` literal), with no indentation. `:  \+` stays literal.
             let mut body = if is_plus_marker(def_trimmed) {
-                if let Some(line) = cur.lines.line(def_start) {
-                    note_refused_marker(
-                        cur,
-                        def_start,
-                        line.find('+').unwrap_or(0),
-                        "definition description",
-                    );
-                }
                 let mut fb = LineBuffer::default();
                 let lines = cur.lines;
-                let first_block_col = cur.source_col(cur.pos);
-                let end = attached_block_lines(
-                    lines,
-                    cur.pos,
-                    &mut cur.comment_closer_last_index,
-                    &mut cur.code_closer_last_index,
-                    options,
-                    first_block_col,
-                    &mut |a, _| {
-                        is_blank_line(a)
-                            || is_plus_marker(a)
-                            || strip_lazy(a).strip_prefix(":: ").is_some()
-                            || strip_definition_marker(strip_lazy(a)).is_some()
-                    },
-                );
+                let mut boundary = |a: &str, _| {
+                    is_blank_line(a)
+                        || is_plus_marker(a)
+                        || strip_lazy(a).strip_prefix(":: ").is_some()
+                        || strip_definition_marker(strip_lazy(a)).is_some()
+                };
+                let classified = cur.continuation_decision(def_start);
+                let end = match classified {
+                    Some(decision)
+                        if decision.owner == Some(continuation_marker::Kind::Description)
+                            && decision.refusal.is_none() =>
+                    {
+                        attached_block_lines_classified(
+                            lines,
+                            cur.pos,
+                            &mut cur.comment_closer_last_index,
+                            &mut cur.code_closer_last_index,
+                            options,
+                            &mut boundary,
+                        )
+                    }
+                    _ => cur.pos,
+                };
                 while cur.pos < end {
                     let a = cur.lines.at(cur.pos);
                     fb.push_at(
@@ -14808,36 +14888,21 @@ fn collect_definition_body(
             retained_below_comment = false;
         }
         // Form B: `+` pull-left continuation.
-        if is_plus_marker(line) && !cur.in_item_body {
-            note_refused_marker(
-                cur,
-                cur.pos,
-                line.find('+').unwrap_or(0),
-                "definition description",
-            );
+        if is_plus_marker(trim_ascii_start(line))
+            && cur.continuation_decision(cur.pos).is_some_and(|decision| {
+                decision.owner == Some(continuation_marker::Kind::Description)
+                    && decision.refusal.is_none()
+            })
+        {
             cur.consume();
-            // ...AND THE DESCRIPTION ENDS WHERE A COMMENT ENDS IT
-            // (markup-carve/carve#1814). Same shape as the footnote body: a `+`
-            // the gate refuses is an ordinary invisible line at document column
-            // 0, and a `<dd>` ends at one of those. Asked ONE LINE EARLY because
-            // the branch below would otherwise fold the following line into the
-            // open paragraph before any extent is measured.
-            if !attaches_flush_left(
-                cur.attachment_col(cur.pos),
-                cur.lines.line(cur.pos).as_ref(),
-            ) {
-                break;
-            }
             let mut attached = LineBuffer::default();
             let cursor_lines = cur.lines;
-            let attached_first_col = cur.source_col(cur.pos);
-            let end = attached_block_lines(
+            let end = attached_block_lines_classified(
                 cursor_lines,
                 cur.pos,
                 &mut cur.comment_closer_last_index,
                 &mut cur.code_closer_last_index,
                 options,
-                attached_first_col,
                 &mut |a, _| {
                     is_blank_line(a)
                         || is_plus_marker(a)
@@ -14848,9 +14913,9 @@ fn collect_definition_body(
             while cur.pos < end {
                 let a = cur.lines.at(cur.pos);
                 attached.push_at(
-                    a.to_string(),
+                    slice_columns(a, column, true),
                     cur.source_line(cur.pos),
-                    cur.source_col(cur.pos),
+                    cur.source_col(cur.pos).map(|col| col + column as isize),
                 );
                 cur.consume();
             }

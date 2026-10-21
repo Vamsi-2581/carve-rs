@@ -58,13 +58,17 @@ fn nested_marker_attached_blocks_keep_source_positions() {
     let BlockNode::BlockQuote(inner) = &outer.children[0] else {
         panic!("inner quote")
     };
-    let BlockNode::Paragraph(para) = &inner.children[1] else {
-        panic!("attached paragraph")
+    let BlockNode::Paragraph(para) = &inner.children[0] else {
+        panic!("merged paragraph")
     };
     assert_eq!(
         para.pos.as_ref().expect("paragraph position").start_offset,
-        10
+        4
     );
+    let carve::ast::InlineNode::Text(text) = &para.children[4] else {
+        panic!("paragraph tail")
+    };
+    assert_eq!(text.pos.as_ref().expect("tail position").start_offset, 10);
 
     let source = "x[^a]\n\n> [^a]: n\n> +\n> para\n";
     let doc = carve::parse_with_options(source, &options);

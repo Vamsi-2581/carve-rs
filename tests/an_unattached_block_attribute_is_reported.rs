@@ -211,7 +211,7 @@ fn an_attribute_line_a_refused_marker_leaves_behind_is_reported() {
     // outside the list.
     assert_eq!(
         html("- a\n+\n  {.x}\n> q\n"),
-        "<ul>\n  <li>a</li>\n</ul>\n<blockquote><p>q</p></blockquote>"
+        "<ul>\n  <li>a\n+</li>\n</ul>\n<blockquote><p>q</p></blockquote>"
     );
 }
 

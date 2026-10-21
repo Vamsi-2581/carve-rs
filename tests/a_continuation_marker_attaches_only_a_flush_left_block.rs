@@ -1,14 +1,5 @@
-//! A CONTINUATION MARKER ATTACHES ONLY A FLUSH-LEFT BLOCK
-//! (markup-carve/carve#1436).
-//!
-//! §17 L3: the marker attaches a block that begins at DOCUMENT COLUMN 0 and
-//! nothing else. A line at any other column is not attached at all - it falls
-//! through to the ordinary column rules, which give it to whichever container
-//! its own column names, exactly as if the marker line had been a comment.
-//!
-//! This engine had the loose reading twice over: it attached a line at any
-//! indentation, AND it dropped the column-0 line the marker actually reaches
-//! for, because a flush-left line is a dedent that normally ends an item.
+//! A first-block marker may read a block at the opener's authored column or
+//! document column zero. A later marker uses its open item's marker column.
 
 fn html(source: &str) -> String {
     carve::to_html(source)
@@ -57,10 +48,10 @@ fn the_single_level_form_is_unaffected() {
 }
 
 #[test]
-fn a_marker_that_cannot_reach_column_zero_attaches_nothing() {
+fn a_nested_marker_attaches_at_its_item_column() {
     let with_marker = html("- a\n  - b\n  +\n  c\n");
     assert_eq!(
         with_marker,
-        "<ul>\n  <li>a\n    <ul>\n      <li>b\n+\nc</li>\n    </ul>\n  </li>\n</ul>"
+        "<ul>\n  <li>a\n    <ul>\n      <li>b\n        c\n      </li>\n    </ul>\n  </li>\n</ul>"
     );
 }

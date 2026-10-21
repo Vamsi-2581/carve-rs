@@ -160,11 +160,10 @@ fn quote_continuation_marker_attaches_following_block() {
         carve::to_html("> quoted\n+\n- item"),
         "<blockquote>\n  <p>quoted</p>\n  <ul>\n    <li>item</li>\n  </ul>\n</blockquote>"
     );
-    // A trailing `+` with nothing to attach is consumed (dropped), matching the
-    // list-item continuation marker.
+    // A trailing `+` with no follower remains text in the quote.
     assert_eq!(
         carve::to_html("> a\n+"),
-        "<blockquote><p>a</p></blockquote>"
+        "<blockquote><p>a\n+</p></blockquote>"
     );
 }
 

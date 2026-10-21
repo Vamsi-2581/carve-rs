@@ -69,7 +69,7 @@
   },
   {
     "source": "[^a]: intro\n+\n more\n\nsee[^a]\n",
-    "html": "<p>more</p>\n<p>see<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a></p>\n<section role=\"doc-endnotes\" aria-label=\"Footnotes\">\n  <hr>\n  <ol>\n    <li id=\"fn1\">\n      <p>intro<a href=\"#fnref1\" role=\"doc-backlink\" aria-label=\"Back to reference\">↩</a></p>\n    </li>\n  </ol>\n</section>"
+    "html": "<p>+\nmore</p>\n<p>see<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a></p>\n<section role=\"doc-endnotes\" aria-label=\"Footnotes\">\n  <hr>\n  <ol>\n    <li id=\"fn1\">\n      <p>intro<a href=\"#fnref1\" role=\"doc-backlink\" aria-label=\"Back to reference\">↩</a></p>\n    </li>\n  </ol>\n</section>"
   },
   {
     "source": "[^a]: intro\n%% c\n more\n\nsee[^a]\n",
@@ -77,7 +77,7 @@
   },
   {
     "source": "[^a]: intro\n+\n  more\n\nsee[^a]\n",
-    "html": "<p>more</p>\n<p>see<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a></p>\n<section role=\"doc-endnotes\" aria-label=\"Footnotes\">\n  <hr>\n  <ol>\n    <li id=\"fn1\">\n      <p>intro<a href=\"#fnref1\" role=\"doc-backlink\" aria-label=\"Back to reference\">↩</a></p>\n    </li>\n  </ol>\n</section>"
+    "html": "<p>+\nmore</p>\n<p>see<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a></p>\n<section role=\"doc-endnotes\" aria-label=\"Footnotes\">\n  <hr>\n  <ol>\n    <li id=\"fn1\">\n      <p>intro<a href=\"#fnref1\" role=\"doc-backlink\" aria-label=\"Back to reference\">↩</a></p>\n    </li>\n  </ol>\n</section>"
   },
   {
     "source": "[^a]: intro\n%% c\n  more\n\nsee[^a]\n",
@@ -85,7 +85,7 @@
   },
   {
     "source": ":: term\n:  intro\n+\n  more\n",
-    "html": "<dl>\n  <dt>term</dt>\n  <dd>intro</dd>\n</dl>\n<p>more</p>"
+    "html": "<dl>\n  <dt>term</dt>\n  <dd>intro\n+\nmore</dd>\n</dl>"
   },
   {
     "source": ":: term\n:  intro\n%% c\n  more\n",
@@ -93,7 +93,7 @@
   },
   {
     "source": ":: term\n:  intro\n+\n more\n",
-    "html": "<dl>\n  <dt>term</dt>\n  <dd>intro</dd>\n</dl>\n<p>more</p>"
+    "html": "<dl>\n  <dt>term</dt>\n  <dd>intro\n+\nmore</dd>\n</dl>"
   },
   {
     "source": ":: term\n:  intro\n%% c\n more\n",
@@ -101,7 +101,7 @@
   },
   {
     "source": "> intro\n>\n+\n  more\n",
-    "html": "<blockquote><p>intro</p></blockquote>\n<p>more</p>"
+    "html": "<blockquote><p>intro</p></blockquote>\n<p>+\nmore</p>"
   },
   {
     "source": "> intro\n>\n%% c\n  more\n",
@@ -109,7 +109,7 @@
   },
   {
     "source": "- intro\n+\n  more\n",
-    "html": "<ul>\n  <li>intro\nmore</li>\n</ul>"
+    "html": "<ul>\n  <li>intro\n+\nmore</li>\n</ul>"
   },
   {
     "source": "- intro\n%% c\n  more\n",

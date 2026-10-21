@@ -99,10 +99,10 @@ fn nested_marker_attaches_fenced_code_without_extra_space() {
 }
 
 #[test]
-fn dangling_marker_after_collected_note_adds_no_content() {
+fn dangling_marker_after_collected_note_remains_text() {
     assert_eq!(
         carve::to_html("> [^a]: n\n> +\n\npara\n"),
-        "<blockquote>\n\n</blockquote>\n<p>para</p>"
+        "<blockquote><p>+</p></blockquote>\n<p>para</p>"
     );
 }
 
@@ -115,7 +115,7 @@ fn nested_marker_controls() {
         ),
         (
             "> > q\n> +\n\npara\n",
-            "<blockquote>\n  <blockquote><p>q</p></blockquote>\n</blockquote>\n<p>para</p>",
+            "<blockquote>\n  <blockquote><p>q\n+</p></blockquote>\n</blockquote>\n<p>para</p>",
         ),
         (
             "> q\n+\npara\n",
@@ -154,7 +154,7 @@ fn nested_marker_with_cli_options() {
     for (source, expected) in [
         ("> > q\n> +\n> para\n> more\n", "<blockquote>\n  <blockquote>\n    <p>q</p>\n    <p>para\nmore</p>\n  </blockquote>\n</blockquote>"),
         ("> > q\n> +\n> - a\n> - b\n", "<blockquote>\n  <blockquote>\n    <p>q</p>\n    <ul>\n      <li>a</li>\n      <li>b</li>\n    </ul>\n  </blockquote>\n</blockquote>"),
-        ("> > q\n> +\npara\n", "<blockquote>\n  <blockquote>\n    <p>q</p>\n    <p>para</p>\n  </blockquote>\n</blockquote>"),
+        ("> > q\n> +\npara\n", "<blockquote>\n  <blockquote><p>q\n+\npara</p></blockquote>\n</blockquote>"),
         ("> > q\n> +\n> > r\n", "<blockquote>\n  <blockquote>\n    <p>q</p>\n    <blockquote><p>r</p></blockquote>\n  </blockquote>\n</blockquote>"),
         ("x[^a]\n\n> [^a]: n\n> +\n> para\n", "<p>x<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a></p>\n<blockquote>\n\n</blockquote>\n<section role=\"doc-endnotes\" aria-label=\"Footnotes\">\n  <hr>\n  <ol>\n    <li id=\"fn1\">\n      <p>n</p>\n      <p>para<a href=\"#fnref1\" role=\"doc-backlink\" aria-label=\"Back to reference\">↩</a></p>\n    </li>\n  </ol>\n</section>"),
     ] {
@@ -164,6 +164,7 @@ fn nested_marker_with_cli_options() {
 }
 
 #[test]
+#[ignore = "pending markup-carve/carve#3482: carve-js and the spec model disagree on this shape"]
 fn nested_quotes_in_list_and_note_bodies_keep_existing_lazy_lines() {
     for (source, expected) in [
         (

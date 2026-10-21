@@ -703,18 +703,35 @@ pub(crate) fn detect_list_marker_full_at(line: &str, indent: usize) -> Option<Li
 /// `Options`, and a probe parse there would have to invent one. Walking back
 /// over the trailing non-blank run is also what the rule actually says - a blank
 /// is the only exit, and prose in between stays inside the fold.
-pub(crate) fn collected_body_ends_in_a_quote_fold(lines: &[String]) -> bool {
-    for line in lines.iter().rev() {
+pub(crate) fn collected_body_ends_in_a_quote_fold(
+    lines: &[String],
+    line_map: &[Option<usize>],
+) -> bool {
+    quote_fold_at_end(lines.iter().map(String::as_str).rev(), line_map)
+}
+
+pub(crate) fn quote_fold_at_end<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    line_map: &[Option<usize>],
+) -> bool {
+    for (offset, line) in lines.enumerate() {
         if is_blank_line(line) {
             return false;
         }
-        let rest = trim_ascii_start(line);
+        let rest = trim_ascii_start(strip_lazy(line));
         if rest.starts_with('>') {
             return true;
         }
         // A visible opener ends the fold, so what is below it is not the
         // quote's any more.
-        if item_block_opener(rest) {
+        let refused_plus = trim_ascii(rest) == "+"
+            && line_map
+                .get(line_map.len().saturating_sub(offset + 1))
+                .copied()
+                .flatten()
+                .and_then(continuation_marker::decision)
+                .is_some_and(|decision| decision.refusal.is_some());
+        if item_block_opener(rest) && !refused_plus {
             return false;
         }
     }
@@ -938,6 +955,7 @@ pub(crate) fn nested_ends_with_open_paragraph_rebased(
 ) -> bool {
     let mut rebased = nested.clone();
     rebase_overindented_blocks(&mut rebased, false, options);
+    mask_refused_marker_tail(&mut rebased);
     nested_ends_with_open_paragraph(
         &rebased.source,
         trailing_below_column,
@@ -1800,4 +1818,35 @@ pub(crate) fn lazy_line_pending(cur: &mut LineCursor) -> bool {
         && indent_columns(&line) == 0
         && !is_list_marker(&line)
         && !interrupts_paragraph_as_container(cur, &line)
+}
+
+pub(crate) fn open_after_refused_marker(
+    nested: &MappedSource,
+    below: bool,
+    open: &mut impl FnMut(&MappedSource, bool) -> bool,
+) -> bool {
+    let mut ordinary = nested.clone();
+    if !mask_refused_marker_tail(&mut ordinary) {
+        return open(nested, below);
+    }
+    open(&ordinary, below)
+}
+
+fn mask_refused_marker_tail(nested: &mut MappedSource) -> bool {
+    let line = nested.source.rsplit('\n').next().unwrap_or_default();
+    if trim_ascii(strip_lazy(trim_ascii_start(line))) != "+"
+        || !nested
+            .line_map
+            .last()
+            .copied()
+            .flatten()
+            .and_then(continuation_marker::decision)
+            .is_some_and(|decision| decision.refusal.is_some())
+    {
+        return false;
+    }
+    if let Some(at) = nested.source.rfind('+') {
+        nested.source.replace_range(at..at + 1, "x");
+    }
+    true
 }

@@ -16,6 +16,12 @@ const IMPLEMENTED: &[&str] = &[
     "a-caption-after-a-continuation-marker-fence-stays-with-the-fence",
     "a-column-zero-marker-below-an-open-div-attaches-beside-the-div",
     "a-continuation-marker-stands-alone-at-column-zero-or-right-after-a-block-opener",
+    "a-continuation-marker-uses-its-container-column",
+    "a-first-block-marker-on-an-indented-opener-reads-two-columns",
+    "a-refused-continuation-plus-remains-text",
+    "a-refused-plus-without-the-inner-quote-prefix-renders-as-text",
+    "a-task-item-takes-a-first-block-continuation-marker-after-its-checkbox",
+    "a-tab-indented-nested-list-starts-at-its-marker",
     "a-dangling-plus-marker-adds-nothing-and-a-nested-quote-reads-it-like-an-unnested-one",
     "a-fence-closer-outside-the-child-folds-and-leaves-the-child-open",
     "a-fence-run-folded-into-a-child-paragraph-loosens-the-outer-item",
@@ -965,10 +971,45 @@ const AHEAD_OF_PIN: &[(&str, &str, &str)] = &[];
 /// that fixes the rule rather than left behind as a declaration that no longer
 /// declares anything.
 ///
-/// Empty again. Its three entries were corpus 519's first three documents, and
-/// carve-rs#2170 made them match, so the `assert_ne!` in `check_pair` is what
-/// removed them.
-const BEHIND_ON_PAIR: &[(&str, &str, &str)] = &[];
+const BEHIND_ON_PAIR: &[(&str, &str, &str)] = &[
+    (
+        "154-under-indented-definition-attaches-over-indented-definition-folds",
+        "a separator one column past the item folds into the open term (spec #3458), carve-rs#2986",
+        r#"<ul>
+  <li>one
+    <dl>
+      <dt>term</dt>
+      <dd>def</dd>
+    </dl>
+  </li>
+</ul>"#,
+    ),
+    (
+        "154-under-indented-definition-attaches-over-indented-definition-folds-2",
+        "a column-0 separator ends the item (spec #3458), carve-rs#2986",
+        r#"<ul>
+  <li>one
+    <dl>
+      <dt>term</dt>
+      <dd>def</dd>
+    </dl>
+  </li>
+</ul>"#,
+    ),
+    (
+        "616-a-line-is-read-in-the-container-whose-column-it-reaches-7",
+        "a marker below the description column opens a sibling list (spec #3458), carve-rs#2988",
+        r#"<ul>
+  <li>
+    <dl>
+      <dt>t</dt>
+      <dd>para
+- li</dd>
+    </dl>
+  </li>
+</ul>"#,
+    ),
+];
 
 fn check_pair(slug: &str) {
     let slug = &resolve_slug(slug);
@@ -1719,3 +1760,23 @@ corpus_test!(
     "a-table-row-ends-a-description-body-and-a-lone-plus-folds-into-a-term"
 );
 corpus_test!(c_csv_and_tsv_table_bodies, "csv-and-tsv-table-bodies");
+corpus_test!(
+    c_continuation_marker_uses_its_container_column,
+    "a-continuation-marker-uses-its-container-column"
+);
+corpus_test!(
+    c_first_block_marker_on_an_indented_opener_reads_two_columns,
+    "a-first-block-marker-on-an-indented-opener-reads-two-columns"
+);
+corpus_test!(
+    c_refused_continuation_plus_remains_text,
+    "a-refused-continuation-plus-remains-text"
+);
+corpus_test!(
+    c_refused_plus_without_the_inner_quote_prefix_renders_as_text,
+    "a-refused-plus-without-the-inner-quote-prefix-renders-as-text"
+);
+corpus_test!(
+    c_task_item_takes_a_first_block_continuation_marker_after_its_checkbox,
+    "a-task-item-takes-a-first-block-continuation-marker-after-its-checkbox"
+);

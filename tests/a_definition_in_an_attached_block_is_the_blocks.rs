@@ -101,13 +101,13 @@ fn a_plain_attached_block_is_unchanged() {
     assert_html("- a\n+\nmore\n", "<ul><li>a more</li></ul>");
 }
 
-/// AT A NONZERO COLUMN the definition is not the block's own column 0, and the
-/// item ends above `more` as it did before.
+/// At a nonzero column the definition is outside the attached block. The
+/// refused marker stays as text in the item, which ends above `more`.
 #[test]
 fn a_definition_at_a_nonzero_column_is_not_this_band() {
     assert_html(
         "- a\n+\n  [r]: /a\nmore\n\nSee [r][].\n",
-        "<ul><li>a</li></ul><p>more</p><p>See <a href=\"/a\">r</a>.</p>",
+        "<ul><li>a +</li></ul><p>more</p><p>See <a href=\"/a\">r</a>.</p>",
     );
 }
 

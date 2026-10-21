@@ -56,10 +56,9 @@ fn a_table_below_a_nested_list_reaches_the_output() {
 
 #[test]
 fn an_inert_plus_leaves_plain_text_in_the_deepest_item() {
-    // The `+` has no flush-left block to attach. The following line remains
-    // lazy continuation of the nested item's paragraph.
+    // The refused `+` and its follower stay in the nested item's paragraph.
     let source = "- x\n  - L\n+\n  p\n";
-    assert_eq!(carve::to_markdown(source), "- x\n  - L\n    p\n");
+    assert_eq!(carve::to_markdown(source), "- x\n  - L\n    +\n    p\n");
     let blocks = item_blocks(source);
     let nested = blocks
         .iter()
@@ -111,12 +110,10 @@ fn a_tail_that_cannot_take_lazy_text_keeps_its_paragraph_glued() {
 
 #[test]
 fn the_absorption_set_is_unchanged() {
-    // carve-rs#1924: the quote keeps its separator from the block below it,
-    // and a quote under a paragraph still drops it and reads tight. The second
-    // `> r` is paragraph TEXT in Carve, so its `>` is escaped (PART 11 §8d).
+    // The quote keeps the refused `+` and the following quoted line together.
     assert_eq!(
         carve::to_markdown("- x\n  > q\n+\n  > r\n"),
-        "- x\n  > q\n\n  \\> r\n"
+        "- x\n  > q\n  > +\n  > r\n"
     );
     assert_eq!(carve::to_markdown("- x\n  > q\n"), "- x\n  > q\n");
 }

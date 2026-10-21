@@ -35,11 +35,14 @@ struct CarveContext {
     inline_depth: usize,
     emphasis_depth_peak: usize,
     list_depth: usize,
+    quote_depth: usize,
     /// Depth of line-block nesting, so the inline writer drops the explicit
     /// backslash: inside a `::: |` fence every newline already IS a hard break.
     line_block_depth: usize,
     rendered_verbatim_tail: bool,
     colon_fence_depth: usize,
+    /// Remains set when a nested list resets colon fence spelling depth.
+    indented_host_depth: usize,
     /// Inside a table cell, where a leading `^` cannot open a caption: a
     /// caption marker is a BLOCK line, and a cell's content is not one.
     table_cell_depth: usize,
@@ -452,11 +455,14 @@ fn refuse_unless_it_reads_back(output_tree: Option<&Document>, doc: &Document) -
     if output_tree.is_some_and(|tree| *tree == comparable_document(doc.clone())) {
         return true;
     }
-    crate::render_carve_error::record_unspellable(
-        "document",
+    note_unspellable_list_nesting();
+    false
+}
+
+fn note_unspellable_list_nesting() {
+    crate::render_carve_error::record_unspellable_list_nesting(
         "content nested past the parser nesting limit of 200 has no spelling that reads back",
     );
-    false
 }
 
 /// The conservative form of the units that need it, and the minimal form of
@@ -1198,9 +1204,11 @@ fn render_with_escapes_once(
         inline_depth: 0,
         emphasis_depth_peak: 0,
         list_depth: 0,
+        quote_depth: 0,
         line_block_depth: 0,
         rendered_verbatim_tail: false,
         colon_fence_depth: 0,
+        indented_host_depth: 0,
         table_cell_depth: 0,
         cell_not_last: false,
         note_content_depth: 0,
@@ -2336,7 +2344,9 @@ fn render_inside_colon_container(
     ctx: &mut CarveContext,
 ) -> String {
     ctx.colon_fence_depth += 1;
+    ctx.indented_host_depth += 1;
     let body = render_blocks(session, blocks, ctx, None);
+    ctx.indented_host_depth -= 1;
     ctx.colon_fence_depth -= 1;
     body
 }
@@ -2456,6 +2466,9 @@ fn adjacent_blocks_merge(left: &BlockNode, right: &BlockNode) -> bool {
         | (BlockNode::LineBlock(_), BlockNode::LineBlock(_))
         | (BlockNode::DefinitionList(_), BlockNode::DefinitionList(_)) => true,
         (BlockNode::List(left), BlockNode::List(right)) => {
+            if is_task_list(left) != is_task_list(right) {
+                return false;
+            }
             // Compared through the defaults, like the two marker checks above:
             // a parse records neither `.` nor `-` (carve#2828), so an ingested
             // tree that spells one out describes the same marker and has to
@@ -2475,6 +2488,7 @@ fn render_item_blocks(
     tight: bool,
     item: Option<&Pos>,
     ctx: &mut CarveContext,
+    relative_boundaries: &mut Vec<(usize, usize)>,
 ) -> String {
     if !tight {
         return render_blocks(session, blocks, ctx, item);
@@ -2575,6 +2589,14 @@ fn render_item_blocks(
         {
             out.push('\n');
         }
+        if matches!(prev, Some(BlockNode::List(list)) if list.items.last().is_some_and(|item| item.children.is_empty()))
+            && matches!(block, BlockNode::BlockQuote(_) | BlockNode::CodeBlock(_))
+        {
+            out.push_str(&indent_adjacent_list(&rendered, 2));
+            prev = Some(block);
+            prev_at_marker_column = false;
+            continue;
+        }
         // TWO BLOCKS THAT MERGE NEED THE MARKER ON THE LOWER ONE, not the upper
         // one. `at_marker_column` tags each LINE of what it is given and the tag
         // is undone BY POSITION - a line that starts with it. An item's first
@@ -2603,13 +2625,17 @@ fn render_item_blocks(
                 || closes_a_merging_run_above
                 || folds_into_the_paragraph_above)
         {
-            if ctx.list_depth > 1 {
+            if ctx.list_depth > 1 || ctx.indented_host_depth > 0 {
                 if !matches!(block, BlockNode::Comment(_) | BlockNode::CodeBlock(_))
                     && !matches!(prev, Some(BlockNode::Comment(_) | BlockNode::CodeBlock(_)))
                 {
+                    let start = out.len();
                     out.push('\n');
+                    out.push_str(&rendered);
+                    relative_boundaries.push((start, out.len()));
+                } else {
+                    out.push_str(&rendered);
                 }
-                out.push_str(&rendered);
                 prev = Some(block);
                 prev_at_marker_column = false;
                 continue;
@@ -2776,9 +2802,11 @@ fn render_block_body(session: &RenderSession, node: &BlockNode, ctx: &mut CarveC
                 let body = render_inside_colon_container(session, &quote.children, ctx);
                 return with_block_attrs(&quote.attrs, &format!("{fence} >\n{body}\n{fence}"));
             }
+            ctx.quote_depth += 1;
             let inner = with_reset_colon_fence_depth(ctx, |ctx| {
                 render_blocks(session, &quote.children, ctx, None)
             });
+            ctx.quote_depth -= 1;
             let body = inner
                 .split('\n')
                 .map(|line| {
@@ -3179,7 +3207,7 @@ fn nested_tight_item_loses_tightness(item: &ListItem) -> bool {
     item.children.windows(2).any(|pair| {
         matches!(pair[1], BlockNode::Paragraph(_))
             && !matches!(&pair[1], BlockNode::Paragraph(p) if matches!(p.children.as_slice(), [InlineNode::Text(t)] if t.value == "+"))
-            && (matches!(pair[0], BlockNode::Paragraph(_) | BlockNode::BlockQuote(_))
+            && (matches!(pair[0], BlockNode::BlockQuote(_))
                 || matches!(&pair[0], BlockNode::List(list) if list.items.last().is_some_and(|item| !item.children.is_empty())))
     })
 }
@@ -3202,6 +3230,139 @@ fn ends_in_empty_nested_item(list: &List) -> bool {
     list.items.last().and_then(|item| item.children.last()).is_some_and(
         |block| matches!(block, BlockNode::List(child) if child.items.last().is_some_and(|item| item.children.is_empty() || matches!(item.children.last(), Some(BlockNode::List(_)) if ends_in_empty_nested_item(child))))
     )
+}
+
+fn spell_list_item(
+    session: &RenderSession,
+    prefix: &str,
+    content: &str,
+    continuation_width: usize,
+) -> String {
+    let mut lines = content.split('\n');
+    let marker = marker_column(session);
+    let first = lines.next().unwrap_or_default();
+    let first = first.strip_prefix(marker.as_str()).unwrap_or(first);
+    let mut source = format!("{prefix}{first}\n");
+    let continuation = " ".repeat(continuation_width);
+    let blank = verbatim_blank(session);
+    for line in lines {
+        if line.is_empty() || line == *blank {
+            source.push_str(line);
+            source.push('\n');
+        } else if let Some(rest) = line.strip_prefix(marker.as_str()) {
+            source.push_str(rest);
+            source.push('\n');
+        } else {
+            source.push_str(&continuation);
+            source.push_str(line);
+            source.push('\n');
+        }
+    }
+    source
+}
+
+fn relative_item_content(
+    session: &RenderSession,
+    content: &str,
+    boundaries: &[(usize, usize)],
+) -> String {
+    let mut relative = content.to_string();
+    for &(start, end) in boundaries.iter().rev() {
+        let block = &content[start + 1..end];
+        relative.replace_range(
+            start..end,
+            &format!(
+                "{}\n{}",
+                at_marker_column(session, "+"),
+                at_marker_column(session, block)
+            ),
+        );
+    }
+    relative
+}
+
+fn list_item_reads_back(
+    session: &RenderSession,
+    source: &str,
+    list: &List,
+    item: &ListItem,
+    list_depth: usize,
+    quote_depth: usize,
+) -> bool {
+    let mut nested = restore_verbatim(session, source);
+    for _ in 1..list_depth {
+        nested = format!("- parent\n{}", indent_adjacent_list(&nested, 2));
+    }
+    for _ in 0..quote_depth {
+        nested = nested
+            .split('\n')
+            .map(|line| {
+                if line.is_empty() {
+                    ">".to_string()
+                } else {
+                    format!("> {line}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let Some(parsed) = comparable_tree(&nested) else {
+        return false;
+    };
+    let mut blocks = parsed.children.as_slice();
+    for _ in 0..quote_depth {
+        if blocks.len() != 1 {
+            return false;
+        }
+        let Some(BlockNode::BlockQuote(quote)) = blocks.first() else {
+            return false;
+        };
+        blocks = &quote.children;
+    }
+    let Some(BlockNode::List(mut_list)) = blocks.first() else {
+        return false;
+    };
+    if blocks.len() != 1 {
+        return false;
+    }
+    let mut read_list = mut_list;
+    for _ in 1..list_depth {
+        if read_list.items.len() != 1 {
+            return false;
+        }
+        let Some(next) = read_list.items.first().and_then(|parent| {
+            parent.children.iter().find_map(|block| match block {
+                BlockNode::List(list) => Some(list),
+                _ => None,
+            })
+        }) else {
+            return false;
+        };
+        read_list = next;
+    }
+    if read_list.items.len() != 1 {
+        return false;
+    }
+    if read_list.tight != list.tight {
+        return false;
+    }
+    let mut target_list = list.clone();
+    target_list.items = vec![item.clone()];
+    let target = comparable_document(Document {
+        frontmatter: Default::default(),
+        frontmatter_raw: None,
+        footnote_defs: Default::default(),
+        footnote_def_pos: Default::default(),
+        children: vec![BlockNode::List(target_list)],
+        source_len: 0,
+        ingest_payload_len: 0,
+    });
+    let mut actual = target.clone();
+    let BlockNode::List(actual_list) = &mut actual.children[0] else {
+        return false;
+    };
+    actual_list.items = read_list.items.clone();
+    crate::ast_json::to_json(&actual) == crate::ast_json::to_json(&target)
 }
 
 fn render_list(session: &RenderSession, node: &List, ctx: &mut CarveContext) -> String {
@@ -3229,17 +3390,6 @@ fn render_list(session: &RenderSession, node: &List, ctx: &mut CarveContext) -> 
         // O(depth^2), and `05-lists-5` came back with four spaces where it was
         // written with two (carve-rs#594, the same defect carve-js fixed in its
         // #653).
-        let loosen_item =
-            node.tight && ctx.list_depth > 1 && nested_tight_item_loses_tightness(item);
-        if loosen_item {
-            if ctx.list_depth >= crate::parse::MAX_NESTING_DEPTH {
-                crate::render_carve_error::record_unspellable(
-                    "document",
-                    "content nested past the parser nesting limit of 200 has no spelling that reads back",
-                );
-            }
-            crate::render_loss::record_list_tightness_lost(item.pos.as_ref());
-        }
         let mut prefix = if node.ordered {
             let marker = if node.bare_marker {
                 String::new()
@@ -3264,6 +3414,9 @@ fn render_list(session: &RenderSession, node: &List, ctx: &mut CarveContext) -> 
                 format!("{bullet}{item_attrs} ")
             };
         }
+        let inserted_before_item = session.inserted.with(std::cell::Cell::get);
+        let seen_before_item = session.seen.with(std::cell::Cell::get);
+        let mut relative_boundaries = Vec::new();
         let mut content = if item.children.is_empty() {
             item.pos
                 .as_ref()
@@ -3274,9 +3427,10 @@ fn render_list(session: &RenderSession, node: &List, ctx: &mut CarveContext) -> 
                 render_item_blocks(
                     session,
                     &item.children,
-                    node.tight && !loosen_item,
+                    node.tight,
                     item.pos.as_ref(),
                     ctx,
+                    &mut relative_boundaries,
                 )
             })
         };
@@ -3288,7 +3442,87 @@ fn render_list(session: &RenderSession, node: &List, ctx: &mut CarveContext) -> 
         if trim_non_nbsp(&content).is_empty() {
             content = "+".to_string();
         }
-        let content = trim_non_nbsp(&content).to_string();
+        let raw_content = content;
+        let mut content = trim_non_nbsp(&raw_content).to_string();
+        let mut item_source = spell_list_item(session, &prefix, &content, continuation_width);
+        let nested_tightness_loss =
+            node.tight && ctx.list_depth > 1 && nested_tight_item_loses_tightness(item);
+        if nested_tightness_loss {
+            crate::render_loss::record_list_tightness_lost(item.pos.as_ref());
+        }
+        // Another separated body at the last list level would cross the parse cap.
+        let capped_boundary =
+            ctx.list_depth >= crate::parse::MAX_NESTING_DEPTH && !relative_boundaries.is_empty();
+        if capped_boundary {
+            note_unspellable_list_nesting();
+        }
+        let needs_readback = !capped_boundary
+            && node.tight
+            && ((ctx.list_depth > 1 && (!relative_boundaries.is_empty() || nested_tightness_loss))
+                || item.children.windows(2).any(|pair| {
+                    matches!(pair[0], BlockNode::List(_))
+                        && matches!(
+                            pair[1],
+                            BlockNode::CodeBlock(_)
+                                | BlockNode::Figure(_)
+                                | BlockNode::BlockQuote(_)
+                        )
+                        || matches!(pair[0], BlockNode::BlockQuote(_))
+                            && matches!(pair[1], BlockNode::BlockQuote(_))
+                }));
+        if needs_readback
+            && !list_item_reads_back(
+                session,
+                &item_source,
+                node,
+                item,
+                ctx.list_depth,
+                ctx.quote_depth,
+            )
+        {
+            let relative = relative_item_content(session, &raw_content, &relative_boundaries);
+            let relative = trim_non_nbsp(&relative).to_string();
+            let relative_source = spell_list_item(session, &prefix, &relative, continuation_width);
+            if !nested_tightness_loss
+                && !relative_boundaries.is_empty()
+                && list_item_reads_back(
+                    session,
+                    &relative_source,
+                    node,
+                    item,
+                    ctx.list_depth,
+                    ctx.quote_depth,
+                )
+            {
+                content = relative;
+                item_source = relative_source;
+            } else {
+                session.inserted.with(|cell| cell.set(inserted_before_item));
+                session.seen.with(|cell| cell.set(seen_before_item));
+                let mut unused_boundaries = Vec::new();
+                content = at_item_content_column(ctx, |ctx| {
+                    render_item_blocks(
+                        session,
+                        &item.children,
+                        false,
+                        item.pos.as_ref(),
+                        ctx,
+                        &mut unused_boundaries,
+                    )
+                });
+                if trim_non_nbsp(&content).is_empty() {
+                    content = "+".to_string();
+                }
+                content = trim_non_nbsp(&content).to_string();
+                item_source = spell_list_item(session, &prefix, &content, continuation_width);
+                if ctx.list_depth >= crate::parse::MAX_NESTING_DEPTH {
+                    note_unspellable_list_nesting();
+                }
+                if !nested_tightness_loss {
+                    crate::render_loss::record_list_tightness_lost(item.pos.as_ref());
+                }
+            }
+        }
         // COUNT THE MARKER-COLUMN TAGS STANDING IN THE ASSEMBLED ITEM, here and
         // not at restore time: this loop is what consumes them, so this is the
         // last moment an authored one is still visible. Counted over the whole
@@ -3300,35 +3534,7 @@ fn render_list(session: &RenderSession, node: &List, ctx: &mut CarveContext) -> 
             S_MARKER_COLUMN,
             content.matches(marker_column(session).as_str()).count(),
         );
-        let mut lines = if content.is_empty() {
-            vec!["".to_string()]
-        } else {
-            content.split('\n').map(str::to_string).collect()
-        };
-        let first = lines.remove(0);
-        out.push_str(&format!("{prefix}{first}\n"));
-        // A task checkbox is content and an attribute block is item metadata;
-        // neither moves the bare marker's content column (carve#1701).
-        //
-        // Writing the continuation at the marker's full width put every block
-        // after the item's first, four columns too far in, where an INDENTED
-        // block opener opens nothing: a heading, a fence or a quote came back as
-        // text of the marker line's paragraph.
-        let continuation = " ".repeat(continuation_width);
-        let blank = verbatim_blank(session);
-        let column = marker_column(session);
-        for line in lines {
-            if line.is_empty() || line == *blank {
-                out.push_str(&line);
-                out.push('\n');
-            } else if let Some(rest) = line.strip_prefix(column.as_str()) {
-                // The continuation marker and its attached block sit at the
-                // ITEM's marker column, not its content column (§17 L3).
-                out.push_str(&format!("{rest}\n"));
-            } else {
-                out.push_str(&format!("{continuation}{line}\n"));
-            }
-        }
+        out.push_str(&item_source);
         let ends_with_nested_list = content.lines().last().is_some_and(|line| {
             line.starts_with(' ') && is_rendered_list_marker(line.trim_start())
         });
