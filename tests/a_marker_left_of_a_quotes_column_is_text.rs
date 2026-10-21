@@ -19,12 +19,11 @@ fn with_marker_at(column: usize) -> String {
     html(&format!("- x\n  > q\n{}+\n", " ".repeat(column)))
 }
 
-const CONSUMED: &str = "<ul>\n  <li>x\n    <blockquote><p>q</p></blockquote>\n  </li>\n</ul>";
 const KEPT: &str = "<ul>\n  <li>x\n    <blockquote><p>q\n+</p></blockquote>\n  </li>\n</ul>";
 
 #[test]
-fn only_column_zero_consumes_the_marker() {
-    assert_eq!(with_marker_at(0), CONSUMED);
+fn a_dangling_column_zero_plus_stays_in_the_quote() {
+    assert_eq!(with_marker_at(0), KEPT);
     assert_eq!(with_marker_at(2), KEPT);
 }
 

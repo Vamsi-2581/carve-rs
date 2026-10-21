@@ -26,6 +26,8 @@ mod ruled_plus_shapes;
 
 #[path = "../raw_payload_termination.rs"]
 mod raw_payload_termination;
+#[path = "../relative_continuation_marker.rs"]
+mod relative_continuation_marker;
 
 #[path = "../a_block_at_an_item_content_column_closes_its_paragraph_before_an_unclosed_fence.rs"]
 mod a_block_at_an_item_content_column_closes_its_paragraph_before_an_unclosed_fence;

@@ -347,8 +347,6 @@ fn collect_parser_events(
     use std::collections::HashSet;
     let lines: Vec<&str> = source.split('\n').collect();
     let mut fences = HashSet::new();
-    let mut item_columns = HashSet::new();
-    let mut item_lines = HashSet::new();
     let mut blocks: Vec<_> = doc.children.iter().map(|block| (block, 0)).collect();
     for body in doc.footnote_defs.values() {
         blocks.extend(body.iter().map(|block| (block, 0)));
@@ -363,14 +361,6 @@ fn collect_parser_events(
             BlockNode::RawBlock(raw) => {
                 if let Some(pos) = &raw.pos {
                     fences.insert((pos.start_line, pos.start_column));
-                }
-            }
-            BlockNode::List(list) => {
-                for item in &list.items {
-                    if let Some(pos) = &item.pos {
-                        item_columns.insert(pos.start_column);
-                        item_lines.insert(pos.start_line);
-                    }
                 }
             }
             BlockNode::Figure(figure) => {
@@ -410,29 +400,39 @@ fn collect_parser_events(
                 };
                 (pos.start_line, pos.start_column, "unclosed-code-fence", format!("The {marker} fence opened here has no closing fence; {ending}. Add a closing {marker} where the code should stop."), marker.len())
             }
-            LintEvent::Marker { line, column, host } => {
-                if *host == "list item"
-                    && !item_columns.contains(column)
-                    && !item_lines.contains(line)
-                {
-                    continue;
-                }
-                if lines.get(*line).is_some_and(|next| !next.trim().is_empty()) {
-                    continue;
-                }
-                let blank = lines.get(*line).is_some_and(|line| line.trim().is_empty())
-                    && *line < lines.len() - 1;
-                let following = if blank {
-                    "a blank line"
-                } else {
-                    "the end of the document"
+            LintEvent::Marker {
+                line,
+                column,
+                host,
+                reason,
+                first_block,
+            } => {
+                let explanation = match *reason {
+                    "blank" => "a blank line follows it",
+                    "document" => "it reaches the end of the document",
+                    "sibling" => "the next list item is a sibling",
+                    "left" => "the next block starts left of its column",
+                    "right" => "the next block starts right of its column",
+                    _ => "its column names no open container",
                 };
-                let remedy = if blank {
-                    "Delete the blank line to attach the next block, or delete the +."
+                let effect = if *first_block {
+                    match *host {
+                        "block quote" => "The quote stays empty.",
+                        "description body" => "The description stays empty.",
+                        "footnote" => "The footnote stays empty.",
+                        _ => "The item stays empty.",
+                    }
+                    .to_string()
                 } else {
-                    "Add a block after the +, or delete the +."
+                    format!("It remains text in the {host}.")
                 };
-                (*line, *column, "continuation-marker-refused", format!("This + attaches nothing: {following} follows it, so the marker is refused and the {host} ends here. {remedy}"), 1)
+                (
+                    *line,
+                    *column,
+                    "continuation-marker-refused",
+                    format!("This + attaches nothing because {explanation}. {effect}"),
+                    1,
+                )
             }
         };
         if !seen.insert((line, column, rule)) {
