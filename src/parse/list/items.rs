@@ -371,7 +371,8 @@ pub(crate) fn parse_list(
                         split_stack.push(split);
                     }
                     let mut carried = Vec::new();
-                    let mut nested_children = parse_item_chunk(&nested, options, &mut carried);
+                    let (mut nested_children, nested_loose) =
+                        parse_item_chunk(&nested, options, &mut carried);
                     // Attributes held from an EARLIER chunk attach here when
                     // this one opens with a block, which is the case where a
                     // blank line sits between the `{…}` and its target. The
@@ -420,7 +421,7 @@ pub(crate) fn parse_list(
                     // loosens the item when a plain paragraph follows the blank
                     // (§17 L1). The outer `pending_blank` only sees a blank BEFORE
                     // this chunk, so this covers the blank-after / blank-both case.
-                    if blank_can_loosen && continuation_source_loosens(&nested.source, false) {
+                    if blank_can_loosen && nested_loose {
                         tight = false;
                     }
                     // An INVISIBLE continuation is not the item's second block
@@ -662,12 +663,8 @@ pub(crate) fn parse_list(
                         },
                     );
                 }
-                let continuation_loosens = if marker.indent < content_col {
-                    continuation_source_loosens(&nested.source, false)
-                } else {
-                    sublist_source_loosens_outer_item(&nested.source)
-                };
-                if continuation_loosens {
+                let nested_sublist = marker.indent >= content_col;
+                if nested_sublist && nested.outer_plus_after_blank {
                     tight = false;
                 }
                 let held = pending_attrs.take();
@@ -686,7 +683,9 @@ pub(crate) fn parse_list(
                             options,
                         ));
                 }
-                let nested_children = item_body(deferred, last_item, nested, held, false, options);
+                let nested_children = item_body_with_layout_suppression(
+                    deferred, last_item, nested, held, false, false, options,
+                );
                 // The blank BEFORE this sub-list is consumed by it and must not
                 // survive to loosen a later sibling marker (§17 L2: a blank
                 // before an item's sub-block keeps the item tight). Without
@@ -1008,9 +1007,6 @@ pub(crate) fn parse_list(
             // normal path runs, so `- {a=b}` / `x` / blank / `Body.` stayed tight
             // where `- x` / blank / `Body.` went loose - on the same blank line
             // (carve-rs#476).
-            if continuation_source_loosens(&stream.source, true) {
-                tight = false;
-            }
             stream.authored_base_at_start |= after_blank;
             let children = item_body(deferred, items.len(), stream, None, false, options);
             items.push(ListItem {
@@ -1061,9 +1057,6 @@ pub(crate) fn parse_list(
                 content_col,
                 options,
             ));
-            if continuation_source_loosens(&stream.source, true) {
-                tight = false;
-            }
             let children = item_body(deferred, items.len(), stream, None, false, options);
             items.push(ListItem {
                 attrs: item_attrs,
@@ -1270,10 +1263,9 @@ pub(crate) fn parse_list(
             // (carve-rs#490). #476 fixed the attribute-block, quote and heading
             // leads beside this one and left the sub-list lead open, because
             // carve-php agreed with this engine at the time and carve-js did not.
-            // Content at or past the SUB-LIST's content column is the sub-list's
-            // own business - `sublist_source_loosens_outer_item` is the same
-            // non-propagating test the following-line sub-list path uses, not the
-            // blanket `continuation_source_loosens` the other leads can afford.
+            // The bare nested marker is a separate event: its following blank
+            // reaches the outer content column before the deferred child tree
+            // exists, so carry this boundary into the list's tightness now.
             let blank_after_bare_nested_marker = nested_lead_is_continuation
                 && cur.lines.line(item_at + 1).is_some_and(is_blank_line)
                 && cur.lines.line(item_at + 2).is_some_and(|line| {
@@ -1281,7 +1273,7 @@ pub(crate) fn parse_list(
                         && (is_plus_marker(trim_ascii_start(line))
                             || line_starts_paragraph(trim_ascii_start(line)))
                 });
-            if sublist_source_loosens_outer_item(&stream.source) || blank_after_bare_nested_marker {
+            if blank_after_bare_nested_marker {
                 tight = false;
             }
             if sublist_source_trailing_invisible_separation(&stream.source) {
@@ -1308,7 +1300,15 @@ pub(crate) fn parse_list(
                 item_paragraph_open =
                     ParagraphOpen::Known(body_ends_with_open_paragraph(&stream.source, options));
             }
-            let children = item_body(deferred, items.len(), stream, None, false, options);
+            let children = item_body_with_layout_suppression(
+                deferred,
+                items.len(),
+                stream,
+                None,
+                false,
+                false,
+                options,
+            );
             items.push(ListItem {
                 attrs: item_attrs,
                 checked: marker.checked,
@@ -1466,9 +1466,6 @@ pub(crate) fn parse_list(
                     .range(item_at + 1..cur.pos)
                     .any(|line| indent_columns(line) == content_col && trim_ascii(line) == "+")
                 && !cur.lines.range(item_at + 1..cur.pos).any(is_blank_line);
-            if continuation_source_loosens(&stream.source, true) && !refused_definition_plus {
-                tight = false;
-            }
             // A heading, a fence or a table on the marker line leaves the item
             // holding no paragraph - see `item_paragraph_open`.
             item_paragraph_open = if literal_comment_handoff || definition_comment_handoff {
@@ -1480,7 +1477,15 @@ pub(crate) fn parse_list(
                     body_ends_with_open_paragraph(&rebased.source, options)
                 })
             };
-            let children = item_body(deferred, items.len(), stream, None, false, options);
+            let children = item_body_with_layout_suppression(
+                deferred,
+                items.len(),
+                stream,
+                None,
+                false,
+                refused_definition_plus,
+                options,
+            );
             items.push(ListItem {
                 attrs: item_attrs,
                 checked: marker.checked,
