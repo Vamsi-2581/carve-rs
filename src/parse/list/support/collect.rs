@@ -108,9 +108,9 @@ pub(crate) fn collect_indented_block_mapped_with_columns(
     });
     let marker_is_definition_term =
         marker_content.is_some_and(|content| is_definition_list_start(trim_ascii_start(content)));
-    // A term on the item's marker line opens at the MARKER column. Later
-    // terms in the body open at their own authored columns.
-    let mut definition_list_column = marker_is_definition_term.then_some(parent_indent);
+    // A term on the item's marker line opens at the item's content column.
+    // Later terms in the body open at their own authored columns.
+    let mut definition_list_column = marker_is_definition_term.then_some(strip_cols);
     let mut open_definition_body_column = marker_content
         .and_then(definition_body_content_col)
         .map(|column| strip_cols + column);

@@ -1226,7 +1226,6 @@ pub(in crate::parse) fn collect_blockquote_body(
     // (`quote_prefix_calls`). Only a `:`-shaped lazy line asks, and the scan
     // resumes where it stopped, so the whole walk is one pass over the lines.
     let mut open_entry = QuotedEntryScan::default();
-    let mut lazy_description_open = false;
     let mut may_have_term = false;
     // THE QUOTE'S OWN LAST BLOCK IS WHAT S4 ASKS ABOUT, and a continuation row
     // belongs to the table above it (§5 T6, markup-carve/carve#1348). `ParaOpen`
@@ -1267,9 +1266,6 @@ pub(in crate::parse) fn collect_blockquote_body(
             line
         };
         if let Some(stripped) = strip_blockquote_prefix(quote_line) {
-            if strip_description_prefix(trim_ascii_start(stripped)).is_some() {
-                lazy_description_open = false;
-            }
             if !may_have_term && stripped.contains(":: ") {
                 let trimmed = trim_ascii_start(stripped);
                 may_have_term = (inner.lines.is_empty()
@@ -1798,11 +1794,9 @@ pub(in crate::parse) fn collect_blockquote_body(
         // `>`, so it is not the quote's content at any column - it reached the
         // innermost open paragraph by the fold, and its indentation inside the
         // quote body means nothing. The collectors below read the quote's inner
-        // lines BY COLUMN, so a `:  a` written at a quoted item's content column
-        // arrived past that column, was dedented by the item's own column, and
-        // kept the rest as leading indent - and an indented `:` is no longer a
-        // description marker, so the body folded into the TERM
-        // (markup-carve/carve-rs#1526).
+        // lines BY COLUMN, so an unmarked `:  a` must stay framed as lazy text
+        // in the open term. Only a marked line has a quote-local column that
+        // can open a description (CARVE-P2-028, markup-carve/carve#3451).
         //
         // ONE SHAPE, DELIBERATELY. Every lazy line has this much in common, and
         // stripping them all is the general port carve-js#1609 measured
@@ -1820,7 +1814,7 @@ pub(in crate::parse) fn collect_blockquote_body(
         // (markup-carve/carve-rs#1526).
         //
         //   half == None (a paragraph is open)  -> FRAME, fold as text
-        //   half == Term, `:`  -> the term's description: DEDENT and keep the `:`
+        //   half == Term, unmarked `:` -> FRAME, fold as term text
         //   half == Term, `::` -> a second term: keep AS-IS (the item re-parse
         //                         dedents it to its own column)
         //   half == Description, `::` -> a new term: keep AS-IS
@@ -1835,9 +1829,7 @@ pub(in crate::parse) fn collect_blockquote_body(
         // flush-left description.
         if indent_columns(line) == 0 && strip_definition_marker(line).is_some() {
             open_entry.advance(&inner.lines);
-            if open_entry.half == Some(DefHalf::Term)
-                || (open_entry.half == Some(DefHalf::Description) && lazy_description_open)
-            {
+            if open_entry.half == Some(DefHalf::Term) {
                 break;
             }
         }
@@ -1880,21 +1872,11 @@ pub(in crate::parse) fn collect_blockquote_body(
                 // A paragraph is open, no entry: the marker is lazy text of that
                 // paragraph, framed so it folds in rather than re-opening a list.
                 None => (true, false),
-                // The term's description (`:`): dedent and keep the marker. A
-                // `::` opens a SECOND term; it is framed so a lazy line carries
-                // no column (PART 0), and the def-list recognizers strip the
-                // frame to read it at column 0 wherever the container depth put
-                // it - `> > - :: t` / `:: u` keeps the second term inside the
-                // nested item instead of ejecting it (markup-carve/carve-rs#1538).
-                Some(DefHalf::Term)
-                    if is_desc && open_entry.content_col == Some(indent_columns(line)) =>
-                {
-                    (true, false)
-                }
-                Some(DefHalf::Term) if is_desc => {
-                    lazy_description_open = true;
-                    (false, true)
-                }
+                // An unmarked lazy `:` has no column in the quote. It folds
+                // into the open term as text (CARVE-P2-028); only a quoted
+                // separator at the term's column can open a description.
+                Some(DefHalf::Term) if is_desc => (true, false),
+                // A `::` opens a second term under the existing quote claim.
                 Some(DefHalf::Term) => (true, false),
                 // A flush-left `:` below an explicitly quoted description is
                 // lazy text in that description. It cannot open another entry.

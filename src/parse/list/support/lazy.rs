@@ -135,14 +135,12 @@ pub(crate) fn fold_lazy_run_and_resume_in_band(
         // Quote X2 keeps an open quoted paragraph's lazy continuation.
         if !frame_band_lines
             && !flush_separator_follows_other_block
-            && !cur.in_quoted_body
+            && (!cur.in_quoted_body || definition_list_is_marker_line_only(nested))
             && cur.peek().is_some_and(|line| {
                 indent_columns(line) == 0 && strip_description_prefix(line).is_some()
             })
         {
-            if body_ends_in_definition_list(&nested.source, options)
-                && !definition_list_is_marker_line_only(nested)
-            {
+            if body_ends_in_definition_list(&nested.source, options) {
                 break;
             }
             flush_separator_follows_other_block = true;

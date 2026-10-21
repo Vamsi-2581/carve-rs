@@ -1492,6 +1492,8 @@ mod marker_line_lead_looseness;
 mod marker_line_quote_lazy;
 #[path = "../marker_line_sublist.rs"]
 mod marker_line_sublist;
+#[path = "../marker_line_term_separator_column.rs"]
+mod marker_line_term_separator_column;
 #[path = "../marker_line_unterminated_fence.rs"]
 mod marker_line_unterminated_fence;
 #[path = "../md_table_alignment.rs"]

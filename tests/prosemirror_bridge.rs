@@ -1710,11 +1710,12 @@ fn fully_covered_corpus_documents_round_trip_through_prosemirror() {
     // a soft break, which ProseMirror reports as degraded. The column-zero
     // control, 154-2, stays strict; 154-3 was already reported lossy.
     // The sibling list in corpus 616-7 now survives the bridge without loss.
-    const STRICT: usize = 2193;
+    // Spec adc80975 adds six strict corpus 637/638 rows and three lossy rows.
+    const STRICT: usize = 2199;
     // Spec 894ff32e adds 616-25, whose marked quote soft break reports a loss.
     // The eight parsed CSV/TSV tables lose their source fence in ProseMirror;
     // the bridge reports that loss instead of claiming a strict round trip.
-    const LOSSY: usize = 761;
+    const LOSSY: usize = 764;
     assert_measured("strict round trips", covered, STRICT);
     assert_measured("reported-lossy documents", lossy, LOSSY);
     // THE RELATIONSHIP, NOT THE MAGNITUDE. Every corpus document lands in
