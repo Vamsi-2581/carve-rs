@@ -730,7 +730,9 @@ pub(in crate::parse) fn collect_definition_body(
                 descendant_block_ended = true;
             } else if paragraph_column.is_some_and(|owner| column < owner)
                 && column >= content_column
-                && (column == content_column || !paragraph_owner_is_item)
+                && (column == content_column
+                    || !paragraph_owner_is_item
+                    || is_definition_list_start(trim_ascii_start(line)))
                 && (is_list_marker(trim_ascii_start(line))
                     || item_block_opener_with_invisible_arms(trim_ascii_start(line), true))
             {
@@ -1101,6 +1103,14 @@ pub(in crate::parse) fn collect_definition_body(
             }
             // An unfinished nested marker fence owns no below-column line.
             if nested_lead_fence.is_some() {
+                break;
+            }
+            // The line cannot belong to this description below its body column.
+            // Leave a list opener to the surviving outer container.
+            if column == 0
+                && cur.reached.and_then(|r| r.get(cur.pos)).copied() == Some(true)
+                && is_list_marker(trim_ascii_start(line))
+            {
                 break;
             }
             // A new term/definition marker ends the definition (the outer loop

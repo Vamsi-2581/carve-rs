@@ -111,6 +111,9 @@ pub(crate) fn collect_indented_block_mapped_with_columns(
     // A term on the item's marker line opens at the MARKER column. Later
     // terms in the body open at their own authored columns.
     let mut definition_list_column = marker_is_definition_term.then_some(parent_indent);
+    let mut open_definition_body_column = marker_content
+        .and_then(definition_body_content_col)
+        .map(|column| strip_cols + column);
     let mut after_definition_blank = false;
     let mut marker_definition_has_description = !marker_is_definition_term;
     let mut marker_description_code_admitted = false;
@@ -512,10 +515,13 @@ pub(crate) fn collect_indented_block_mapped_with_columns(
             definition_list_column = None;
         }
         if term {
+            open_definition_body_column = None;
             definition_list_column = Some(match definition_list_column {
                 Some(column) if !after_definition_blank => column.min(indent),
                 _ => indent,
             });
+        } else if description {
+            open_definition_body_column = definition_body_content_col(line);
         } else if !description
             && definition_list_column.is_some()
             && item_block_opener(trim_ascii_start(line))
@@ -835,6 +841,14 @@ pub(crate) fn collect_indented_block_mapped_with_columns(
         {
             break;
         }
+        if indent < strip_cols
+            && is_definition_list_start(trim_ascii_start(line))
+            && fence.is_none()
+            && comment_fence.is_none()
+            && colon_open.is_empty()
+        {
+            break;
+        }
         if (definition_ended_paragraph || closed_code_leaf)
             && indent < strip_cols
             && !definition_comment_band
@@ -1051,6 +1065,7 @@ pub(crate) fn collect_indented_block_mapped_with_columns(
             && fence.is_none()
             && comment_fence.is_none()
             && colon_open.is_empty()
+            && !open_definition_body_column.is_some_and(|column| indent >= column)
             && !collected_body_ends_in_a_quote_fold(&lines, &line_map)
         {
             break;
