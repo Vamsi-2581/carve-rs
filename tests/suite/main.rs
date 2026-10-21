@@ -2435,3 +2435,5 @@ mod lint_new_rules;
 mod markdown_blank_below_a_nested_list_before_an_image;
 #[path = "../markdown_figure_in_a_tight_item.rs"]
 mod markdown_figure_in_a_tight_item;
+#[path = "../ruled_description_fence.rs"]
+mod ruled_description_fence;

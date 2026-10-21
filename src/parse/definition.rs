@@ -953,7 +953,9 @@ pub(in crate::parse) fn collect_definition_body(
                                 |line, indent| {
                                     indent < content_column
                                         && (is_definition_list_start(strip_lazy(line))
-                                            || strip_definition_marker(strip_lazy(line)).is_some())
+                                            || strip_definition_marker(strip_lazy(line)).is_some()
+                                            || indent == 0
+                                                && strip_blockquote_prefix(line).is_some())
                                 },
                             ))
                     });
@@ -1187,12 +1189,27 @@ pub(in crate::parse) fn collect_definition_body(
             let opener = trim_ascii_start(line);
             let closes_unopened_past_fence =
                 unopened_past_fence.is_some_and(|open| is_fence_close(opener, open));
+            let below_body_fence_is_text = indent > 0
+                && indent < content_column
+                && detect_fence_open(opener).is_some_and(|open| {
+                    let closers = past_body_closers.get_or_insert_with(|| {
+                        definition_body_closer_index(cur, cur.pos + 1, content_column)
+                    });
+                    let next = cur.pos + 1;
+                    let range = next.saturating_sub(closers.start)
+                        ..closers.end.saturating_sub(closers.start);
+                    next >= closers.end
+                        || !closers
+                            .in_body
+                            .code_in(range, open.fence_char, open.fence_len)
+                });
             let fold_below_column_opener = indent > 0
                 && indent < content_column
                 && (detect_heading(opener).is_some()
                     || thematic_break_marker(opener).is_some()
                     || closes_unopened_past_fence
                     || is_table_start(opener)
+                    || below_body_fence_is_text
                     || strip_blockquote_prefix(opener).is_some()
                     || caption_content(opener).is_some());
             if indent > 0
@@ -1422,7 +1439,8 @@ fn definition_body_closer_index(
         if indent < content_column
             && (pending_blank
                 || is_definition_list_start(strip_lazy(line))
-                || strip_definition_marker(strip_lazy(line)).is_some())
+                || strip_definition_marker(strip_lazy(line)).is_some()
+                || indent == 0 && strip_blockquote_prefix(line).is_some())
         {
             break;
         }
@@ -1478,6 +1496,30 @@ mod definition_past_fence_work {
         assert!(
             large.1 <= small.1 * 6,
             "four times the source used more than six times the scan work: {small:?}, {large:?}"
+        );
+    }
+
+    #[test]
+    fn quote_boundary_fence_probes_have_bounded_work() {
+        let measure = |count| {
+            let mut source = String::from(":: t\n: a\n");
+            for _ in 0..count {
+                source.push_str("  ```\n");
+            }
+            source.push_str("> payload\n  ```\nnext\n");
+            DEFINITION_PAST_FENCE_SCAN_LINES.with(|work| work.set(0));
+            let _ = crate::to_html(&source);
+            (
+                source.len(),
+                DEFINITION_PAST_FENCE_SCAN_LINES.with(|work| work.get()),
+            )
+        };
+        let small = measure(32);
+        let large = measure(128);
+        assert!(small.1 <= small.0 * 8 && large.1 <= large.0 * 8);
+        assert!(
+            large.1 <= small.1 * 6,
+            "scan work grew too fast: {small:?}, {large:?}"
         );
     }
 }
