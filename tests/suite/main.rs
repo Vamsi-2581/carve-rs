@@ -577,6 +577,8 @@ mod a_raw_span_ending_a_line_in_whitespace_is_degraded;
 mod a_tab_closer_below_a_raised_fence_closes_it;
 #[path = "../an_authored_footnote_reference_id_replaces_the_generated_one.rs"]
 mod an_authored_footnote_reference_id_replaces_the_generated_one;
+#[path = "../description_list_owner_rulings.rs"]
+mod description_list_owner_rulings;
 #[path = "../empty_destinations.rs"]
 mod empty_destinations;
 #[path = "../nested_paragraph_owner_columns.rs"]
