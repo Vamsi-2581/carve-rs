@@ -80,10 +80,9 @@ pub(crate) fn parse_list(
     // to SAY so rather than inherit: an item after a marker-line heading read the
     // heading's answer and refused a lazy line of its own (carve-rs#2120).
     let mut item_paragraph_open = ParagraphOpen::Known(true);
-    // A fence line the lead paragraph absorbed because no closer is written in
-    // the item still opens a SPAN that runs to the item's end, so every later
-    // blank in the item is interior to it and loosens nothing (§17; the
-    // reference tracks the span apart from whether the fence opened).
+    // A refused fence stays paragraph text but still affects lazy-line
+    // ownership. Its blank separators count when the second paragraph reaches
+    // the item's content column.
     let mut item_unopened_fence_span = false;
     let mut item_unclosed_fence_base = None;
     let mut item_rejected_fence_owner = false;
@@ -408,8 +407,10 @@ pub(crate) fn parse_list(
                     let first_visible = nested_children
                         .iter()
                         .find(|block| !matches!(block, BlockNode::Comment(_)));
+                    let blank_can_loosen = !item_unopened_fence_span
+                        || item_unclosed_fence_base.is_some_and(|base| base <= content_col);
                     if pending_blank
-                        && !item_unopened_fence_span
+                        && blank_can_loosen
                         && first_visible.is_some_and(block_is_paragraph_shaped)
                     {
                         tight = false;
@@ -419,9 +420,7 @@ pub(crate) fn parse_list(
                     // loosens the item when a plain paragraph follows the blank
                     // (§17 L1). The outer `pending_blank` only sees a blank BEFORE
                     // this chunk, so this covers the blank-after / blank-both case.
-                    if !item_unopened_fence_span
-                        && continuation_source_loosens(&nested.source, false)
-                    {
+                    if blank_can_loosen && continuation_source_loosens(&nested.source, false) {
                         tight = false;
                     }
                     // An INVISIBLE continuation is not the item's second block
