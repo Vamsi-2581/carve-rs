@@ -346,10 +346,10 @@ pub(crate) fn parse_list(
                     // this, it is indistinguishable from a first-line residual
                     // indent produced by a tab straddling the content column.
                     nested.authored_base_at_start |= pending_blank && !foreign_fence_base;
-                    let definition_ended_paragraph = nested
-                        .source
-                        .lines()
-                        .any(is_collected_definition_placeholder);
+                    let definition_ended_paragraph = nested.source.lines().any(|line| {
+                        is_collected_definition_placeholder(line)
+                            || is_quoted_definition_placeholder(line)
+                    });
                     let degraded_comment_fence = chunk_ends_in_degraded_comment_fence(cur, &nested);
                     let closed_comment_span = chunk_ends_in_closed_comment_span(&nested);
                     // Normalize the authored base before peeling trailing

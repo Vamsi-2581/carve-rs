@@ -1644,6 +1644,7 @@ pub(in crate::parse) fn extract_link_defs_with_guard_full(
     // Collected so an unterminated `%%%` can be told from a real fenced comment
     // before the state is entered - see comment_fence_closes.
     let all_lines: Vec<&str> = source.lines().collect();
+    let recent_list_marker = list_marker_since_blank(&all_lines);
     let comment_closers = comment_fence_close_index(&all_lines);
     let closer_maxima = fence_closer_suffix_maxima(&all_lines);
     let folded_into_term = term_folded_lines(&all_lines, &closer_maxima, options);
@@ -1874,6 +1875,14 @@ pub(in crate::parse) fn extract_link_defs_with_guard_full(
             stripped.structural,
             columns.reached_by(def_indent),
         );
+        let authored_quote_def = recent_list_marker[line_index]
+            && strip_blockquote_prefix(trim_ascii_start(def_line))
+                .is_some_and(|content| parse_link_def_line_with_value(content).is_some());
+        let def_line = if authored_quote_def {
+            without_blockquote_prefixes(trim_ascii_start(def_line))
+        } else {
+            def_line
+        };
         let bare_trim = trim_ascii_start(stripped.bare);
         match colon_fence {
             Some((fence_col, fence_len)) => {
@@ -1942,7 +1951,13 @@ pub(in crate::parse) fn extract_link_defs_with_guard_full(
             // block and must not loosen it (§17 L2), exactly as the
             // marker-consuming case above keeps the item non-empty. `%%` is
             // invisible at any column and closes nothing (§24 C3).
-            let mut replacement = stripped.replacement();
+            let mut replacement = if authored_quote_def {
+                line.strip_suffix(def_line)
+                    .expect("quoted definition suffix")
+                    .to_string()
+            } else {
+                stripped.replacement()
+            };
             // NOT gated on a container prefix. The hazard is the blank the
             // removal leaves, and a definition at an item's content column with
             // no marker or quote in front of it - `- a` / `  [^f]: x` / `  more`
@@ -1962,7 +1977,9 @@ pub(in crate::parse) fn extract_link_defs_with_guard_full(
                 // open - the line after it leaves the list entirely.
                 let document_column =
                     definition_at_quote_document_column(&replacement, stripped.bare);
-                replacement.push_str(&stripped.bare[..leading_ws(stripped.bare)]);
+                if !authored_quote_def {
+                    replacement.push_str(&stripped.bare[..leading_ws(stripped.bare)]);
+                }
                 replacement.push_str(&if document_column {
                     document_definition_placeholder()
                 } else {

@@ -1,0 +1,330 @@
+[
+  {
+    "name": "2990 ordered description quote footnote",
+    "source": "1. a\n  :: t\n  :  d\n    > q\n    > [^n]: note\n q\n",
+    "html": "<ol>\n  <li>a\n:: t\n:  d\n    <blockquote><p>q</p></blockquote>\n  </li>\n</ol>\n<p>q</p>",
+    "ast": {
+      "type": "document",
+      "children": [
+        {
+          "type": "list",
+          "ordered": true,
+          "tight": true,
+          "items": [
+            {
+              "type": "list_item",
+              "children": [
+                {
+                  "type": "paragraph",
+                  "children": [
+                    {
+                      "type": "text",
+                      "value": "a"
+                    },
+                    {
+                      "type": "soft_break"
+                    },
+                    {
+                      "type": "text",
+                      "value": ":: t"
+                    },
+                    {
+                      "type": "soft_break"
+                    },
+                    {
+                      "type": "text",
+                      "value": ":  d"
+                    }
+                  ]
+                },
+                {
+                  "type": "block_quote",
+                  "children": [
+                    {
+                      "type": "paragraph",
+                      "children": [
+                        {
+                          "type": "text",
+                          "value": "q"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "children": [
+            {
+              "type": "text",
+              "value": "q"
+            }
+          ]
+        },
+        {
+          "type": "footnote",
+          "label": "n",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "value": "note"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "2990 ordered quote footnote",
+    "source": "1. a\n    > q\n    > [^n]: note\n q\n",
+    "html": "<ol>\n  <li>a\n    <blockquote><p>q</p></blockquote>\n  </li>\n</ol>\n<p>q</p>",
+    "ast": {
+      "type": "document",
+      "children": [
+        {
+          "type": "list",
+          "ordered": true,
+          "tight": true,
+          "items": [
+            {
+              "type": "list_item",
+              "children": [
+                {
+                  "type": "paragraph",
+                  "children": [
+                    {
+                      "type": "text",
+                      "value": "a"
+                    }
+                  ]
+                },
+                {
+                  "type": "block_quote",
+                  "children": [
+                    {
+                      "type": "paragraph",
+                      "children": [
+                        {
+                          "type": "text",
+                          "value": "q"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "children": [
+            {
+              "type": "text",
+              "value": "q"
+            }
+          ]
+        },
+        {
+          "type": "footnote",
+          "label": "n",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "value": "note"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "2990 bullet quote footnote",
+    "source": "- a\n  > q\n  > [^n]: note\n tail\n",
+    "html": "<ul>\n  <li>a\n    <blockquote><p>q</p></blockquote>\n  </li>\n</ul>\n<p>tail</p>",
+    "ast": {
+      "type": "document",
+      "children": [
+        {
+          "type": "list",
+          "ordered": false,
+          "tight": true,
+          "items": [
+            {
+              "type": "list_item",
+              "children": [
+                {
+                  "type": "paragraph",
+                  "children": [
+                    {
+                      "type": "text",
+                      "value": "a"
+                    }
+                  ]
+                },
+                {
+                  "type": "block_quote",
+                  "children": [
+                    {
+                      "type": "paragraph",
+                      "children": [
+                        {
+                          "type": "text",
+                          "value": "q"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "children": [
+            {
+              "type": "text",
+              "value": "tail"
+            }
+          ]
+        },
+        {
+          "type": "footnote",
+          "label": "n",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "value": "note"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "2990 ordered quote reference",
+    "source": "1. a\n    > q\n    > [r]: /u\n q\n",
+    "html": "<ol>\n  <li>a\n    <blockquote><p>q</p></blockquote>\n  </li>\n</ol>\n<p>q</p>",
+    "ast": {
+      "type": "document",
+      "children": [
+        {
+          "type": "list",
+          "ordered": true,
+          "tight": true,
+          "items": [
+            {
+              "type": "list_item",
+              "children": [
+                {
+                  "type": "paragraph",
+                  "children": [
+                    {
+                      "type": "text",
+                      "value": "a"
+                    }
+                  ]
+                },
+                {
+                  "type": "block_quote",
+                  "children": [
+                    {
+                      "type": "paragraph",
+                      "children": [
+                        {
+                          "type": "text",
+                          "value": "q"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "children": [
+            {
+              "type": "text",
+              "value": "q"
+            }
+          ]
+        },
+        {
+          "type": "link_reference_definition",
+          "label": "r",
+          "href": "/u"
+        }
+      ]
+    }
+  },
+  {
+    "name": "2990 plain quote control",
+    "source": "> q\n> [^n]: note\ntail\n",
+    "html": "<blockquote><p>q</p></blockquote>\n<p>tail</p>",
+    "ast": {
+      "type": "document",
+      "children": [
+        {
+          "type": "block_quote",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "value": "q"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "paragraph",
+          "children": [
+            {
+              "type": "text",
+              "value": "tail"
+            }
+          ]
+        },
+        {
+          "type": "footnote",
+          "label": "n",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "value": "note"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

@@ -35,6 +35,7 @@ pub(in crate::parse) fn extract_footnote_defs(
     options: &Options<'_>,
 ) -> FootnoteExtraction {
     let lines: Vec<&str> = source.lines().collect();
+    let recent_list_marker = list_marker_since_blank(&lines);
     let decision_at = |line: usize| {
         let physical = match source_line_map {
             Some(map) => map
@@ -349,6 +350,15 @@ pub(in crate::parse) fn extract_footnote_defs(
                     columns.reached_by(def_indent),
                 )
             };
+        let authored_quote_def = !nested
+            && recent_list_marker[i]
+            && strip_blockquote_prefix(trim_ascii_start(def_line))
+                .is_some_and(|content| parse_footnote_def_line(content).is_some());
+        let def_line = if authored_quote_def {
+            without_blockquote_prefixes(trim_ascii_start(def_line))
+        } else {
+            def_line
+        };
         // PART 9R R1a: a line that folds into an open paragraph defines nothing,
         // and a probe that cannot afford to say so collects nothing either. The
         // two are one condition here - the fallback is conservative, so it may
@@ -1251,7 +1261,14 @@ pub(in crate::parse) fn extract_footnote_defs(
             // block and must not loosen it (§17 L2), exactly as the
             // marker-consuming case above keeps the item non-empty. `%%` is
             // invisible at any column and closes nothing (§24 C3).
-            let mut replacement = stripped.replacement();
+            let mut replacement = if authored_quote_def {
+                raw_def_line
+                    .strip_suffix(def_line)
+                    .expect("quoted definition suffix")
+                    .to_string()
+            } else {
+                stripped.replacement()
+            };
             if !replacement.ends_with("%%") && !replacement.ends_with(&definition_placeholder()) {
                 // AND IT HAS TO STAND AT THE DEFINITION'S OWN COLUMN. Inside a
                 // container the structural prefix already carries it; at top
@@ -1260,7 +1277,9 @@ pub(in crate::parse) fn extract_footnote_defs(
                 // open - the line after it leaves the list entirely.
                 let document_column =
                     definition_at_quote_document_column(&replacement, stripped.bare);
-                replacement.push_str(&stripped.bare[..leading_ws(stripped.bare)]);
+                if !authored_quote_def {
+                    replacement.push_str(&stripped.bare[..leading_ws(stripped.bare)]);
+                }
                 replacement.push_str(&if document_column {
                     document_definition_placeholder()
                 } else {
