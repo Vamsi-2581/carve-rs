@@ -258,6 +258,25 @@ fn is_collected_definition_placeholder(line: &str) -> bool {
     placeholder_kind(line) == Some(P_DEFINITION)
 }
 
+fn is_quoted_definition_placeholder(line: &str) -> bool {
+    strip_blockquote_prefix(trim_ascii_start(line)).is_some_and(is_definition_placeholder)
+}
+
+fn list_marker_since_blank(lines: &[&str]) -> Vec<bool> {
+    let mut seen = false;
+    lines
+        .iter()
+        .map(|line| {
+            if is_blank_line(line) {
+                seen = false;
+            } else if detect_list_marker_full(line).is_some() {
+                seen = true;
+            }
+            seen
+        })
+        .collect()
+}
+
 fn is_document_definition_placeholder(line: &str) -> bool {
     placeholder_kind(line) == Some(P_DOCUMENT_DEFINITION)
 }

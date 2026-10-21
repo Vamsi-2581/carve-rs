@@ -2439,3 +2439,5 @@ mod markdown_blank_below_a_nested_list_before_an_image;
 mod markdown_figure_in_a_tight_item;
 #[path = "../ruled_description_fence.rs"]
 mod ruled_description_fence;
+#[path = "../ruled_quote_definition.rs"]
+mod ruled_quote_definition;

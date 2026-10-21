@@ -1469,7 +1469,8 @@ pub(crate) fn collect_indented_block_mapped_with_columns(
         {
             sliced.insert_str(0, LAZY);
         }
-        definition_ended_paragraph = is_collected_definition_placeholder(&sliced);
+        definition_ended_paragraph = is_collected_definition_placeholder(&sliced)
+            || is_quoted_definition_placeholder(&sliced);
         // A COLON LINE INSIDE A CODE OR COMMENT SPAN OPENS AND CLOSES NOTHING:
         // §28 makes both bodies verbatim, which is the same reading that keeps a
         // marker in one from being a marker. Read before the code tracker
