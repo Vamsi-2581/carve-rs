@@ -8,8 +8,10 @@ fn flush_left_descriptions_below_a_quote_match_the_checker() {
             "<blockquote>\n  <dl>\n    <dt>t</dt>\n    <dd>a\n: b</dd>\n  </dl>\n</blockquote>",
         ),
         (
+            // The marker at quote column zero ends the list item. The lazy
+            // paragraph's one-space model difference is tracked in carve#3493.
             "> - :: t\n> : a\n: b\n",
-            "<blockquote>\n  <ul>\n    <li>\n      <dl>\n        <dt>t</dt>\n        <dd>a\n: b</dd>\n      </dl>\n    </li>\n  </ul>\n</blockquote>",
+            "<blockquote>\n  <ul>\n    <li>\n      <dl>\n        <dt>t</dt>\n      </dl>\n    </li>\n  </ul>\n  <p>: a\n: b</p>\n</blockquote>",
         ),
         (
             "> - :: t\n  : a\n: b\n",

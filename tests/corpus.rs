@@ -31,6 +31,8 @@ const IMPLEMENTED: &[&str] = &[
     "a-refused-marker-leaves-an-open-fence-s-blank-payload",
     "an-indented-plus-below-a-nested-fence-stays-content-at-every-depth",
     "generated-container-documents",
+    "definition-body-note-and-fence-owner-boundaries",
+    "nested-plus-below-fence-and-description",
     "a-block-at-an-item-content-column-ends-its-paragraph-before-an-unclosed-fence",
     "a-definition-or-attribute-line-in-a-nested-container-leaves-no-paragraph-for-an-unmarked-line",
     "a-line-is-read-in-the-container-whose-column-it-reaches",
