@@ -1093,6 +1093,8 @@ mod definition_body_canonical_space;
 mod definition_continuation_column;
 #[path = "../definition_continuation_columns.rs"]
 mod definition_continuation_columns;
+#[path = "../definition_fence_closer_below_column.rs"]
+mod definition_fence_closer_below_column;
 #[path = "../definition_in_a_quote_inside_an_item.rs"]
 mod definition_in_a_quote_inside_an_item;
 #[path = "../definition_in_a_quoted_item.rs"]
