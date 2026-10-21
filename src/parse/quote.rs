@@ -876,7 +876,7 @@ pub(in crate::parse) struct LiteralCodeColumn {
 }
 
 impl LiteralCodeColumn {
-    pub(crate) fn push(&mut self, position: usize, width: usize) {
+    pub(in crate::parse) fn push(&mut self, position: usize, width: usize) {
         if self.positions.len() == self.capacity {
             let old_capacity = self.capacity;
             self.capacity = old_capacity.max(1) * 2;
@@ -897,7 +897,7 @@ impl LiteralCodeColumn {
         }
     }
 
-    pub(crate) fn next(&self, from: usize, width: usize) -> Option<usize> {
+    pub(in crate::parse) fn next(&self, from: usize, width: usize) -> Option<usize> {
         let start = self.positions.partition_point(|&position| position <= from);
         self.find(1, 0, self.capacity, start, width)
             .and_then(|index| self.positions.get(index).copied())

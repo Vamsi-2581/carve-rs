@@ -633,7 +633,7 @@ pub(crate) struct CrossrefIndex {
 }
 
 impl CrossrefIndex {
-    pub(crate) fn extend_titles(&mut self, titles: BTreeMap<String, String>) {
+    pub(in crate::parse) fn extend_titles(&mut self, titles: BTreeMap<String, String>) {
         for (id, title) in titles {
             self.titles.entry(id).or_insert(title);
         }
@@ -2170,7 +2170,7 @@ impl InLineBlock {
         IN_LINE_BLOCK.with(|flag| flag.get())
     }
 
-    pub(crate) fn enter() -> Self {
+    pub(in crate::parse) fn enter() -> Self {
         Self {
             outer: IN_LINE_BLOCK.with(|flag| flag.replace(true)),
         }
