@@ -38,6 +38,7 @@ which the published crate does not carry.
 - Lint an unclosed code fence and a refused continuation marker. (#2941)
 - Lint the two ordered-list column traps of explicit numbers. (#2962)
 - Lint: report a list marker below the content column after a blank line. (#2969)
+- Lint a description separator below its definition list column. (#3056)
 
 ### Formatting and migration
 
