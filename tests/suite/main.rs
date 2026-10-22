@@ -47,6 +47,8 @@ mod a_definition_in_a_quote_under_an_item_leaves_no_lazy_paragraph;
 mod a_flush_comment_after_a_nested_note_marker_leaves_no_body_open;
 #[path = "../a_folded_marker_or_quote_does_not_move_the_base.rs"]
 mod a_folded_marker_or_quote_does_not_move_the_base;
+#[path = "../a_folded_separator_stays_interruptible.rs"]
+mod a_folded_separator_stays_interruptible;
 #[path = "../a_hosted_nested_quote_reads_like_its_top_level_twin.rs"]
 mod a_hosted_nested_quote_reads_like_its_top_level_twin;
 #[path = "../a_matched_comment_fence_ends_or_keeps_a_note_by_column.rs"]
