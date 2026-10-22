@@ -58,6 +58,15 @@ fn shared_vectors() {
 fn marker_ranges() {
     for (name, source, line, column, marker, target) in [
         ("CRLF", "- a\r\n  :: term\r\n : detail\r\n", 3, 2, ":", 2),
+        ("marker-line term", "- :: t\n:  head\n", 2, 1, ":", 2),
+        (
+            "quoted marker-line term",
+            "> - :: t\n> :  d\n",
+            2,
+            3,
+            ":",
+            4,
+        ),
         ("tab", "- a\n\t:: term\n : detail\n", 3, 2, ":", 4),
         ("quote", "> - a\n>   :: term\n>  : detail\n", 3, 4, ":", 4),
         (
