@@ -154,6 +154,95 @@ struct Fence {
     bare: bool,
 }
 
+struct DefinitionHost {
+    first: usize,
+    last: usize,
+    column: usize,
+    quotes: usize,
+}
+
+fn quote_prefix(text: &str) -> (usize, usize) {
+    let mut at = 0;
+    let mut depth = 0;
+    loop {
+        let rest = &text[at..];
+        let spaces = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+        let Some(after) = rest[spaces..].strip_prefix('>') else {
+            break;
+        };
+        if !after.is_empty() && !after.starts_with(' ') {
+            break;
+        }
+        at += spaces + 1 + usize::from(after.starts_with(' '));
+        depth += 1;
+    }
+    (at, depth)
+}
+
+fn separator_candidate(text: &str) -> Option<(usize, usize, usize)> {
+    let (prefix, depth) = quote_prefix(text);
+    let rest = &text[prefix..];
+    let at = prefix + rest.len() - rest.trim_start_matches([' ', '\t']).len();
+    let tail = &text[at..];
+    let len = if tail.starts_with("::") {
+        2
+    } else if tail.starts_with(':') {
+        1
+    } else {
+        return None;
+    };
+    (tail.len() == len || matches!(tail.as_bytes()[len], b' ' | b'\t')).then_some((at, len, depth))
+}
+
+fn collect_description_separators(
+    rows: &[Line<'_>],
+    hosts: &[DefinitionHost],
+    attached: &BTreeSet<usize>,
+    ignored: &BTreeSet<usize>,
+    payload: &BTreeSet<usize>,
+    out: &mut Vec<LintWarning>,
+) {
+    for (index, row) in rows.iter().enumerate() {
+        let line = index + 1;
+        if ignored.contains(&line) || payload.contains(&line) || attached.contains(&line) {
+            continue;
+        }
+        let Some((at, len, depth)) = separator_candidate(row.text) else {
+            continue;
+        };
+        let mut previous = index;
+        while previous > 0 && row_is_blank_or_quote(rows[previous - 1].text) {
+            previous -= 1;
+        }
+        if previous == 0 || quote_prefix(rows[previous - 1].text).1 != depth {
+            continue;
+        }
+        let column = visual(&row.text[..at]);
+        let Some(host) = hosts
+            .iter()
+            .filter(|host| {
+                host.first <= previous
+                    && previous <= host.last
+                    && host.quotes == depth
+                    && host.column > column
+            })
+            .max_by_key(|host| host.column)
+        else {
+            continue;
+        };
+        let name = if len == 2 {
+            "term marker"
+        } else {
+            "description separator"
+        };
+        emit(out, rows, line, at, len, "description-separator-below-content-column", &format!("This {name} starts at column {column}, below the column {} of the definition list above, so it adds no entry to that list. Indent it to column {} to continue the list.", host.column, host.column));
+    }
+}
+
+fn row_is_blank_or_quote(text: &str) -> bool {
+    text.bytes().all(|byte| matches!(byte, b' ' | b'\t' | b'>'))
+}
+
 pub(super) fn collect(
     source: &str,
     doc: &Document,
@@ -184,6 +273,9 @@ pub(super) fn collect(
     let mut starts = Vec::new();
     let mut items = Vec::new();
     let mut fences = Vec::new();
+    let mut definition_hosts = Vec::new();
+    let mut attached = BTreeSet::new();
+    let mut payload = BTreeSet::new();
     let marker = regex::Regex::new(
         r"^([ \t]*)([-*]|(?:[0-9]+|[ivxlcdm]+|[IVXLCDM]+|[a-zA-Z])[.)])(\{[^{}\r\n]*\})?( +)(?:\[[ xX_?>-]\] +)?",
     )
@@ -340,10 +432,59 @@ pub(super) fn collect(
                 });
             }
         }
+        if let BlockNode::DefinitionList(list) = block {
+            for item in &list.items {
+                attached.extend(
+                    item.terms
+                        .iter()
+                        .filter_map(|term| term.pos.as_ref().map(|pos| pos.start_line)),
+                );
+                attached.extend(
+                    item.definitions
+                        .iter()
+                        .filter_map(|def| def.pos.as_ref().map(|pos| pos.start_line)),
+                );
+            }
+            if let (Some(pos), Some(term)) = (
+                list.pos.as_ref(),
+                list.items
+                    .first()
+                    .and_then(|item| item.terms.first())
+                    .and_then(|term| term.pos.as_ref()),
+            ) {
+                if let Some(row) = rows.get(term.start_line.saturating_sub(1)) {
+                    let at = row
+                        .text
+                        .char_indices()
+                        .nth(term.start_column.saturating_sub(1))
+                        .map_or(row.text.len(), |(at, _)| at);
+                    if row.text[at..].starts_with("::") {
+                        definition_hosts.push(DefinitionHost {
+                            first: pos.start_line,
+                            last: pos.end_line,
+                            column: visual(&row.text[..at]),
+                            quotes: quote_prefix(row.text).1,
+                        });
+                    }
+                }
+            }
+        }
         push_block_children(block, depth, &mut blocks, &mut inlines);
     }
     let mut text_spans = Vec::new();
     while let Some((node, depth)) = inlines.pop() {
+        if matches!(
+            node,
+            InlineNode::Code(_)
+                | InlineNode::Math(_)
+                | InlineNode::RawInline(_)
+                | InlineNode::LiteralInline(_)
+                | InlineNode::Comment(_)
+        ) {
+            if let Some(pos) = node.pos() {
+                payload.extend((pos.start_line + 1)..=pos.end_line);
+            }
+        }
         if matches!(
             node,
             InlineNode::Text(_) | InlineNode::Mention(_) | InlineNode::Tag(_)
@@ -355,6 +496,7 @@ pub(super) fn collect(
         push_inline_children(node, depth, &mut inlines);
     }
     text_spans.sort_unstable();
+    collect_description_separators(&rows, &definition_hosts, &attached, &ignored, &payload, out);
     let mut text_runs: Vec<(usize, usize)> = Vec::new();
     for (start, end) in text_spans {
         if let Some(last) = text_runs.last_mut().filter(|last| last.1 == start) {

@@ -2445,6 +2445,8 @@ mod nested_marker_fence_blank_payload;
 mod a_tab_indented_quote_in_an_item_starts_on_its_marker;
 #[path = "../description_fence_note_boundary.rs"]
 mod description_fence_note_boundary;
+#[path = "../lint_description_separator_below_content_column.rs"]
+mod lint_description_separator_below_content_column;
 #[path = "../lint_list_column_traps.rs"]
 mod lint_list_column_traps;
 #[path = "../lint_new_rules.rs"]
