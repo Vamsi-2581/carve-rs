@@ -30,3 +30,60 @@ fn lazy_lines_below_a_rebased_term_keep_their_existing_reading() {
     assert!(html.contains("<dd>d\n: zq</dd>"), "{html}");
     assert!(!html.contains("&nbsp;L&nbsp;"), "{html}");
 }
+
+#[test]
+fn literal_description_lines_survive_markdown_import() {
+    let source = ":: a\n: b\n\t:: t\n  : zq\n";
+    let markdown =
+        carve::to_markdown_with_options(source, &carve::Options::default().with_roundtrip(true));
+    assert!(markdown.contains("\\: zq"), "{markdown}");
+    assert_eq!(
+        carve::to_html(&carve::markdown_to_carve(&markdown)),
+        carve::to_html(source)
+    );
+
+    for (source, expected) in [("\\: text\n", ": text"), ("\\:: term\n", "\\:: term")] {
+        let markdown = carve::to_markdown(source);
+        assert!(markdown.starts_with(expected), "{markdown}");
+        assert_eq!(
+            carve::to_html(&carve::markdown_to_carve(&markdown)),
+            carve::to_html(source)
+        );
+    }
+
+    let source = "- one\n  :: term\n:  def\n";
+    let markdown =
+        carve::to_markdown_with_options(source, &carve::Options::default().with_roundtrip(true));
+    assert!(markdown.contains("\n:  def\n"), "{markdown}");
+    assert_eq!(
+        carve::to_html(&carve::markdown_to_carve(&markdown)),
+        carve::to_html(source)
+    );
+
+    let source = ":: a\n: b\n  \\: \n";
+    let markdown =
+        carve::to_markdown_with_options(source, &carve::Options::default().with_roundtrip(true));
+    assert!(markdown.contains("\\:"), "{markdown}");
+    assert_eq!(
+        carve::to_html(&carve::markdown_to_carve(&markdown)),
+        carve::to_html(source)
+    );
+
+    let source = ":: a\n: b\n  \\:\n";
+    let markdown =
+        carve::to_markdown_with_options(source, &carve::Options::default().with_roundtrip(true));
+    assert!(markdown.contains("\\:\n"), "{markdown}");
+    assert_eq!(
+        carve::to_html(&carve::markdown_to_carve(&markdown)),
+        carve::to_html(source)
+    );
+
+    let source = ":: a\n: b\n\n- item\n\n  :: t\n  : d\n";
+    let markdown =
+        carve::to_markdown_with_options(source, &carve::Options::default().with_roundtrip(true));
+    assert_eq!(
+        carve::to_html(&carve::markdown_to_carve(&markdown)),
+        carve::to_html(source),
+        "{markdown}"
+    );
+}

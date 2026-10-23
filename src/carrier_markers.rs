@@ -1714,9 +1714,18 @@ fn restore_definition_lines(lines: &[RestoredLine]) -> Vec<String> {
             first = false;
         }
         if marker && line.text.starts_with(":: ") {
-            definition_host = None;
+            let nested_term = definition_host
+                .as_ref()
+                .is_some_and(|host| line.lead.starts_with(host) && line.lead != *host);
+            if !nested_term {
+                definition_host = None;
+            }
             if out.last().is_some_and(|line| line.trim().is_empty()) {
                 out.pop();
+            }
+            if nested_term {
+                out.push(line.spelled());
+                continue;
             }
         }
         if marker && line.text == ":" {
@@ -1728,7 +1737,11 @@ fn restore_definition_lines(lines: &[RestoredLine]) -> Vec<String> {
             continue;
         }
         if marker && line.text.is_empty() {
-            definition_host = None;
+            if definition_host.as_ref().map_or(true, |host| {
+                !line.lead.starts_with(host) || line.lead == *host
+            }) {
+                definition_host = None;
+            }
             if out.last().is_some_and(|line| !line.trim().is_empty()) {
                 out.push(line.lead.trim_end_matches([' ', '\t']).to_owned());
             }
