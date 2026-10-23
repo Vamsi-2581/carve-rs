@@ -497,8 +497,17 @@ pub(crate) fn attached_block_end(
 ) -> usize {
     let mut end = start;
     let mut in_fence: Option<FenceOpen> = None;
+    let mut unclosed_fence = false;
     while end < lines.len() {
         let line = lines.at(end);
+        if unclosed_fence {
+            // The unclosed fence's payload: no opener inside it opens anything.
+            if is_blank_line(line) || is_boundary(line, end) {
+                break;
+            }
+            end += 1;
+            continue;
+        }
         if let Some(open) = in_fence {
             if is_fence_close(line, open) {
                 in_fence = None;
@@ -507,6 +516,30 @@ pub(crate) fn attached_block_end(
             continue;
         }
         if let Some(open) = detect_fence_open(line) {
+            // An unclosed attached fence takes the rest of its container only when no
+            // blank line follows; otherwise it ends with the attached block (carve#3421).
+            // The index rules out most suffixes, so unclosed openers stay linear.
+            let possible = lines
+                .code_after(end, open.fence_char, open.fence_len)
+                .unwrap_or_else(|| {
+                    let index =
+                        closer_index.get_or_insert_with(|| build_code_closer_last_index(&lines));
+                    code_closer_exists_after(index, end, open.fence_char, open.fence_len)
+                });
+            let closed =
+                possible && (end + 1..lines.len()).any(|at| is_fence_close(lines.at(at), open));
+            // Read from the end: the tail past the last blank line is short in practice,
+            // and a scan forward from every unclosed opener would be quadratic.
+            if !closed
+                && (end + 1..lines.len())
+                    .rev()
+                    .find(|&at| is_blank_line(lines.at(at)))
+                    .is_some()
+            {
+                unclosed_fence = true;
+                end += 1;
+                continue;
+            }
             in_fence = Some(open);
             end += 1;
             continue;
