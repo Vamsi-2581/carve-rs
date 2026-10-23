@@ -1060,7 +1060,7 @@ fn extract_nested_footnote_defs(
             options,
         );
         let mut body = compose_mapped_source(body, &parent);
-        rebase_body_blocks(&mut body, true, options, false);
+        rebase_body_blocks(&mut body, true, options, false, false);
         defs.insert(label, body);
 
         for (nested_label, nested_source) in nested {
