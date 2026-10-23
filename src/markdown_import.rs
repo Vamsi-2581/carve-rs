@@ -280,15 +280,55 @@ mod heading_links;
 pub use heading_links::migration_raw_heading_ids;
 use heading_links::rewrite_same_file_heading_links;
 pub(crate) use heading_links::rewrite_same_file_heading_links_reported;
+
+fn protect_escaped_colon_lines(source: &str) -> (String, Option<String>) {
+    if !source.contains("\\:") {
+        return (source.to_owned(), None);
+    }
+    let mut token = "CARVEESCAPEDCOLONLINE".to_owned();
+    while source.contains(&token) {
+        token.push('X');
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut changed = false;
+    for line in source.split_inclusive('\n') {
+        let prefix = line
+            .bytes()
+            .take_while(|byte| matches!(byte, b' ' | b'\t' | b'>'))
+            .count();
+        let rest = &line[prefix..];
+        if rest.starts_with("\\: ")
+            || rest.starts_with("\\:\t")
+            || rest.starts_with("\\:: ")
+            || rest.starts_with("\\::\t")
+            || matches!(rest.trim_end_matches(['\r', '\n']), "\\:" | "\\::")
+        {
+            out.push_str(&line[..prefix]);
+            out.push_str(&token);
+            out.push_str(&rest[2..]);
+            changed = true;
+        } else {
+            out.push_str(line);
+        }
+    }
+    (out, changed.then_some(token))
+}
+
 fn markdown_to_carve_with_carriers(
     markdown: &str,
     enabled: bool,
     rewrite_heading_fragments: bool,
 ) -> Result<(String, Vec<MarkdownImportLoss>, Vec<FrontmatterNotice>), crate::RenderCarveError> {
+    let (protected, escaped_colon) =
+        if enabled && markdown.contains(crate::carrier_markers::CARRIER_PREFIX) {
+            protect_escaped_colon_lines(markdown)
+        } else {
+            (markdown.to_owned(), None)
+        };
     let inline = if enabled {
-        crate::inline_carriers::InlineCarriers::prepare(markdown)
+        crate::inline_carriers::InlineCarriers::prepare(&protected)
     } else {
-        crate::inline_carriers::InlineCarriers::plain(markdown)
+        crate::inline_carriers::InlineCarriers::plain(&protected)
     };
     let lift = if enabled {
         crate::carrier_markers::lift_carrier_markers(&inline.source)
@@ -318,6 +358,11 @@ fn markdown_to_carve_with_carriers(
                 .unwrap_or((None, Vec::new()));
             if let Some(value) = restored {
                 let value = restore_table_email_brackets(value, markdown);
+                let value = if let Some(token) = &escaped_colon {
+                    value.replace(token, "\\:")
+                } else {
+                    value
+                };
                 losses.extend(
                     dropped
                         .into_iter()

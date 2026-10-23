@@ -653,8 +653,10 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
             format!("{} {text}\n\n", "#".repeat(heading.level as usize))
         }
         BlockNode::Paragraph(paragraph) => {
-            let text =
-                protect_paragraph_list_markers(&render_block_inlines(&paragraph.children, ctx));
+            let text = protect_paragraph_list_markers(
+                &render_block_inlines(&paragraph.children, ctx),
+                ctx.definition_depth > 0,
+            );
             if text.is_empty() {
                 String::new()
             } else {
@@ -944,7 +946,7 @@ fn render_block_kind(node: &BlockNode, ctx: &mut MarkdownContext, depth: usize) 
 /// edge whitespace (PART 11 §10m), no list, quote, thematic-break or setext
 /// opener (§8a M1c, §8d, §8g). The paragraph is one string here, so a marker
 /// split across inline nodes is seen whole.
-fn protect_paragraph_list_markers(text: &str) -> String {
+fn protect_paragraph_list_markers(text: &str, in_definition: bool) -> String {
     if !inline_marker_ranges(text).is_empty() {
         let mut code_fence = 0;
         return text
@@ -958,7 +960,7 @@ fn protect_paragraph_list_markers(text: &str) -> String {
                 }
                 let core = inline_padding(line, |ch| ch == ' ' || ch == '\t').1;
                 let visible = visible_inline(&core);
-                let protected = protect_paragraph_list_markers(&visible);
+                let protected = protect_paragraph_list_markers(&visible, in_definition);
                 restore_inline_change(&core, &visible, &protected)
             })
             .collect::<Vec<_>>()
@@ -1004,7 +1006,7 @@ fn protect_paragraph_list_markers(text: &str) -> String {
             } else {
                 std::borrow::Cow::Borrowed(line.as_str())
             };
-            if let Some(at) = paragraph_marker_escape(&view, written == 0) {
+            if let Some(at) = paragraph_marker_escape(&view, written == 0, in_definition) {
                 if line[at..].starts_with(underscore.as_str()) {
                     note_assembled(&line[at..at + underscore.len()]);
                     line.replace_range(at..at + underscore.len(), "\\_");
@@ -1027,12 +1029,19 @@ fn protect_paragraph_list_markers(text: &str) -> String {
 
 /// Where a paragraph line needs a backslash so a reader does not open a block
 /// on it, if anywhere. The line carries no leading whitespace.
-fn paragraph_marker_escape(line: &str, first: bool) -> Option<usize> {
+fn paragraph_marker_escape(line: &str, first: bool, in_definition: bool) -> Option<usize> {
     let bytes = line.as_bytes();
     let first_byte = *bytes.first()?;
     // M1c, and §8g T3 for a marker with nothing after it.
     if matches!(first_byte, b'-' | b'+')
         && (bytes.len() == 1 && first || matches!(bytes.get(1), Some(b' ' | b'\t')))
+    {
+        return Some(0);
+    }
+    // A literal marker line can open or attach to a definition after import.
+    if first_byte == b':'
+        && ((in_definition && matches!(bytes.get(1), None | Some(b' ' | b'\t')))
+            || (bytes.get(1) == Some(&b':') && matches!(bytes.get(2), None | Some(b' ' | b'\t'))))
     {
         return Some(0);
     }
