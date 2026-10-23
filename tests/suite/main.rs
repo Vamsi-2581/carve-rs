@@ -2472,6 +2472,8 @@ mod nested_marker_fence_blank_payload;
 
 #[path = "../a_block_below_an_empty_nested_item_uses_one_column.rs"]
 mod a_block_below_an_empty_nested_item_uses_one_column;
+#[path = "../a_description_below_a_rebased_term_stays_text.rs"]
+mod a_description_below_a_rebased_term_stays_text;
 #[path = "../a_fence_after_a_nested_heading_keeps_blank_lines.rs"]
 mod a_fence_after_a_nested_heading_keeps_blank_lines;
 #[path = "../a_quote_after_a_trailing_slash_closes.rs"]
