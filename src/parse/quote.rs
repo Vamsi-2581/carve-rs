@@ -1487,6 +1487,7 @@ pub(in crate::parse) fn collect_blockquote_body(
                     options,
                     &mut |next, _| is_blank_line(next) || is_plus_marker(next),
                 );
+                let attached_start = cur.pos;
                 while cur.pos < end {
                     let next = cur.lines.at(cur.pos);
                     let kept = if prior_levels > 0 || own_marker_follower {
@@ -1500,6 +1501,32 @@ pub(in crate::parse) fn collect_blockquote_body(
                         stripped_col(cur.source_col(cur.pos), next, kept),
                     );
                     cur.pos += 1;
+                }
+                // An unclosed fence the `+` attached keeps an empty last line, as the spec
+                // model and carve-js read it, unless the document ends on its last line
+                // (carve#3421).
+                // Lines kept with a nested quote's marker carry it on the empty line too.
+                let nested_marker = attached_start < end
+                    && !(prior_levels > 0 || own_marker_follower)
+                    && strip_blockquote_prefix(cur.lines.at(attached_start)).is_some();
+                let attached_text = |at: usize| {
+                    let line = cur.lines.at(at);
+                    trim_ascii_start(
+                        if prior_levels > 0 || own_marker_follower || nested_marker {
+                            strip_blockquote_prefix(line).unwrap_or(line)
+                        } else {
+                            line
+                        },
+                    )
+                };
+                if attached_start < end
+                    && !crate::parse::is_unterminated_source_line(cur.source_line(end - 1))
+                    && detect_fence_open(attached_text(attached_start)).is_some_and(|open| {
+                        !(attached_start + 1..end).any(|at| is_fence_close(attached_text(at), open))
+                    })
+                {
+                    let empty = if nested_marker { ">" } else { "" };
+                    inner.push_at(empty.to_string(), None, None);
                 }
                 inner.push_synthetic_blank();
                 para_open = ParaOpen::Closed;
