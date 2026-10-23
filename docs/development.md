@@ -26,7 +26,7 @@ cargo test --locked --test shared_roundtrip_export_acceptance
 The shared acceptance test compiles the published fixtures from
 `tests/spec/resources/`. It checks export, import, diagnostics, reserved attributes,
 and the separate footnote carrier recovery matrix. Follow
-[CONTRIBUTING.md](../CONTRIBUTING.md#running-the-tests) for the full nextest and
+[CONTRIBUTING.md](../.github/CONTRIBUTING.md#running-the-tests) for the full nextest and
 doctest commands used by CI.
 
 ## For bindings that pin this engine

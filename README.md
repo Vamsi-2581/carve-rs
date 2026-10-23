@@ -112,7 +112,7 @@ security, patches, and parser snapshots.
 
 ## Development
 
-Start with [CONTRIBUTING.md](https://github.com/markup-carve/carve-rs/blob/main/CONTRIBUTING.md)
+Start with [CONTRIBUTING.md](https://github.com/markup-carve/carve-rs/blob/main/.github/CONTRIBUTING.md)
 for the toolchain, the test commands, and what a spec-affecting change involves.
 Build setup, tests, and engine-pin maintenance are in the
 [development guide](https://github.com/markup-carve/carve-rs/blob/main/docs/development.md)
