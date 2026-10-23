@@ -1269,7 +1269,13 @@ pub(in crate::parse) fn extract_footnote_defs(
                 if absorbed_note_marker
                     || parse_footnote_def_line(trim_ascii_start(first)).is_none()
                 {
-                    rebase_body_blocks(&mut definition_source, true, options, absorbed_note_marker);
+                    rebase_body_blocks(
+                        &mut definition_source,
+                        true,
+                        options,
+                        absorbed_note_marker,
+                        false,
+                    );
                 }
                 defs.insert(label.to_string(), definition_source);
             }

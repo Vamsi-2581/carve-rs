@@ -455,7 +455,7 @@ pub(in crate::parse) fn rebase_overindented_blocks(
     include_sublists: bool,
     options: &Options<'_>,
 ) {
-    rebase_body_blocks(source, include_sublists, options, false);
+    rebase_body_blocks(source, include_sublists, options, false, include_sublists);
 }
 
 pub(in crate::parse) fn rebase_body_blocks(
@@ -463,6 +463,7 @@ pub(in crate::parse) fn rebase_body_blocks(
     include_sublists: bool,
     options: &Options<'_>,
     absorbed_note_marker: bool,
+    description_body: bool,
 ) {
     let trailing_newline = source.source.ends_with('\n');
     let mut lines: Vec<Cow<'_, str>> = source.source.lines().map(Cow::Borrowed).collect();
@@ -1387,6 +1388,15 @@ pub(in crate::parse) fn rebase_body_blocks(
                 // Codepoints, like the line-block arm above: a tab is one
                 // codepoint however many columns it fills.
                 *col += consumed as isize - synthetic as isize;
+            }
+        }
+        // A separator below an authored definition list's column does not
+        // continue it (carve#3451), so it is read as paragraph text.
+        if description_body && base > 0 && is_definition_list_start(&lines[i]) {
+            if let Some(next) = lines.get_mut(end + 1) {
+                if indent_columns(next) == 0 && strip_definition_marker(next).is_some() {
+                    *next = Cow::Owned(format!("{ITEM_PARAGRAPH}{next}"));
+                }
             }
         }
         i = end + 1;
