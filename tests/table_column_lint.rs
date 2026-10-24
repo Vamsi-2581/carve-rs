@@ -22,3 +22,19 @@ fn table_column_rules_are_reported() {
     assert!(rules.contains(&"table-width-total"), "{rules:?}");
     assert!(rules.contains(&"table-alignment-run-padding"), "{rules:?}");
 }
+
+#[test]
+fn whole_cell_span_markers_need_no_alignment_padding() {
+    let source = "|= 2-col header|<|= header|\n\
+|some long content|foo|bar|\n\
++and even more content|||\n\
+|^|spans 4 cells|<|\n\
+|^|^|<|\n";
+    assert!(lint_carve(source).is_empty(), "{:?}", lint_carve(source));
+    assert!(lint_carve("|<text|\n")
+        .iter()
+        .any(|warning| warning.rule == "table-alignment-run-padding"));
+    assert!(lint_carve("|=^|\n")
+        .iter()
+        .any(|warning| warning.rule == "table-alignment-run-padding"));
+}
