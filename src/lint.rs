@@ -595,7 +595,12 @@ fn collect_table_column_warnings(source: &str, out: &mut Vec<LintWarning>) {
                     {
                         end += 1;
                     }
+                    let whole_span = start == i + 1
+                        && end == start + 1
+                        && matches!(bytes[start], b'^' | b'<')
+                        && bytes.get(end) == Some(&b'|');
                     if end > start
+                        && !whole_span
                         && bytes.get(end).is_some_and(|b| {
                             !b.is_ascii_whitespace()
                                 && *b != b'{'
