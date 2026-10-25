@@ -2180,6 +2180,38 @@ impl Builder {
             return;
         };
 
+        if tag.name.eq_ignore_ascii_case("a")
+            && tag.closing
+            && self
+                .frames
+                .iter()
+                .any(|frame| matches!(frame, Frame::Link { .. }))
+        {
+            let children = match self.frames.last_mut() {
+                Some(Frame::Link { children, .. })
+                | Some(Frame::Emphasis(_, children))
+                | Some(Frame::HtmlEmphasis { children, .. })
+                | Some(Frame::HtmlInsert { children, .. })
+                | Some(Frame::HtmlDelete { children, .. }) => Some(children),
+                _ => None,
+            };
+            if let Some(children) = children {
+                if let Some(open) = children.iter().rposition(|node| {
+                    matches!(node, InlineNode::RawInline(raw)
+                        if html_tag(&raw.content).is_some_and(|tag|
+                            tag.name.eq_ignore_ascii_case("a") && !tag.closing && !tag.self_closing))
+                }) {
+                    children.remove(open);
+                    self.losses.push(MarkdownImportLoss {
+                        message: "Flattened an HTML link inside a Markdown link label; its text was kept".into(),
+                        line: Some(self.current_line),
+                        kind: MarkdownLossKind::Unspellable,
+                    });
+                    return;
+                }
+            }
+        }
+
         if tag.name.eq_ignore_ascii_case("code") {
             if tag.closing {
                 self.html_code_depth = self.html_code_depth.saturating_sub(1);
