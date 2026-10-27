@@ -1064,6 +1064,43 @@ fn unresolved_footnote_at(source: &str, at: usize) -> Option<(String, usize)> {
     ))
 }
 
+fn fallback_footnote_text(
+    event: &Event<'_>,
+    source: &str,
+    at: usize,
+    consumed_until: usize,
+    frames: &[Frame],
+) -> Option<(Option<Footnote>, usize)> {
+    if !matches!(event, Event::Text(_))
+        || matches!(
+            frames.last(),
+            Some(
+                Frame::CodeBlock { .. }
+                    | Frame::HtmlCode { .. }
+                    | Frame::RawHtml(_)
+                    | Frame::Metadata(_)
+            )
+        )
+    {
+        return None;
+    }
+    if at < consumed_until {
+        return Some((None, consumed_until));
+    }
+    let (label, end) = unresolved_footnote_at(source, at)?;
+    Some((
+        Some(Footnote {
+            attrs: None,
+            id: Some(label),
+            inline: None,
+            number: None,
+            ref_id: None,
+            pos: None,
+        }),
+        end,
+    ))
+}
+
 fn plain_reference_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
 }
@@ -1283,22 +1320,18 @@ fn markdown_to_ast_with_code_lines(
         }
         builder.current_line =
             claimed_lines + line_starts.partition_point(|start| *start <= range.start);
-        if matches!(event, Event::Text(_)) && range.start < unresolved_footnote_end {
-            continue;
-        }
-        if matches!(event, Event::Text(_)) {
-            if let Some((label, end)) = unresolved_footnote_at(&source, range.start) {
-                builder.inline(InlineNode::Footnote(Footnote {
-                    attrs: None,
-                    id: Some(label),
-                    inline: None,
-                    number: None,
-                    ref_id: None,
-                    pos: None,
-                }));
-                unresolved_footnote_end = end;
-                continue;
+        if let Some((footnote, end)) = fallback_footnote_text(
+            &event,
+            &source,
+            range.start,
+            unresolved_footnote_end,
+            &builder.frames,
+        ) {
+            unresolved_footnote_end = end;
+            if let Some(footnote) = footnote {
+                builder.inline(InlineNode::Footnote(footnote));
             }
+            continue;
         }
         if let Some((kept, rest)) = text_end.take().and_then(|end| {
             let (kept, rest) = stripped_line_end(&source, end)?;
@@ -3433,13 +3466,40 @@ fn flush_inline_run(
 /// `alt` is a plain string on the node, so an emphasis, a code span or a link
 /// written inside `![...]` has no node to become. CommonMark flattens it the
 /// same way - `![a *b* c](i.png)` carries `alt="a b c"` - so the text is what
-/// is kept. A break contributes nothing, which is what this importer already
-/// did with one and is deliberately not changed here: a newline inside `alt`
-/// would have to be written back into a single-line image spelling.
+/// is kept. A break contributes its authored newline to the image alt scalar.
+fn critic_body_probe_text(node: &InlineNode, out: &mut String) {
+    match node {
+        // Delimiters inside verbatim nodes cannot close the surrounding deletion.
+        // A separator also prevents delimiters on either side from pairing.
+        InlineNode::Code(_) | InlineNode::LiteralInline(_) | InlineNode::RawInline(_) => {
+            out.push(' ')
+        }
+        InlineNode::Emphasis(emphasis) => {
+            for child in &emphasis.children {
+                critic_body_probe_text(child, out);
+            }
+        }
+        InlineNode::Link(link) => {
+            for child in &link.children {
+                critic_body_probe_text(child, out);
+            }
+        }
+        InlineNode::Span(span) => {
+            for child in &span.children {
+                critic_body_probe_text(child, out);
+            }
+        }
+        _ => out.push_str(&inline_text(node)),
+    }
+}
+
 /// A deletion body that would close or re-open the braced construct it is about
 /// to be written into (markup-carve/carve#2845).
 fn breaks_out_of_a_critic_body(children: &[InlineNode]) -> bool {
-    let text: String = children.iter().map(inline_text).collect();
+    let mut text = String::new();
+    for child in children {
+        critic_body_probe_text(child, &mut text);
+    }
     text.contains(['{', '}', '\\', '\n']) || text.contains("~>")
 }
 
