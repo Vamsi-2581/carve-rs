@@ -2645,6 +2645,8 @@ mod list_table_caption_flush_follower;
 mod literal_quote_list_lead;
 #[path = "../markdown_link_footnotes.rs"]
 mod markdown_link_footnotes;
+#[path = "../quote_lazy_marker_ownership.rs"]
+mod quote_lazy_marker_ownership;
 #[path = "../refused_plus_after_indented_list.rs"]
 mod refused_plus_after_indented_list;
 #[path = "../term_invisible_comment_break.rs"]
