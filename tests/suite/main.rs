@@ -2608,3 +2608,21 @@ mod quoted_term_after_paragraph;
 
 #[path = "../quoted_list_fence_payload.rs"]
 mod quoted_list_fence_payload;
+
+#[path = "../profile_code_block_text.rs"]
+mod profile_code_block_text;
+
+#[path = "../reference_image_caption_boundary.rs"]
+mod reference_image_caption_boundary;
+
+#[path = "../quoted_literal_colon_boundary.rs"]
+mod quoted_literal_colon_boundary;
+
+#[path = "../quoted_nested_inline_code_lazy.rs"]
+mod quoted_nested_inline_code_lazy;
+
+#[path = "../nested_list_caption_continuation.rs"]
+mod nested_list_caption_continuation;
+
+#[path = "../closed_nested_quote_leaf.rs"]
+mod closed_nested_quote_leaf;

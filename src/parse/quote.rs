@@ -593,6 +593,10 @@ impl NestedFenceReplay {
         open: FenceOpen,
     ) {
         let here = &mut self.chain[pos.level];
+        // A below-column code run continues an open item paragraph as text.
+        if here.para && line.col < line.floor {
+            return;
+        }
         // The host holds the fence whether the opener sits AT its
         // content column or past it. A fence after an open paragraph
         // still needs a closer ahead (section 10). Inside a colon
@@ -1437,7 +1441,7 @@ pub(in crate::parse) fn collect_blockquote_body(
         {
             continue;
         }
-        if body.lazy_ends_quote(cur, line) {
+        if body.lazy_ends_quote(cur, options, line) {
             break;
         }
         body.fold_lazy_line(cur, line);
@@ -2052,7 +2056,12 @@ impl<'a> QuoteBody<'a> {
         // inherits goes WITH it, so §12 is decided by the same walk
         // instead of forcing one of its own.
         let inherited_absorption = if self.para_open.may_carry_absorption() {
-            self.para_open.absorption()
+            let prior_depth = self
+                .inner
+                .lines
+                .last()
+                .map_or(0, |line| strip_all_quotes(&line.text).1);
+            (strip_all_quotes(stripped).1 >= prior_depth) && self.para_open.absorption()
         } else {
             false
         };
@@ -2376,7 +2385,12 @@ impl<'a> QuoteBody<'a> {
     // and it already returns false for bullet/task/ordered markers, so we
     // simply defer to it. A heading is the sole construct a list marker
     // would otherwise end, and headings still interrupt via that predicate.
-    fn lazy_ends_quote(&mut self, cur: &mut LineCursor<'a>, line: &str) -> bool {
+    fn lazy_ends_quote(
+        &mut self,
+        cur: &mut LineCursor<'a>,
+        options: &Options<'_>,
+        line: &str,
+    ) -> bool {
         if self.attrs_closed_last {
             return true;
         }
@@ -2429,6 +2443,17 @@ impl<'a> QuoteBody<'a> {
         } else {
             fenced_below.unwrap_or_else(|| self.para_open.get())
         };
+        // A marker folded into an open paragraph is text, not a closed leaf.
+        if (self.item_opened_at.is_some() && self.item_opened_at == self.last_quoted_at
+            || self.last_nested)
+            && self.inner.lines.last().is_some_and(|last| {
+                !last.text.starts_with(LAZY)
+                    && detect_list_marker_full(strip_all_quotes(&last.text).0).is_some()
+                    && !body_ends_with_open_paragraph(&last.text, options)
+            })
+        {
+            return true;
+        }
         let empty_marker_leaf = self.inner.lines.len() == 1
             && self.inner.lines.first().is_some_and(|source| {
                 let (leaf, levels) = strip_all_quotes(innermost_marker_content(&source.text));
