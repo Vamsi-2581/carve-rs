@@ -2647,3 +2647,5 @@ mod markdown_link_footnotes;
 mod refused_plus_after_indented_list;
 #[path = "../term_invisible_comment_break.rs"]
 mod term_invisible_comment_break;
+#[path = "../wrapped_marker_attr_owner.rs"]
+mod wrapped_marker_attr_owner;
